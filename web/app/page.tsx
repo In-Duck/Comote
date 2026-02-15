@@ -113,7 +113,7 @@ export default async function Index() {
                 <div className="text-4xl mb-6">🖥️</div>
                 <h3 className="text-2xl font-bold mb-2">Comote Host</h3>
                 <p className="text-gray-400 mb-8">제어할 컴퓨터에 설치하세요.</p>
-                <a href="/downloads/Host.zip" download className="btn-primary w-full max-w-xs text-center">
+                <a href="https://github.com/In-Duck/Comote/releases/download/v0.1.0/Host.zip" className="btn-primary w-full max-w-xs text-center">
                   Windows용 다운로드 (Host)
                 </a>
               </div>
@@ -121,7 +121,7 @@ export default async function Index() {
                 <div className="text-4xl mb-6">📱</div>
                 <h3 className="text-2xl font-bold mb-2">Comote Viewer</h3>
                 <p className="text-gray-400 mb-8">제어하는 기기(내 PC)에 설치하세요.</p>
-                <a href="/downloads/Viewer.zip" download className="btn-secondary w-full max-w-xs text-center">
+                <a href="https://github.com/In-Duck/Comote/releases/download/v0.1.0/Viewer.zip" className="btn-secondary w-full max-w-xs text-center">
                   Windows용 다운로드 (Viewer)
                 </a>
               </div>
