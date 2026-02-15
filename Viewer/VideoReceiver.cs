@@ -386,7 +386,6 @@ namespace Viewer
                     });
                     Console.WriteLine("[VideoReceiver] ICE candidate added");
                 }
-                // Host가 보낸 Pong 응답 (DataChannel 메시지를 시그널로 받진 않지만 방어적 처리)
             }
             catch (Exception ex)
             {
@@ -588,6 +587,47 @@ namespace Viewer
             _decoder?.Dispose();
             _waveOut?.Stop();
             _waveOut?.Dispose();
+        }
+
+        public async Task HandleSignalAsync(string from, object signal)
+        {
+            if (_peerConnection == null) return;
+            try
+            {
+                var json = JObject.FromObject(signal);
+
+                if (json.ContainsKey("sdp"))
+                {
+                    var sdpObj = json["sdp"];
+                    var typeStr = sdpObj["type"].ToString();
+                    var sdpStr = sdpObj["sdp"].ToString();
+                    var type = typeStr == "offer" ? RTCSdpType.offer : RTCSdpType.answer;
+
+                    _peerConnection.setRemoteDescription(new RTCSessionDescriptionInit { type = type, sdp = sdpStr });
+
+                    if (type == RTCSdpType.offer)
+                    {
+                        var answer = _peerConnection.createAnswer(null);
+                        _peerConnection.setLocalDescription(answer);
+                        OnSignalReady?.Invoke(new { sdp = new { type = "answer", sdp = answer.sdp } });
+                    }
+                }
+                else if (json.ContainsKey("ice"))
+                {
+                    var iceObj = json["ice"];
+                    var candidate = new RTCIceCandidateInit
+                    {
+                        candidate = iceObj["candidate"]?.ToString() ?? "",
+                        sdpMid = iceObj["sdpMid"]?.ToString() ?? "",
+                        sdpMLineIndex = (ushort)(iceObj["sdpMLineIndex"]?.Value<int>() ?? 0)
+                    };
+                    _peerConnection.addIceCandidate(candidate);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[VideoReceiver] HandleSignal Error: {ex.Message}");
+            }
         }
     }
 }

@@ -1,4 +1,3 @@
-
 'use client'
 
 import { useState } from 'react'
@@ -16,27 +15,24 @@ export default function LoginPage() {
     const [loading, setLoading] = useState(false)
     const [message, setMessage] = useState('')
 
-    // Supabase가 설정되지 않은 경우 안내 메시지 표시
     if (!configured || !supabase) {
         return (
-            <div className="flex min-h-screen flex-col items-center justify-center p-24 bg-gray-950 text-white">
-                <div className="w-full max-w-md space-y-6 text-center">
-                    <h2 className="text-3xl font-bold tracking-tight">⚠️ 설정 필요</h2>
+            <div className="flex min-h-screen items-center justify-center p-6 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-gray-900 via-black to-black">
+                <div className="glass-card w-full max-w-md p-8 text-center space-y-6">
+                    <div className="text-5xl mb-2">⚠️</div>
+                    <h2 className="text-2xl font-bold text-white">Setup Required</h2>
                     <p className="text-gray-400">
-                        로그인 기능을 사용하려면 Supabase를 먼저 설정해야 합니다.
+                        Supabase configuration is missing.
                     </p>
-                    <div className="bg-gray-900 rounded-lg p-4 text-left text-sm text-gray-300 space-y-2">
-                        <p className="font-semibold text-white">📄 web/.env.local 파일 수정:</p>
-                        <code className="block text-xs text-indigo-400 whitespace-pre-wrap">
-                            {`NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key`}
+                    <div className="bg-black/50 rounded-lg p-4 text-left border border-white/5">
+                        <p className="text-xs text-gray-500 font-mono mb-2">web/.env.local</p>
+                        <code className="block text-xs text-blue-400 font-mono break-all">
+                            NEXT_PUBLIC_SUPABASE_URL=...<br />
+                            NEXT_PUBLIC_SUPABASE_ANON_KEY=...
                         </code>
                     </div>
-                    <Link
-                        href="/"
-                        className="inline-block rounded-full bg-gray-700 px-6 py-2 text-sm font-semibold hover:bg-gray-600 transition-colors"
-                    >
-                        ← 홈으로 돌아가기
+                    <Link href="/" className="btn-secondary w-full block">
+                        Back to Home
                     </Link>
                 </div>
             </div>
@@ -46,15 +42,9 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key`}
     const handleLogin = async () => {
         setLoading(true)
         setMessage('')
-
-        const { error } = await supabase.auth.signInWithPassword({
-            email,
-            password,
-        })
-
-        if (error) {
-            setMessage(error.message)
-        } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password })
+        if (error) setMessage(error.message)
+        else {
             router.push('/')
             router.refresh()
         }
@@ -64,72 +54,82 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key`}
     const handleSignUp = async () => {
         setLoading(true)
         setMessage('')
-
-        const { error } = await supabase.auth.signUp({
-            email,
-            password,
-        })
-
-        if (error) {
-            setMessage(error.message)
-        } else {
-            setMessage('Check your email for the confirmation link!')
-        }
+        const { error } = await supabase.auth.signUp({ email, password })
+        if (error) setMessage(error.message)
+        else setMessage('Check your email for the confirmation link!')
         setLoading(false)
     }
 
     return (
-        <div className="flex min-h-screen flex-col items-center justify-center p-24 bg-gray-950 text-white">
-            <div className="w-full max-w-md space-y-8">
-                <div>
-                    <h2 className="mt-6 text-center text-3xl font-bold tracking-tight">
-                        Sign in to your account
-                    </h2>
+        <div className="flex min-h-screen items-center justify-center p-6 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-blue-900/20 via-black to-black relative overflow-hidden">
+            {/* Background Effects */}
+            <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none">
+                <div className="absolute top-[-10%] left-[20%] w-[500px] h-[500px] bg-blue-600/10 rounded-full blur-[100px]"></div>
+                <div className="absolute bottom-[-10%] right-[20%] w-[500px] h-[500px] bg-purple-600/10 rounded-full blur-[100px]"></div>
+            </div>
+
+            <div className="glass-card w-full max-w-md p-8 relative z-10">
+                <div className="text-center mb-10">
+                    <Link href="/" className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400 inline-block mb-2">
+                        Comote
+                    </Link>
+                    <p className="text-gray-400 text-sm">Sign in to control your world</p>
                 </div>
-                <div className="mt-8 space-y-6">
-                    <div className="-space-y-px rounded-md shadow-sm">
+
+                <div className="space-y-6">
+                    <div className="space-y-4">
                         <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1 ml-1">Email</label>
                             <input
                                 type="email"
                                 required
-                                className="relative block w-full rounded-t-md border-0 bg-gray-900 py-1.5 text-white ring-1 ring-inset ring-gray-700 placeholder:text-gray-400 focus:z-10 focus:ring-2 focus:ring-indigo-500 sm:text-sm sm:leading-6 px-3"
-                                placeholder="Email address"
+                                className="input-field w-full"
+                                placeholder="name@example.com"
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
                             />
                         </div>
                         <div>
+                            <label className="block text-xs font-medium text-gray-400 mb-1 ml-1">Password</label>
                             <input
                                 type="password"
                                 required
-                                className="relative block w-full rounded-b-md border-0 bg-gray-900 py-1.5 text-white ring-1 ring-inset ring-gray-700 placeholder:text-gray-400 focus:z-10 focus:ring-2 focus:ring-indigo-500 sm:text-sm sm:leading-6 px-3"
-                                placeholder="Password"
+                                className="input-field w-full"
+                                placeholder="••••••••"
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
                             />
                         </div>
                     </div>
 
-                    <div>
-                        {message && <p className="text-red-500 text-sm">{message}</p>}
-                    </div>
+                    {message && (
+                        <div className={`p-3 rounded-lg text-sm text-center ${message.includes('Check') ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+                            {message}
+                        </div>
+                    )}
 
-                    <div className="flex gap-4">
+                    <div className="flex flex-col gap-3 pt-2">
                         <button
                             onClick={handleLogin}
                             disabled={loading}
-                            className="group relative flex w-full justify-center rounded-md bg-indigo-500 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500 disabled:opacity-50"
+                            className="btn-primary w-full flex justify-center items-center"
                         >
-                            Sign in
+                            {loading ? (
+                                <span className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin"></span>
+                            ) : 'Sign In'}
                         </button>
                         <button
                             onClick={handleSignUp}
                             disabled={loading}
-                            className="group relative flex w-full justify-center rounded-md bg-gray-700 px-3 py-2 text-sm font-semibold text-white hover:bg-gray-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-gray-700 disabled:opacity-50"
+                            className="btn-secondary w-full"
                         >
-                            Sign up
+                            Create Account
                         </button>
                     </div>
+
+                    <p className="text-center text-xs text-gray-500 mt-6">
+                        By continuing, you agree to our Terms of Service and Privacy Policy.
+                    </p>
                 </div>
             </div>
         </div>

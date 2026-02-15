@@ -3,8 +3,8 @@
 
 #define MyAppName "Comote Host"
 #define MyAppVersion "1.0"
-#define MyAppPublisher "Aion2"
-#define MyAppURL "https://github.com/aion2/comote"
+#define MyAppPublisher "Comote"
+#define MyAppURL "https://github.com/comote/comote"
 #define MyAppExeName "Host.exe"
 
 [Setup]

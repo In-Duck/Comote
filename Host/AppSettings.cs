@@ -1,3 +1,4 @@
+
 using System;
 using System.IO;
 using Newtonsoft.Json;
@@ -9,14 +10,20 @@ namespace Host
         public PusherConfig Pusher { get; set; } = new PusherConfig();
         public string? DefaultHostName { get; set; }
         public string? DefaultPassword { get; set; }
+        public string? HostId { get; set; }
 
         public class PusherConfig
         {
-            public string AppId { get; set; } = "";
-            public string AppKey { get; set; } = "";
-            public string Secret { get; set; } = "";
-            public string Cluster { get; set; } = "";
+            public string AppId { get; set; } = "2114862";
+            public string AppKey { get; set; } = "50ef3c55ccd8c468f604";
+            public string Secret { get; set; } = "18c2f6cbcfe14071733b";
+            public string Cluster { get; set; } = "ap3";
         }
+
+        // Supabase Settings
+        public string SupabaseUrl { get; set; } = "https://nlodelehewbbniayzjuv.supabase.co";
+        public string SupabaseAnonKey { get; set; } = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5sb2RlbGVoZXdiYm5pYXl6anV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExMzc1MjksImV4cCI6MjA4NjcxMzUyOX0.-r_qNDErJPWLma1i3wjXZmvzXAZUGtHHK-L3YMcZYb4";
+        public string WebAuthUrl { get; set; } = "https://comote.vercel.app/api/pusher/auth";
 
         public static AppSettings Load()
         {
@@ -58,6 +65,17 @@ namespace Host
             {
                 return new AppSettings();
             }
+        }
+
+        public void Save()
+        {
+            try
+            {
+                string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "appsettings.json");
+                string json = JsonConvert.SerializeObject(this, Formatting.Indented);
+                File.WriteAllText(path, json);
+            }
+            catch { }
         }
     }
 }

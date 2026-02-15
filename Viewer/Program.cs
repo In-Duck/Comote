@@ -33,11 +33,23 @@ namespace Viewer
                     Console.WriteLine($"[FATAL] {e.ExceptionObject}");
                 };
 
-                Console.WriteLine("[DEBUG] Creating MainWindow...");
-                var window = new MainWindow();
+                app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                
+                Console.WriteLine("[DEBUG] Showing LoginWindow...");
+                var loginWindow = new LoginWindow();
+                bool? result = loginWindow.ShowDialog();
 
-                Console.WriteLine("[DEBUG] Calling app.Run()...");
-                app.Run(window);
+                if (result == true)
+                {
+                    Console.WriteLine("[DEBUG] Login successful. Creating MainWindow...");
+                    var window = new MainWindow(loginWindow.AccessToken, loginWindow.UserId);
+                    app.ShutdownMode = ShutdownMode.OnMainWindowClose;
+                    app.Run(window);
+                }
+                else
+                {
+                    Console.WriteLine("[DEBUG] Login cancelled.");
+                }
 
                 Console.WriteLine("[DEBUG] app.Run() returned normally");
             }

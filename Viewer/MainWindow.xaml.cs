@@ -74,11 +74,21 @@ namespace Viewer
         private const byte MSG_MOUSE_UP   = 0x03;
         private const byte MSG_MOUSE_WHEEL= 0x04;
 
-        public MainWindow()
+        // === 인증 토큰 & 사용자 ID ===
+        private string _accessToken;
+        private string _userId;
+        
+        // === 영구 호스트 저장소 ===
+        private HostRepository? _hostRepo;
+        private Dictionary<string, HostInfo> _persistentHosts = new();
+
+        public MainWindow(string accessToken, string userId)
         {
+            _accessToken = accessToken;
+            _userId = userId;
             Console.WriteLine("[DEBUG] MainWindow constructor started");
 
-            Title = "Aion2 Comote Viewer";
+            Title = "Comote Viewer";
             Background = new SolidColorBrush(Color.FromRgb(25, 25, 28));
 
             // 설정 로드
@@ -131,23 +141,27 @@ namespace Viewer
         private Grid BuildLobbyView()
         {
             var grid = new Grid();
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(44) });  // 상단 메뉴바
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(36) });  // 탭 바
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // 콘텐츠
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(28) });  // 하단 상태바
+            // --- 상단 메뉴바 --- (배경색 조정)
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(44) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(36) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(28) });
+
+            // 전체 배경
+            grid.Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)); // #1E1E1E 느낌의 짙은 회색
 
             // --- 상단 메뉴바 ---
             var menuBar = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(35, 35, 40)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(55, 55, 60)),
+                Background = new SolidColorBrush(Color.FromRgb(40, 40, 40)), // Lighter header
                 BorderThickness = new Thickness(0, 0, 0, 1),
-                Padding = new Thickness(12, 0, 12, 0)
+                BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
+                Padding = new Thickness(16, 0, 16, 0)
             };
             var menuPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             menuPanel.Children.Add(new TextBlock
             {
-                Text = "🖥️ Aion2 Comote",
+                Text = "🖥️ Comote",
                 Foreground = new SolidColorBrush(Color.FromRgb(100, 160, 255)),
                 FontSize = 16,
                 FontWeight = FontWeights.Bold,
@@ -188,10 +202,10 @@ namespace Viewer
                 Padding = new Thickness(8, 0, 8, 0)
             };
             var tabPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            _listTabBtn = CreateTabButton("📋 리스트", true);
+            _listTabBtn = CreateTabButton("📋 리스트", false);
             _listTabBtn.Click += (s, e) => SwitchLobbyTab(true);
             tabPanel.Children.Add(_listTabBtn);
-            _gridTabBtn = CreateTabButton("🖥️ 모니터", false);
+            _gridTabBtn = CreateTabButton("🖥️ 모니터", true);
             _gridTabBtn.Click += (s, e) => SwitchLobbyTab(false);
             tabPanel.Children.Add(_gridTabBtn);
             tabBar.Child = tabPanel;
@@ -238,10 +252,15 @@ namespace Viewer
             grid.Children.Add(_listTab);
 
             // --- 그리드 탭 (썸네일) ---
-            _gridTab = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-            _thumbnailPanel = new WrapPanel { Margin = new Thickness(8) };
+            // --- 그리드 탭 (썸네일) ---
+            _gridTab = new ScrollViewer { 
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Padding = new Thickness(10)
+            };
+            _thumbnailPanel = new WrapPanel { Margin = new Thickness(0) };
             _gridTab.Content = _thumbnailPanel;
-            _gridTab.Visibility = Visibility.Collapsed;
+            _gridTab.Visibility = Visibility.Visible; // 기본값 표시
+            _listTab.Visibility = Visibility.Collapsed; // 리스트 숨김
             // 썸네일 패널에도 컨텍스트 메뉴 (빈 공간 클릭 시 혹은 아이템 클릭 시 처리 필요)
             // 개별 아이템에 메뉴를 달아야 함 -> CreateHostCard 수정 필요
             // 여기서는 전체 리스트 대상 메뉴만 우선 추가
@@ -589,71 +608,173 @@ namespace Viewer
 
         private Border CreateHostCard(HostInfo host, int index)
         {
+            // === 카드 스타일 (Mockup: #252526 Background, Rounded, Shadow) ===
             var card = new Border
             {
-                Width = 200,
-                Height = 140,
-                Margin = new Thickness(4),
-                Background = new SolidColorBrush(Color.FromRgb(35, 35, 40)),
-                BorderBrush = new SolidColorBrush(host.IsOnline ? Color.FromRgb(60, 160, 60) : Color.FromRgb(60, 60, 65)),
+                Width = 240,  // 넓게
+                Height = 210, // 컴팩트하게 -> 버튼 공간 확보 위해 늘림
+                Margin = new Thickness(10),
+                Background = new SolidColorBrush(Color.FromRgb(37, 37, 38)), // #252526
+                BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 60)), // Subtle border
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(4),
+                CornerRadius = new CornerRadius(6),
                 Cursor = Cursors.Hand,
-                Tag = host.Id
+                Tag = host.Id,
+                Effect = new System.Windows.Media.Effects.DropShadowEffect
+                {
+                    Color = Colors.Black, BlurRadius = 15, Opacity = 0.3, ShadowDepth = 4, Direction = 270
+                }
             };
 
-            var stack = new StackPanel { Margin = new Thickness(8) };
-            // 번호 + 이름
-            stack.Children.Add(new TextBlock
+            var grid = new Grid { Margin = new Thickness(16) };
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }); // Header
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // Content (Spacer)
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }); // CPU
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }); // Details
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }); // Footer
+
+            // === 1. 헤더: 이름 & 상태 ===
+            // Mockup: "DESKTOP-ABC" (White, Bold) 아래에 "Online" (Green dot + Text)
+            var headerStack = new StackPanel { Orientation = Orientation.Vertical };
+            
+            // 호스트 이름
+            headerStack.Children.Add(new TextBlock
             {
-                Text = $"{index}. {host.Name}",
+                Text = host.Name.ToUpper(), // 대문자로 스타일링
                 Foreground = new SolidColorBrush(Colors.White),
                 FontSize = 14,
-                FontWeight = FontWeights.SemiBold,
+                FontWeight = FontWeights.Bold,
                 TextTrimming = TextTrimming.CharacterEllipsis
             });
-            // 상태
-            stack.Children.Add(new TextBlock
-            {
-                Text = host.IsOnline ? "● 온라인" : "○ 오프라인",
-                Foreground = new SolidColorBrush(host.IsOnline ? Color.FromRgb(80, 200, 80) : Color.FromRgb(120, 120, 130)),
-                FontSize = 12,
-                Margin = new Thickness(0, 4, 0, 0)
-            });
-            // IP + 해상도
-            stack.Children.Add(new TextBlock
-            {
-                Text = $"{host.Ip}",
-                Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 160)),
-                FontSize = 11,
-                Margin = new Thickness(0, 2, 0, 0)
-            });
-            stack.Children.Add(new TextBlock
-            {
-                Text = $"{host.Resolution} | CPU: {host.Cpu}%",
-                Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 160)),
-                FontSize = 11,
-                Margin = new Thickness(0, 2, 0, 0)
-            });
-            // 가동시간
-            stack.Children.Add(new TextBlock
-            {
-                Text = $"⏱ {host.Uptime}",
-                Foreground = new SolidColorBrush(Color.FromRgb(130, 130, 140)),
-                FontSize = 10,
-                Margin = new Thickness(0, 4, 0, 0)
-            });
 
-            card.Child = stack;
-
-            // 더블클릭으로 연결
-            card.MouseLeftButtonDown += (s, e) =>
+            // 상태 표시줄 (점 + 텍스트)
+            var statusPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
+            statusPanel.Children.Add(new Border
             {
-                if (e.ClickCount == 2 && host.IsOnline)
-                    ConnectToHost(host.Id);
+                Width = 8, Height = 8, CornerRadius = new CornerRadius(4),
+                Background = new SolidColorBrush(host.IsOnline ? Color.FromRgb(50, 205, 50) : Color.FromRgb(100, 100, 100)), // LimeGreen
+                Margin = new Thickness(0, 1, 6, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            statusPanel.Children.Add(new TextBlock
+            {
+                Text = host.IsOnline ? "Online" : "Offline",
+                Foreground = new SolidColorBrush(host.IsOnline ? Color.FromRgb(150, 200, 150) : Color.FromRgb(120, 120, 120)),
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            headerStack.Children.Add(statusPanel);
+            
+            Grid.SetRow(headerStack, 0);
+            grid.Children.Add(headerStack);
+
+            // === 2. 본문: CPU Bar ===
+            // Mockup: 중간에 위치
+            var cpuPanel = new StackPanel { Margin = new Thickness(0, 16, 0, 8) };
+            
+            // "CPU: 45%" 텍스트가 바 위에 있거나 옆에 있음. Mockup은 바 위에 텍스트 포지셔닝되거나 별도.
+            // 여기선 바 위에 텍스트를 배치하고 아래에 바.
+            var cpuHeader = new DockPanel { LastChildFill = false };
+            cpuHeader.Children.Add(new TextBlock { Text = "CPU", Foreground = new SolidColorBrush(Color.FromRgb(120, 120, 120)), FontSize = 10 });
+            var cpuText = new TextBlock { Text = $"{host.Cpu}%", Foreground = new SolidColorBrush(Colors.White), FontSize = 10, FontWeight = FontWeights.SemiBold };
+            cpuHeader.Children.Add(cpuText);
+            DockPanel.SetDock(cpuText, Dock.Right);
+            
+            cpuPanel.Children.Add(cpuHeader);
+
+            // Progress Bar Track
+            var track = new Border 
+            { 
+                Height = 4, Background = new SolidColorBrush(Color.FromRgb(50, 50, 50)), CornerRadius = new CornerRadius(2), Margin = new Thickness(0, 4, 0, 0) 
             };
+            
+            // Progress Fill
+            // Width 계산: (Percent / 100) * (CardWidth - Padding)
+            // 하지만 Grid 안이라 Width를 알기 어려움. Grid 사용.
+            var fillGrid = new Grid();
+            fillGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(host.Cpu, GridUnitType.Star) });
+            fillGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100 - host.Cpu, GridUnitType.Star) });
+            
+            var fill = new Border 
+            { 
+                Background = new SolidColorBrush(Color.FromRgb(50, 205, 50)), // LimeGreen #32CD32
+                CornerRadius = new CornerRadius(2)
+            };
+            if (host.Cpu > 80) fill.Background = new SolidColorBrush(Color.FromRgb(220, 60, 60)); // Red warning
+            
+            Grid.SetColumn(fill, 0);
+            fillGrid.Children.Add(fill);
+            track.Child = fillGrid;
+            
+            cpuPanel.Children.Add(track);
 
+            Grid.SetRow(cpuPanel, 2);
+            grid.Children.Add(cpuPanel);
+
+            // === 3. 상세 정보 (RAM, IP) ===
+            var detailsPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
+            detailsPanel.Children.Add(new TextBlock 
+            { 
+                Text = $"RAM: {host.Ram}", 
+                Foreground = new SolidColorBrush(Color.FromRgb(130, 130, 130)), 
+                FontSize = 11, Margin = new Thickness(0, 0, 0, 2)
+            });
+             detailsPanel.Children.Add(new TextBlock 
+            { 
+                Text = $"{host.Ip}", 
+                Foreground = new SolidColorBrush(Color.FromRgb(80, 80, 80)), 
+                FontSize = 10 
+            });
+            Grid.SetRow(detailsPanel, 3);
+            grid.Children.Add(detailsPanel);
+
+            // === 4. 푸터: Connect 버튼 ===
+            // Mockup: 파란색(#007ACC), 꽉 참.
+            var connectBtn = new Button
+            {
+                Content = "Connect",
+                Height = 30,
+                Background = new SolidColorBrush(host.IsOnline ? Color.FromRgb(0, 122, 204) : Color.FromRgb(60, 60, 60)), // VS Blue #007ACC
+                Foreground = new SolidColorBrush(Colors.White),
+                FontWeight = FontWeights.Normal,
+                FontSize = 12,
+                BorderThickness = new Thickness(0),
+                Cursor = host.IsOnline ? Cursors.Hand : Cursors.No,
+                IsEnabled = host.IsOnline
+            };
+            // Style
+            var btnStyle = new Style(typeof(Button));
+            var template = new ControlTemplate(typeof(Button));
+            var factory = new FrameworkElementFactory(typeof(Border));
+            factory.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Button.BackgroundProperty));
+            factory.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+            var contentPresenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            contentPresenter.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            contentPresenter.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+            factory.AppendChild(contentPresenter);
+            template.VisualTree = factory;
+            btnStyle.Setters.Add(new Setter(Button.TemplateProperty, template));
+            connectBtn.Style = btnStyle;
+
+            if (host.IsOnline)
+            {
+                connectBtn.MouseEnter += (s, e) => connectBtn.Background = new SolidColorBrush(Color.FromRgb(28, 151, 234)); // Lighter Blue
+                connectBtn.MouseLeave += (s, e) => connectBtn.Background = new SolidColorBrush(Color.FromRgb(0, 122, 204));
+                connectBtn.Click += (s, e) => ConnectToHost(host.Id);
+                card.MouseLeftButtonDown += (s, e) => { if (e.ClickCount == 2) ConnectToHost(host.Id); };
+            }
+
+            Grid.SetRow(connectBtn, 4);
+            grid.Children.Add(connectBtn);
+
+            card.Child = grid;
             return card;
+        }
+
+        // CreateStatRow는 이제 사용하지 않음 (CreateHostCard 내에 인라인으로 구현하여 정밀 제어)
+        private Grid CreateStatRow(string label, string valueText, int percentage)
+        {
+            return new Grid(); // Dummy
         }
 
         // ==========================================================
@@ -1009,6 +1130,69 @@ namespace Viewer
                 _statusText.Text = $"연결 오류: {ex.Message}";
             }
         }
+        // ==========================================================
+        // Supabase 호스트 폴링 (Presence 채널 대체)
+        // last_seen이 60초 이내면 Online, 아니면 Offline
+        // ==========================================================
+        private async Task PollHostsFromSupabaseAsync()
+        {
+            if (_hostRepo == null) return;
+            try
+            {
+                var hosts = await _hostRepo.GetHostsAsync();
+                var now = DateTime.UtcNow;
+
+                Dispatcher.Invoke(() =>
+                {
+                    // 기존 호스트 모두 Offline으로 초기화
+                    foreach (var kvp in _persistentHosts)
+                    {
+                        kvp.Value.IsOnline = false;
+                    }
+
+                    foreach (var h in hosts)
+                    {
+                        bool isOnline = (now - h.LastSeen).TotalSeconds < 60;
+
+                        if (_persistentHosts.ContainsKey(h.HostId))
+                        {
+                            var existing = _persistentHosts[h.HostId];
+                            existing.IsOnline = isOnline;
+                            existing.Name = h.HostName ?? existing.Name;
+                            existing.Ip = h.Ip ?? existing.Ip;
+                            existing.Resolution = h.Resolution ?? existing.Resolution;
+                            existing.Cpu = h.Cpu;
+                            existing.Ram = h.Ram ?? existing.Ram;
+                            existing.Hdd = h.Hdd ?? existing.Hdd;
+                            existing.Uptime = h.Uptime ?? existing.Uptime;
+                            existing.LastSeen = h.LastSeen;
+                        }
+                        else
+                        {
+                            _persistentHosts[h.HostId] = new HostInfo
+                            {
+                                Id = h.HostId,
+                                Name = h.HostName ?? h.HostId,
+                                IsOnline = isOnline,
+                                Ip = h.Ip ?? "unknown",
+                                Resolution = h.Resolution ?? "N/A",
+                                Cpu = h.Cpu,
+                                Ram = h.Ram ?? "N/A",
+                                Hdd = h.Hdd ?? "N/A",
+                                Uptime = h.Uptime ?? "N/A",
+                                LastSeen = h.LastSeen
+                            };
+                        }
+                    }
+
+                    UpdateLobbyUI(_persistentHosts.Values.ToList());
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Poll] Error polling hosts: {ex.Message}");
+            }
+        }
 
         // ==========================================================
         // 풀스크린
@@ -1046,34 +1230,49 @@ namespace Viewer
 
             try
             {
+                // Signaling Client 초기화
                 _signaling = new SignalingClient(
-                _settings.PusherAppId, 
-                _settings.PusherAppKey, 
-                _settings.PusherSecret, 
-                _settings.PusherCluster);
+                    _settings.PusherAppId, 
+                    _settings.PusherAppKey, 
+                    _settings.PusherCluster,
+                    _settings.WebAuthUrl,
+                    _accessToken);
 
-                // 호스트 목록 수신 → 로비 UI 업데이트
-                _signaling.OnHostListReceived += (hosts) =>
+                // Repository 초기화
+                if (!string.IsNullOrEmpty(_settings.SupabaseUrl) && !string.IsNullOrEmpty(_settings.SupabaseAnonKey))
                 {
-                    Dispatcher.Invoke(() =>
-                    {
-                        UpdateLobbyUI(hosts);
-                    });
-                };
+                    _hostRepo = new HostRepository(_settings.SupabaseUrl, _settings.SupabaseAnonKey);
+                    await _hostRepo.InitializeAsync(_accessToken, _userId);
+                }
 
-                // Host에서 시그널 수신 → VideoReceiver에 전달
+                // Signal Received (WebRTC)
                 _signaling.OnSignalReceived += async (from, signal) =>
                 {
-                    Console.WriteLine($"[DEBUG] Signal received from host: {from}");
+                    Console.WriteLine($"[Signaling] Signal from {from}: {signal}");
                     if (_receiver != null)
                     {
-                        await _receiver.HandleSignalAsync(signal);
+                        await _receiver.HandleSignalAsync(from, signal);
                     }
                 };
 
                 Console.WriteLine("[DEBUG] Connecting to signaling server...");
                 await _signaling.ConnectAsync();
                 Console.WriteLine("[DEBUG] Signaling connected");
+
+                // Supabase에서 호스트 목록 로드 + 폴링 시작
+                // (Presence 채널 대체 → 10초마다 Supabase 폴링)
+                if (_hostRepo != null)
+                {
+                    // 최초 로드
+                    await PollHostsFromSupabaseAsync();
+
+                    // 10초마다 폴링 타이머
+                    var pollTimer = new Timer(async _ =>
+                    {
+                        try { await PollHostsFromSupabaseAsync(); }
+                        catch (Exception ex) { Console.WriteLine($"[Poll] Error: {ex.Message}"); }
+                    }, null, 10000, 10000);
+                }
             }
             catch (Exception ex)
             {

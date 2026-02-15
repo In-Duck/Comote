@@ -1,48 +1,62 @@
+
 using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Threading;
 using System.Threading.Tasks;
 using PusherClient;
 using Newtonsoft.Json;
+using System.Text;
+using System.Net.Http;
+using System.Net.Http.Headers;
 
 namespace Host
 {
     public class SignalingClient
     {
-        private Pusher _pusher;
-        private PusherServer.Pusher _pusherServer;
-        private Channel _channel;
-        private string _hostId;
-        private string _appKey;
-        private string _secret;
-        private string _appId;
-        private string _cluster;
+        // 소켓 고갈 방지를 위해 static HttpClient 사용 (앱 수명 동안 재사용)
+        private static readonly HttpClient _httpClient = new HttpClient();
 
-        // 시스템 정보
+        private Pusher _pusher;
+        private string _appId;
+        private string _appKey;
+        private string _cluster;
+        private string _hostId;
+        private string _webAuthUrl;
+        private string _accessToken;
         private string _hostName;
         private string _resolution;
         private PerformanceCounter? _cpuCounter;
         private DateTime _startTime = DateTime.Now;
 
+        // Supabase heartbeat (Presence 채널 대체)
+        private string _supabaseUrl;
+        private string _supabaseKey;
+        private string _userId;
+        private System.Threading.Timer? _heartbeatTimer;
+
         public event Action<string, object> OnSignalReceived;
 
-        public SignalingClient(string appId, string appKey, string secret, string cluster, string hostId,
-            string? hostName = null, string? resolution = null)
+        public SignalingClient(string appId, string appKey, string cluster, string webAuthUrl, string accessToken,
+            string hostId, string? hostName = null, string? resolution = null,
+            string? supabaseUrl = null, string? supabaseKey = null, string? userId = null)
         {
             _appId = appId;
             _appKey = appKey;
-            _secret = secret;
             _cluster = cluster;
+            _webAuthUrl = webAuthUrl;
+            _accessToken = accessToken;
             _hostId = hostId;
             _hostName = hostName ?? Environment.MachineName;
             _resolution = resolution ?? "unknown";
-
-            _pusherServer = new PusherServer.Pusher(_appId, _appKey, _secret, new PusherServer.PusherOptions { Cluster = _cluster, Encrypted = true });
-
-            // CPU 카운터 초기화 (첫 호출은 0 반환하므로 미리 시작)
+            _supabaseUrl = supabaseUrl ?? "";
+            _supabaseKey = supabaseKey ?? "";
+            _userId = userId ?? "";
+            
+            // 시스템 정보 수집
             try
             {
                 _cpuCounter = new PerformanceCounter("Processor", "% Processor Time", "_Total");
@@ -53,77 +67,138 @@ namespace Host
 
         public async Task ConnectAsync()
         {
-            _pusher = new Pusher(_appKey, new PusherOptions { Cluster = _cluster, Encrypted = true });
-            
+            Console.WriteLine("[Signaling] Connecting to Pusher...");
+
+            // Pusher 초기화 (Private 채널 전용, Presence 채널 미사용)
+            _pusher = new Pusher(_appKey, new PusherOptions
+            {
+                Cluster = _cluster,
+                Encrypted = true,
+                Authorizer = new HttpAuthorizer(_webAuthUrl)
+                {
+                    AuthenticationHeader = new AuthenticationHeaderValue("Bearer", _accessToken)
+                }
+            });
+
             _pusher.Connected += (s) => {
-                Console.WriteLine("Pusher Connected");
-                StartHeartbeat();
+                Console.WriteLine("[Signaling] Pusher Connected (Private Channel Only)");
+            };
+            _pusher.Error += (s, e) => {
+                Console.WriteLine($"[Signaling] Pusher Connection Error: {e.Message}");
+            };
+            _pusher.ConnectionStateChanged += (s, state) => {
+                Console.WriteLine($"[Signaling] Connection State: {state}");
             };
 
             await _pusher.ConnectAsync();
 
-            // 호스트 전용 채널 구독 (Viewer로부터 수신용)
-            Console.WriteLine($"[Signaling] Subscribing to control-{_hostId}...");
-            _channel = await _pusher.SubscribeAsync($"control-{_hostId}");
-            _channel.Bind("signal", (PusherEvent eventData) =>
+            // Private 채널만 구독 (시그널링 전용)
+            Console.WriteLine($"[Signaling] Subscribing to private-control-{_hostId}...");
+            var privateChannel = await _pusher.SubscribeAsync($"private-control-{_hostId}");
+            privateChannel.Bind("pusher:subscription_succeeded", (PusherEvent eventData) => {
+                Console.WriteLine($"[Signaling] Subscribed to private-control-{_hostId} successfully");
+            });
+            privateChannel.Bind("signal", (PusherEvent eventData) =>
             {
-                Console.WriteLine($"[Signaling] Signal event received on control-{_hostId}");
                 try {
                     var data = JsonConvert.DeserializeObject<dynamic>(eventData.Data);
                     string from = data.from;
                     object signal = data.signal;
-                    Console.WriteLine($"[Signaling] Signal received from: {from}");
                     OnSignalReceived?.Invoke(from, signal);
-                } catch(Exception ex) { Console.WriteLine("[Signaling] Signal parse error: " + ex.Message + " | Data: " + eventData.Data); }
+                } catch(Exception ex) { Console.WriteLine("[Signaling] Signal parse error: " + ex.Message); }
             });
-            Console.WriteLine($"[Signaling] Subscribed and bound to control-{_hostId}");
-        }
 
-        private async void StartHeartbeat()
-        {
-            Console.WriteLine("[Signaling] Heartbeat loop started");
-            while (true)
+            // Supabase heartbeat 시작 (30초마다 시스템 정보 + last_seen 업데이트)
+            if (!string.IsNullOrEmpty(_supabaseUrl) && !string.IsNullOrEmpty(_userId))
             {
-                try {
-                    if (_pusher?.State == ConnectionState.Connected)
-                    {
-                        var info = CollectSystemInfo();
-                        var result = await _pusherServer.TriggerAsync("host-lobby", "host-alive", info);
-                        Console.WriteLine($"[Signaling] Heartbeat sent (ID: {_hostId}, Result: {result.StatusCode})");
-                    }
-                } catch (Exception ex) {
-                    Console.WriteLine($"[Signaling] Heartbeat error: {ex.Message}");
-                }
-                await Task.Delay(10000);
+                // 최초 즉시 실행 + 이후 30초 간격
+                _heartbeatTimer = new System.Threading.Timer(async _ => await SendHeartbeatAsync(), null, 0, 30000);
+                Console.WriteLine("[Signaling] Supabase heartbeat started (30s interval)");
             }
         }
 
         /// <summary>
-        /// 시스템 정보를 수집하여 host-alive 메시지에 포함합니다.
+        /// Supabase hosts 테이블에 시스템 정보 + last_seen을 UPSERT합니다.
+        /// Presence 채널을 완전히 대체합니다.
         /// </summary>
-        private object CollectSystemInfo()
+        private async Task SendHeartbeatAsync()
         {
-            // CPU 사용률
+            try
+            {
+                var info = CollectSystemInfo();
+                var dto = new
+                {
+                    host_id = _hostId,
+                    user_id = _userId,
+                    host_name = _hostName,
+                    ip = (string?)((dynamic)info).ip ?? "unknown",
+                    resolution = (string?)((dynamic)info).resolution ?? "N/A",
+                    cpu = (int?)((dynamic)info).cpu ?? 0,
+                    ram = (string?)((dynamic)info).ram ?? "N/A",
+                    hdd = (string?)((dynamic)info).hdd ?? "N/A",
+                    uptime = (string?)((dynamic)info).uptime ?? "N/A",
+                    last_seen = DateTime.UtcNow.ToString("o")
+                };
+
+                var request = new HttpRequestMessage(HttpMethod.Post,
+                    $"{_supabaseUrl}/rest/v1/hosts?on_conflict=user_id,host_id");
+                request.Headers.Add("apikey", _supabaseKey);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
+                request.Headers.Add("Prefer", "resolution=merge-duplicates");
+                request.Content = new StringContent(
+                    JsonConvert.SerializeObject(dto), Encoding.UTF8, "application/json");
+
+                var response = await _httpClient.SendAsync(request);
+                if (!response.IsSuccessStatusCode)
+                {
+                    string body = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine($"[Heartbeat] Failed: {body}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Heartbeat] Error: {ex.Message}");
+            }
+        }
+
+        [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        public struct MEMORYSTATUSEX
+        {
+            public uint dwLength;
+            public uint dwMemoryLoad;
+            public ulong ullTotalPhys;
+            public ulong ullAvailPhys;
+            public ulong ullTotalPageFile;
+            public ulong ullAvailPageFile;
+            public ulong ullTotalVirtual;
+            public ulong ullAvailVirtual;
+            public ulong ullAvailExtendedVirtual;
+        }
+
+        public object CollectSystemInfo()
+        {
             int cpu = 0;
             try { if (_cpuCounter != null) cpu = (int)_cpuCounter.NextValue(); } catch { }
 
-            // RAM 정보
             string ram = "N/A";
             try
             {
-                var gcInfo = GC.GetGCMemoryInfo();
-                long totalBytes = gcInfo.TotalAvailableMemoryBytes;
-                long totalGB = totalBytes / (1024L * 1024 * 1024);
-                // 사용 가능한 메모리를 근사적으로 계산
-                var pc = new PerformanceCounter("Memory", "Available MBytes");
-                long availMB = (long)pc.NextValue();
-                long usedGB = (totalGB * 1024 - availMB) / 1024;
-                ram = $"{usedGB}GB / {totalGB}GB";
-                pc.Dispose();
+                var memStatus = new MEMORYSTATUSEX();
+                memStatus.dwLength = (uint)System.Runtime.InteropServices.Marshal.SizeOf(typeof(MEMORYSTATUSEX));
+                if (GlobalMemoryStatusEx(ref memStatus))
+                {
+                    double totalGB = memStatus.ullTotalPhys / (1024.0 * 1024 * 1024);
+                    double freeGB = memStatus.ullAvailPhys / (1024.0 * 1024 * 1024);
+                    double usedGB = totalGB - freeGB;
+                    ram = $"{usedGB:F1}GB / {totalGB:F0}GB";
+                }
             }
             catch { }
 
-            // HDD 정보 (C: 드라이브)
             string hdd = "N/A";
             try
             {
@@ -138,7 +213,6 @@ namespace Host
             }
             catch { }
 
-            // 로컬 IP
             string ip = "unknown";
             try
             {
@@ -149,7 +223,6 @@ namespace Host
             }
             catch { }
 
-            // 가동시간
             var uptime = DateTime.Now - _startTime;
             string uptimeStr = uptime.TotalHours >= 24
                 ? $"{(int)uptime.TotalDays}일 {uptime.Hours}시간"
@@ -172,9 +245,26 @@ namespace Host
 
         public async Task SendSignalAsync(string to, object signal)
         {
-            Console.WriteLine($"[Signaling] Triggering signal to viewer-{to}...");
-            var result = await _pusherServer.TriggerAsync($"viewer-{to}", "signal", new { from = _hostId, signal = signal });
-            Console.WriteLine($"[Signaling] Trigger result: {result.StatusCode}");
+            try
+            {
+                string triggerUrl = _webAuthUrl.Replace("/auth", "/trigger");
+                var payload = new
+                {
+                    channel = $"private-viewer-{to}",
+                    @event = "signal",
+                    data = new { @from = _hostId, signal = signal }
+                };
+
+                // 매 요청마다 Authorization 헤더를 설정 (thread-safe 방식)
+                var request = new HttpRequestMessage(HttpMethod.Post, triggerUrl);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
+                request.Content = new StringContent(JsonConvert.SerializeObject(payload), Encoding.UTF8, "application/json");
+                await _httpClient.SendAsync(request);
+            }
+            catch (Exception ex)
+            {
+                 Console.WriteLine($"[Signaling] SendSignal Error: {ex.Message}");
+            }
         }
     }
 }

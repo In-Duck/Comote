@@ -1,10 +1,8 @@
 {
-    "Pusher": {
-        "AppId": "2114862",
-        "AppKey": "50ef3c55ccd8c468f604",
-        "Secret": "18c2f6cbcfe14071733b",
-        "Cluster": "ap3"
-    },
+    "PusherAppId": "2114862",
+    "PusherAppKey": "50ef3c55ccd8c468f604",
+    "PusherSecret": "18c2f6cbcfe14071733b",
+    "PusherCluster": "ap3",
     "SupabaseUrl": "https://nlodelehewbbniayzjuv.supabase.co",
     "SupabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5sb2RlbGVoZXdiYm5pYXl6anV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExMzc1MjksImV4cCI6MjA4NjcxMzUyOX0.-r_qNDErJPWLma1i3wjXZmvzXAZUGtHHK-L3YMcZYb4",
     "WebAuthUrl": "http://localhost:3000/api/pusher/auth"
