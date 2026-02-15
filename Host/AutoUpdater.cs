@@ -28,7 +28,7 @@ namespace Host
             Timeout = TimeSpan.FromSeconds(5)
         };
         
-        // TODO: 사용자 Github 저장소 주소로 변경 필요
+        
         // Github 저장소의 version.json 주소
         private const string VersionUrl = "https://raw.githubusercontent.com/In-Duck/Comote/main/Distribution/version.json";
 

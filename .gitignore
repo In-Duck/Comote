@@ -11,9 +11,10 @@ obj/
 publish/
 
 # Distribution (Release binaries)
-Distribution/**/*.exe
-Distribution/*.exe
-# But keep scripts and docs
+# Include setup files as requested
+!Distribution/**/*.exe
+!Distribution/*.exe
+# Scripts and docs
 !Distribution/**/*.iss
 !Distribution/**/*.bat
 !Distribution/version.json
