@@ -20,9 +20,9 @@ export default function LoginPage() {
             <div className="flex min-h-screen items-center justify-center p-6 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-gray-900 via-black to-black">
                 <div className="glass-card w-full max-w-md p-8 text-center space-y-6">
                     <div className="text-5xl mb-2">⚠️</div>
-                    <h2 className="text-2xl font-bold text-white">Setup Required</h2>
+                    <h2 className="text-2xl font-bold text-white">설정 필요</h2>
                     <p className="text-gray-400">
-                        Supabase configuration is missing.
+                        Supabase 환경 변수가 설정되지 않았습니다.
                     </p>
                     <div className="bg-black/50 rounded-lg p-4 text-left border border-white/5">
                         <p className="text-xs text-gray-500 font-mono mb-2">web/.env.local</p>
@@ -32,7 +32,7 @@ export default function LoginPage() {
                         </code>
                     </div>
                     <Link href="/" className="btn-secondary w-full block">
-                        Back to Home
+                        홈으로 돌아가기
                     </Link>
                 </div>
             </div>
@@ -56,7 +56,7 @@ export default function LoginPage() {
         setMessage('')
         const { error } = await supabase.auth.signUp({ email, password })
         if (error) setMessage(error.message)
-        else setMessage('Check your email for the confirmation link!')
+        else setMessage('이메일로 전송된 확인 링크를 클릭해 주세요!')
         setLoading(false)
     }
 
@@ -73,13 +73,13 @@ export default function LoginPage() {
                     <Link href="/" className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400 inline-block mb-2">
                         Comote
                     </Link>
-                    <p className="text-gray-400 text-sm">Sign in to control your world</p>
+                    <p className="text-gray-400 text-sm">세상을 제어하세요</p>
                 </div>
 
                 <div className="space-y-6">
                     <div className="space-y-4">
                         <div>
-                            <label className="block text-xs font-medium text-gray-400 mb-1 ml-1">Email</label>
+                            <label className="block text-xs font-medium text-gray-400 mb-1 ml-1">이메일</label>
                             <input
                                 type="email"
                                 required
@@ -90,7 +90,7 @@ export default function LoginPage() {
                             />
                         </div>
                         <div>
-                            <label className="block text-xs font-medium text-gray-400 mb-1 ml-1">Password</label>
+                            <label className="block text-xs font-medium text-gray-400 mb-1 ml-1">비밀번호</label>
                             <input
                                 type="password"
                                 required
@@ -103,7 +103,7 @@ export default function LoginPage() {
                     </div>
 
                     {message && (
-                        <div className={`p-3 rounded-lg text-sm text-center ${message.includes('Check') ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
+                        <div className={`p-3 rounded-lg text-sm text-center ${message.includes('이메일') ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>
                             {message}
                         </div>
                     )}
@@ -116,19 +116,19 @@ export default function LoginPage() {
                         >
                             {loading ? (
                                 <span className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin"></span>
-                            ) : 'Sign In'}
+                            ) : '로그인'}
                         </button>
                         <button
                             onClick={handleSignUp}
                             disabled={loading}
                             className="btn-secondary w-full"
                         >
-                            Create Account
+                            회원가입
                         </button>
                     </div>
 
                     <p className="text-center text-xs text-gray-500 mt-6">
-                        By continuing, you agree to our Terms of Service and Privacy Policy.
+                        계속 진행하면 이용약관 및 개인정보처리방침에 동의하는 것으로 간주됩니다.
                     </p>
                 </div>
             </div>
