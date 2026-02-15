@@ -1,5 +1,6 @@
 {
     "version": "1.0.0",
-    "setup_url": "https://github.com/In-Duck/Comote/raw/main/Distribution/Host/ComoteHost_Setup.exe",
+    "host_setup_url": "https://github.com/In-Duck/Comote/raw/main/Distribution/Host/ComoteHost_Setup.exe",
+    "viewer_setup_url": "https://github.com/In-Duck/Comote/raw/main/Distribution/Viewer/ComoteViewer_Setup.exe",
     "release_notes": "- 첫 번째 정식 릴리스\n- 무인 액세스 기능\n- 자동 업데이트 시스템\n- 설치 프로그램(Setup.exe) 지원"
 }

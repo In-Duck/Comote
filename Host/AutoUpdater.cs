@@ -13,7 +13,7 @@ namespace Host
         [JsonProperty("version")]
         public string Version { get; set; } = "1.0.0";
 
-        [JsonProperty("setup_url")]
+        [JsonProperty("host_setup_url")]
         public string SetupUrl { get; set; } = "";
 
         [JsonProperty("release_notes")]

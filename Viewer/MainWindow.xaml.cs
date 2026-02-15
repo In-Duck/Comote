@@ -934,12 +934,14 @@ namespace Viewer
                 return;
             }
 
-            // ESC: 로비로 복귀
-            if (vk == 0x1B && isDown)
+            // Ctrl+Shift+Q: 로비로 복귀 (연결 종료)
+            if (vk == 0x51 && isDown && _ctrlPressed && _shiftPressed)
             {
                 Dispatcher.Invoke(DisconnectAndReturnToLobby);
                 return;
             }
+
+            // ESC: 키 전달 (기존 로비 복귀 로직 삭제됨)
 
             // Ctrl+C: 키 전달 (클립보드 동기화는 자동 감지 로직에서 처리)
             if (vk == 0x43 && isDown && _ctrlPressed && !_shiftPressed)
