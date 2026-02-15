@@ -1,0 +1,24 @@
+# Visual Studio / .NET
+.vs/
+bin/
+obj/
+*.user
+*.suo
+[Dd]ebug/
+[Rr]elease/
+
+# Publish output
+publish/
+
+# Distribution (Release binaries)
+Distribution/**/*.exe
+Distribution/*.exe
+# But keep scripts and docs
+!Distribution/**/*.iss
+!Distribution/**/*.bat
+!Distribution/version.json
+!Distribution/GUIDE.md
+
+# Large/Temporary files
+*.log
+Thumbs.db

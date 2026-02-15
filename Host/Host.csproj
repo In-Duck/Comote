@@ -1,0 +1,42 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <CETCompat>false</CETCompat>
+    <UseWindowsForms>true</UseWindowsForms>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Concentus" Version="2.2.2" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.3" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="PusherClient" Version="2.3.0-beta" />
+    <PackageReference Include="PusherServer" Version="5.0.0" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.6.2" />
+    <PackageReference Include="Vortice.DXGI" Version="3.6.2" />
+    <PackageReference Include="Vortice.Mathematics" Version="2.0.0" />
+    <PackageReference Include="SIPSorcery" Version="10.0.3" />
+    <PackageReference Include="SIPSorceryMedia.FFmpeg" Version="8.0.12" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Remove="appsettings.json" />
+    <EmbeddedResource Include="appsettings.json" />
+  </ItemGroup>
+
+  <!-- FFmpeg DLL을 EXE에 임베디드 (단일 파일 배포용) -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\ffmpeg\avcodec-61.dll" LogicalName="ffmpeg.avcodec-61.dll" />
+    <EmbeddedResource Include="..\ffmpeg\avdevice-61.dll" LogicalName="ffmpeg.avdevice-61.dll" />
+    <EmbeddedResource Include="..\ffmpeg\avfilter-10.dll" LogicalName="ffmpeg.avfilter-10.dll" />
+    <EmbeddedResource Include="..\ffmpeg\avformat-61.dll" LogicalName="ffmpeg.avformat-61.dll" />
+    <EmbeddedResource Include="..\ffmpeg\avutil-59.dll" LogicalName="ffmpeg.avutil-59.dll" />
+    <EmbeddedResource Include="..\ffmpeg\postproc-58.dll" LogicalName="ffmpeg.postproc-58.dll" />
+    <EmbeddedResource Include="..\ffmpeg\swresample-5.dll" LogicalName="ffmpeg.swresample-5.dll" />
+    <EmbeddedResource Include="..\ffmpeg\swscale-8.dll" LogicalName="ffmpeg.swscale-8.dll" />
+  </ItemGroup>
+</Project>
