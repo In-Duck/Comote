@@ -19,6 +19,10 @@ namespace Viewer
 
         [JsonProperty("release_notes")]
         public string ReleaseNotes { get; set; } = "";
+
+        // [Security] 파일 무결성 검증을 위한 SHA256 해시 추가
+        [JsonProperty("viewer_hash")]
+        public string Hash { get; set; } = "";
     }
 
     public static class AutoUpdater
@@ -33,7 +37,7 @@ namespace Viewer
         // Github 저장소의 version.json 주소
         private const string VersionUrl = "https://raw.githubusercontent.com/In-Duck/Comote/main/Distribution/version.json";
 
-        public static async Task CheckAndApplyUpdate()
+        public static async Task CheckAndApplyUpdate(bool isService = false)
         {
             try
             {
@@ -47,6 +51,14 @@ namespace Viewer
 
                 if (newVersion > currentVersion)
                 {
+                    // 서비스 모드면 자동 업데이트 (사용자 확인 없음)
+                    if (isService)
+                    {
+                        Console.WriteLine($"[AutoUpdater] New version found: {newVersion}. Updating...");
+                        await DownloadAndInstall(updateInfo.SetupUrl, updateInfo.Hash);
+                        return;
+                    }
+
                     var result = MessageBox.Show(
                         $"새 버전({newVersion})이 발견되었습니다!\n\n현재 버전: {currentVersion}\n내용: {updateInfo.ReleaseNotes}\n\n지금 업데이트하시겠습니까?",
                         "업데이트 알림",
@@ -55,23 +67,49 @@ namespace Viewer
 
                     if (result == MessageBoxResult.Yes)
                     {
-                        await DownloadAndInstall(updateInfo.SetupUrl);
+                        await DownloadAndInstall(updateInfo.SetupUrl, updateInfo.Hash);
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                if (isService) Console.WriteLine($"[AutoUpdater] Check failed: {ex.Message}");
                 // 업데이트 체크 실패 시 무시하고 진행
             }
         }
 
-        private static async Task DownloadAndInstall(string url)
+        private static async Task DownloadAndInstall(string url, string expectedHash)
         {
             try
             {
-                string tempPath = Path.Combine(Path.GetTempPath(), "ComoteViewer_Setup.exe");
+                string tempPath = Path.Combine(Path.GetTempPath(), "KymoteViewer_Setup.exe");
                 
                 var data = await _httpClient.GetByteArrayAsync(url);
+
+                // [Security] SHA256 해시 검증
+                if (!string.IsNullOrEmpty(expectedHash))
+                {
+                    using (var sha256 = System.Security.Cryptography.SHA256.Create())
+                    {
+                        var hashBytes = sha256.ComputeHash(data);
+                        string fileHash = BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+                        
+                        if (!fileHash.Equals(expectedHash.ToLower(), StringComparison.OrdinalIgnoreCase))
+                        {
+                            string msg = $"보안 경고: 다운로드한 파일의 해시값이 일치하지 않습니다.\n\n기대값: {expectedHash}\n실제값: {fileHash}\n\n업데이트가 중단되었습니다.";
+                            if (Environment.UserInteractive)
+                            {
+                                MessageBox.Show(msg, "무결성 검증 실패", MessageBoxButton.OK, MessageBoxImage.Error);
+                            }
+                            else
+                            {
+                                Console.WriteLine($"[AutoUpdater] Hash mismatch! Expected: {expectedHash}, Actual: {fileHash}");
+                            }
+                            return;
+                        }
+                    }
+                }
+
                 await File.WriteAllBytesAsync(tempPath, data);
 
                 // Viewer는 사용자 인터랙션용이므로 기본 설정을 보여주는 것이 나을 수도 있음. 
@@ -89,7 +127,14 @@ namespace Viewer
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"업데이트 다운로드 중 오류가 발생했습니다: {ex.Message}", "에러", MessageBoxButton.OK, MessageBoxImage.Error);
+                if (Environment.UserInteractive)
+                {
+                    MessageBox.Show($"업데이트 다운로드 중 오류가 발생했습니다: {ex.Message}", "에러", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+                else
+                {
+                    Console.WriteLine($"[AutoUpdater] Download failed: {ex.Message}");
+                }
             }
         }
     }

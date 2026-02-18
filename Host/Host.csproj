@@ -7,8 +7,9 @@
     <CETCompat>false</CETCompat>
     <UseWindowsForms>true</UseWindowsForms>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Version>1.0.0</Version>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <Version>1.0.1</Version>
+    <AssemblyVersion>1.0.1.0</AssemblyVersion>
+    <ApplicationIcon>Kymote.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,6 +24,10 @@
     <PackageReference Include="SIPSorcery" Version="10.0.3" />
     <PackageReference Include="SIPSorceryMedia.FFmpeg" Version="8.0.12" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Kymote.ico" />
   </ItemGroup>
 
   <ItemGroup>

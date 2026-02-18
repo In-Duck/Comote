@@ -11,6 +11,8 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Interop;
 using SIPSorcery.Net;
+using System.Windows.Shell;
+using System.Linq;
 
 namespace Viewer
 {
@@ -30,7 +32,9 @@ namespace Viewer
         public VideoReceiver? Receiver => _receiver;
 
         // === 로비 뷰 (리스트 + 그리드) ===
+        // === 로비 뷰 (리스트 + 그리드) ===
         private Grid _lobbyGrid = null!;
+        private ContentControl _mainContent = null!; // Content Swapper
         private DataGrid _hostDataGrid = null!;
         private WrapPanel _thumbnailPanel = null!;
         private Grid _listTab = null!;
@@ -88,8 +92,22 @@ namespace Viewer
             _userId = userId;
             Console.WriteLine("[DEBUG] MainWindow constructor started");
 
-            Title = "Comote Viewer";
-            Background = new SolidColorBrush(Color.FromRgb(25, 25, 28));
+            Title = "KYMOTE Viewer";
+            try { Icon = new System.Windows.Media.Imaging.BitmapImage(new Uri("pack://application:,,,/Kymote.ico")); } catch { }
+            
+            // [UI] Apply Modern Window Style
+            var chrome = new WindowChrome
+            {
+                CaptionHeight = 44,
+                ResizeBorderThickness = new Thickness(5),
+                GlassFrameThickness = new Thickness(0),
+                CornerRadius = new CornerRadius(0)
+            };
+            WindowChrome.SetWindowChrome(this, chrome);
+            
+            // Try to load background from resources, fallback to dark gray
+            try { Background = (Brush)FindResource("WindowBackgroundBrush"); }
+            catch { Background = new SolidColorBrush(Color.FromRgb(18, 18, 18)); }
 
             // 설정 로드
             _settings = AppSettings.Load();
@@ -148,22 +166,24 @@ namespace Viewer
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(28) });
 
             // 전체 배경
-            grid.Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)); // #1E1E1E 느낌의 짙은 회색
+            try { grid.Background = (Brush)FindResource("WindowBackgroundBrush"); }
+            catch { grid.Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)); }
 
             // --- 상단 메뉴바 ---
             var menuBar = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(40, 40, 40)), // Lighter header
                 BorderThickness = new Thickness(0, 0, 0, 1),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
                 Padding = new Thickness(16, 0, 16, 0)
             };
+            try { menuBar.Background = (Brush)FindResource("ControlBackgroundBrush"); }
+            catch { menuBar.Background = new SolidColorBrush(Color.FromRgb(40, 40, 40)); }
             var menuPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             menuPanel.Children.Add(new TextBlock
             {
-                Text = "🖥️ Comote",
-                Foreground = new SolidColorBrush(Color.FromRgb(100, 160, 255)),
-                FontSize = 16,
+                Text = "🖥️ KYMOTE",
+                Foreground = new SolidColorBrush(Color.FromRgb(255, 215, 0)), // Kymote Gold (#FFD700)
+                FontSize = 18,
                 FontWeight = FontWeights.Bold,
                 VerticalAlignment = VerticalAlignment.Center
             });
@@ -172,23 +192,47 @@ namespace Viewer
             var settingsBtn = new Button
             {
                 Content = "⚙ 설정",
-                Background = new SolidColorBrush(Color.FromRgb(55, 55, 62)),
-                Foreground = new SolidColorBrush(Color.FromRgb(200, 200, 210)),
-                BorderThickness = new Thickness(0),
-                Padding = new Thickness(12, 4, 12, 4),
-                FontSize = 12,
-                Cursor = System.Windows.Input.Cursors.Hand,
+                Padding = new Thickness(12, 6, 12, 6),
+                FontSize = 13,
+                Cursor = Cursors.Hand,
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(12, 0, 0, 0)
             };
+            try { settingsBtn.Style = (Style)FindResource("PrimaryButtonStyle"); } catch { }
+            
+            // 윈도우 컨트롤 버튼 (최소화/최대화/닫기) - WindowChrome 사용 시 필요
+            var winControlPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(20, 0, 0, 0) };
+            
+            var minBtn = new Button { Content = "─", Width = 40, Height = 30, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Brushes.Gray };
+            minBtn.Click += (s, e) => WindowState = WindowState.Minimized;
+            
+            var maxBtn = new Button { Content = "☐", Width = 40, Height = 30, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Brushes.Gray };
+            maxBtn.Click += (s, e) => WindowState = (WindowState == WindowState.Maximized) ? WindowState.Normal : WindowState.Maximized;
+            
+            var closeBtn = new Button { Content = "✕", Width = 40, Height = 30, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Brushes.Red };
+            closeBtn.Click += (s, e) => Close();
+
+            // WindowChrome CaptionButton으로 작동하게 하려면 Click 이벤트가 아니라 WindowChrome.IsHitTestVisibleInChrome=true 설정 필요
+            WindowChrome.SetIsHitTestVisibleInChrome(settingsBtn, true);
+            WindowChrome.SetIsHitTestVisibleInChrome(minBtn, true);
+            WindowChrome.SetIsHitTestVisibleInChrome(maxBtn, true);
+            WindowChrome.SetIsHitTestVisibleInChrome(closeBtn, true);
+
+            winControlPanel.Children.Add(minBtn);
+            winControlPanel.Children.Add(maxBtn);
+            winControlPanel.Children.Add(closeBtn);
+            
             settingsBtn.Click += (s, e) => OpenSettings();
 
             // DockPanel으로 좌/우 배치
             var menuDock = new DockPanel { LastChildFill = false };
             DockPanel.SetDock(menuPanel, Dock.Left);
+            DockPanel.SetDock(winControlPanel, Dock.Right);
             DockPanel.SetDock(settingsBtn, Dock.Right);
+            
             menuDock.Children.Add(menuPanel);
+            menuDock.Children.Add(winControlPanel);
             menuDock.Children.Add(settingsBtn);
             menuBar.Child = menuDock;
 
@@ -211,6 +255,15 @@ namespace Viewer
             tabBar.Child = tabPanel;
             Grid.SetRow(tabBar, 1);
             grid.Children.Add(tabBar);
+
+            // [FIX] HitTestVisible 보장 (WindowChrome 이슈 방지)
+            WindowChrome.SetIsHitTestVisibleInChrome(_listTabBtn, true);
+            WindowChrome.SetIsHitTestVisibleInChrome(_gridTabBtn, true);
+
+            // --- 메인 콘텐츠 영역 (ContentControl) ---
+            _mainContent = new ContentControl();
+            Grid.SetRow(_mainContent, 2);
+            grid.Children.Add(_mainContent);
 
             // --- 리스트 탭 (DataGrid) ---
             _listTab = new Grid();
@@ -242,16 +295,33 @@ namespace Viewer
             
             // 컨텍스트 메뉴
             var contextMenu = new ContextMenu();
+            
             var sendFileMenuItem = new MenuItem { Header = "멀티 파일 전송" };
             sendFileMenuItem.Click += OnMultiFileTransferClick;
             contextMenu.Items.Add(sendFileMenuItem);
+
+            var wolMenuItem = new MenuItem { Header = "Wake Up (WoL)" };
+            wolMenuItem.Click += (s, e) => {
+                if (_hostDataGrid.SelectedItem is HostDto host)
+                {
+                    if (!string.IsNullOrEmpty(host.MacAddress))
+                    {
+                        WoLService.SendMagicPacket(host.MacAddress);
+                        MessageBox.Show($"Sent Magic Packet to {host.HostName} ({host.MacAddress})", "WoL Sent");
+                    }
+                    else
+                    {
+                        MessageBox.Show("MAC Address not available.", "WoL Error");
+                    }
+                }
+            };
+            contextMenu.Items.Add(wolMenuItem);
+
             _hostDataGrid.ContextMenu = contextMenu;
 
             _listTab.Children.Add(_hostDataGrid);
-            Grid.SetRow(_listTab, 2);
-            grid.Children.Add(_listTab);
+            // Grid에 직접 추가하지 않음 (ContentControl 사용)
 
-            // --- 그리드 탭 (썸네일) ---
             // --- 그리드 탭 (썸네일) ---
             _gridTab = new ScrollViewer { 
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -259,14 +329,13 @@ namespace Viewer
             };
             _thumbnailPanel = new WrapPanel { Margin = new Thickness(0) };
             _gridTab.Content = _thumbnailPanel;
-            _gridTab.Visibility = Visibility.Visible; // 기본값 표시
-            _listTab.Visibility = Visibility.Collapsed; // 리스트 숨김
-            // 썸네일 패널에도 컨텍스트 메뉴 (빈 공간 클릭 시 혹은 아이템 클릭 시 처리 필요)
-            // 개별 아이템에 메뉴를 달아야 함 -> CreateHostCard 수정 필요
-            // 여기서는 전체 리스트 대상 메뉴만 우선 추가
+            
+            // 썸네일 패널 ContextMenu
             _gridTab.ContextMenu = contextMenu; 
-            Grid.SetRow(_gridTab, 2);
-            grid.Children.Add(_gridTab);
+
+            // 초기 뷰 설정: 모니터 뷰
+            _mainContent.Content = _gridTab;
+            // _listTab.Visibility/ _gridTab.Visibility 설정 불필요 (ContentControl이 처리)
 
             // --- 하단 상태바 ---
             var statusBar = new Border
@@ -360,6 +429,44 @@ namespace Viewer
                 VerticalAlignment = VerticalAlignment.Top,
                 Margin = new Thickness(0, 8, 8, 0)
             };
+
+            // 뒤로가기 버튼 ("이전 호스트")
+            var prevHostBtn = new Button
+            {
+                Content = "◀",
+                FontSize = 14,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 0, 4, 0),
+                Background = new SolidColorBrush(Color.FromArgb(180, 60, 60, 60)),
+                Foreground = new SolidColorBrush(Colors.White),
+                BorderThickness = new Thickness(0),
+                Cursor = Cursors.Hand,
+                Opacity = 0.7,
+                ToolTip = "이전 호스트"
+            };
+            prevHostBtn.MouseEnter += (s, e) => prevHostBtn.Opacity = 1.0;
+            prevHostBtn.MouseLeave += (s, e) => prevHostBtn.Opacity = 0.7;
+            prevHostBtn.Click += (s, e) => NavigateHost(-1);
+            topBar.Children.Add(prevHostBtn);
+
+            // 앞으로가기 버튼 ("다음 호스트")
+            var nextHostBtn = new Button
+            {
+                Content = "▶",
+                FontSize = 14,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 0, 8, 0),
+                Background = new SolidColorBrush(Color.FromArgb(180, 60, 60, 60)),
+                Foreground = new SolidColorBrush(Colors.White),
+                BorderThickness = new Thickness(0),
+                Cursor = Cursors.Hand,
+                Opacity = 0.7,
+                ToolTip = "다음 호스트"
+            };
+            nextHostBtn.MouseEnter += (s, e) => nextHostBtn.Opacity = 1.0;
+            nextHostBtn.MouseLeave += (s, e) => nextHostBtn.Opacity = 0.7;
+            nextHostBtn.Click += (s, e) => NavigateHost(1);
+            topBar.Children.Add(nextHostBtn);
 
             // 화면 전환 버튼
             var monitorBtn = new Button
@@ -557,10 +664,22 @@ namespace Viewer
 
         private void SwitchLobbyTab(bool showList)
         {
-            _listTab.Visibility = showList ? Visibility.Visible : Visibility.Collapsed;
-            _gridTab.Visibility = showList ? Visibility.Collapsed : Visibility.Visible;
-            _listTabBtn.Background = new SolidColorBrush(showList ? Color.FromRgb(60, 110, 200) : Color.FromRgb(45, 45, 50));
-            _gridTabBtn.Background = new SolidColorBrush(showList ? Color.FromRgb(45, 45, 50) : Color.FromRgb(60, 110, 200));
+            Console.WriteLine($"[UI] Switching Tab: showList={showList}");
+            
+            if (_mainContent == null) return;
+
+            try
+            {
+                // ContentControl 교체 방식 (가장 확실함)
+                _mainContent.Content = showList ? _listTab : _gridTab;
+
+                _listTabBtn.Background = new SolidColorBrush(showList ? Color.FromRgb(60, 110, 200) : Color.FromRgb(45, 45, 50));
+                _gridTabBtn.Background = new SolidColorBrush(showList ? Color.FromRgb(45, 45, 50) : Color.FromRgb(60, 110, 200));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[UI] Tab Switch Error: {ex.Message}");
+            }
         }
 
         // ==========================================================
@@ -620,10 +739,11 @@ namespace Viewer
                 CornerRadius = new CornerRadius(6),
                 Cursor = Cursors.Hand,
                 Tag = host.Id,
-                Effect = new System.Windows.Media.Effects.DropShadowEffect
-                {
-                    Color = Colors.Black, BlurRadius = 15, Opacity = 0.3, ShadowDepth = 4, Direction = 270
-                }
+                Effect = null // [Perf] 렌더링 부하 감소를 위해 그림자 제거
+                // Effect = new System.Windows.Media.Effects.DropShadowEffect
+                // {
+                //     Color = Colors.Black, BlurRadius = 15, Opacity = 0.3, ShadowDepth = 4, Direction = 270
+                // }
             };
 
             var grid = new Grid { Margin = new Thickness(16) };
@@ -794,6 +914,13 @@ namespace Viewer
         // ==========================================================
         private async void ConnectToHost(string hostId)
         {
+            // 이전 연결 정리 (호스트 전환 시)
+            if (_receiver != null)
+            {
+                _receiver.Dispose();
+                _receiver = null;
+            }
+
             _connectedHostId = hostId;
 
             // 리모트 뷰로 전환
@@ -818,6 +945,33 @@ namespace Viewer
             {
                 Console.WriteLine($"[UI] ConnectToHost error: {ex.Message}");
                 _statusText.Text = $"연결 오류: {ex.Message}";
+            }
+        }
+
+        // ==========================================================
+        // 호스트 네비게이션 (이전/다음)
+        // ==========================================================
+        private void NavigateHost(int direction)
+        {
+            if (_currentHosts == null || _currentHosts.Count == 0) return;
+
+            // 현재 호스트 인덱스 찾기
+            int currentIndex = _currentHosts.FindIndex(h => h.Id == _connectedHostId);
+            if (currentIndex == -1) currentIndex = 0; // Fallback
+
+            // 다음 인덱스 계산 (Wrap around)
+            int nextIndex = (currentIndex + direction + _currentHosts.Count) % _currentHosts.Count;
+            var nextHost = _currentHosts[nextIndex];
+
+            // 자기 자신이 아니면 이동
+            if (nextHost.Id != _connectedHostId)
+            {
+                Console.WriteLine($"[UI] Navigating to host {nextIndex + 1}/{_currentHosts.Count}: {nextHost.Name}");
+                
+                // 오프라인 호스트 스킵 로직 (선택 사항 - 일단은 오프라인이라도 이동 시도하여 에러 메시지 보여줌)
+                // 만약 오프라인을 건너뛰고 싶다면 while 루프 사용 가능
+                
+                 ConnectToHost(nextHost.Id);
             }
         }
 

@@ -109,7 +109,8 @@ namespace Host
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Capture] Initialise failed: {ex.Message}");
+                Console.WriteLine($"[Capture] Initialise failed: {ex}");
+                // throw; // 필요한 경우 재발생
             }
         }
 

@@ -30,7 +30,7 @@ namespace Viewer
         {
             // 앱 고유 임시 폴더 (재실행 시 재활용)
             string extractDir = Path.Combine(
-                Path.GetTempPath(), "Comote_ffmpeg");
+                Path.GetTempPath(), "Kymote_ffmpeg");
             Directory.CreateDirectory(extractDir);
 
             // 버전 마커 파일로 이미 추출 여부 확인

@@ -99,7 +99,7 @@ namespace Host
 
             Console.WriteLine($"[Auth] Logged in as: {userEmail}");
 
-            Console.WriteLine("Comote Host Starting...");
+            Console.WriteLine("KYMOTE Host Starting...");
 
             string? hostName = null;
             string? password = null;
@@ -134,7 +134,7 @@ namespace Host
             }
 
             Console.OutputEncoding = System.Text.Encoding.UTF8;
-            Console.WriteLine("Comote Host Starting...");
+            Console.WriteLine("KYMOTE Host Starting...");
 
             string ffmpegPath = FFmpegExtractor.ExtractFFmpeg();
             FFmpegInit.Initialise(FfmpegLogLevelEnum.AV_LOG_WARNING, ffmpegPath);
@@ -171,8 +171,6 @@ namespace Host
             string resolution = $"{capture.Width}x{capture.Height}";
             
             // Signaling Client Start
-            // Old: _signaling = new SignalingClient(appSettings.PusherAppId, appSettings.PusherAppKey, appSettings.PusherSecret, appSettings.PusherCluster, hostId, new { name = hostName, password = password });
-            // New: HttpAuthorizer via WebAuthUrl
             var signaling = new SignalingClient(appSettings.Pusher.AppId, appKey, appSettings.Pusher.Cluster, appSettings.WebAuthUrl, accessToken, hostId, hostName, resolution,
                 appSettings.SupabaseUrl, appSettings.SupabaseAnonKey, userId);
 
@@ -182,8 +180,16 @@ namespace Host
             webRtc.OnSignalReady += async (to, signal) => await signaling.SendSignalAsync(to, signal);
 
             Console.WriteLine($"Host ID: {hostId}");
-            await signaling.ConnectAsync();
-            // await signaling.SubscribeHostChannel(hostId); // Removed as it is handled in ConnectAsync
+            
+            try 
+            {
+                await signaling.ConnectAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Main] Signaling Connect Failed: {ex}");
+                // 서비스 모드일 경우 여기서 종료되면 안 될 수도 있음 (재시도 로직 필요)
+            }
 
             await Task.Delay(-1);
         }
@@ -194,17 +200,17 @@ namespace Host
             if (string.IsNullOrEmpty(exePath)) return;
 
             // sc.exe의 binPath 인자 형식: binPath= "C:\path\to\Host.exe"
-            string cmd = $"create ComoteHost binPath= \"{exePath}\" start= auto DisplayName= \"Comote Host Service\"";
+            string cmd = $"create KymoteHost binPath= \"{exePath}\" start= auto DisplayName= \"KYMOTE Host Service\"";
             System.Diagnostics.Process.Start("sc.exe", cmd)?.WaitForExit();
-            System.Diagnostics.Process.Start("sc.exe", "description ComoteHost \"Comote Remote Control Host Service\"")?.WaitForExit();
-            System.Diagnostics.Process.Start("sc.exe", "start ComoteHost")?.WaitForExit();
+            System.Diagnostics.Process.Start("sc.exe", "description KymoteHost \"KYMOTE Remote Control Host Service\"")?.WaitForExit();
+            System.Diagnostics.Process.Start("sc.exe", "start KymoteHost")?.WaitForExit();
             Console.WriteLine("Service installed and started.");
         }
 
         static void UninstallService()
         {
-            System.Diagnostics.Process.Start("sc.exe", "stop ComoteHost")?.WaitForExit();
-            System.Diagnostics.Process.Start("sc.exe", "delete ComoteHost")?.WaitForExit();
+            System.Diagnostics.Process.Start("sc.exe", "stop KymoteHost")?.WaitForExit();
+            System.Diagnostics.Process.Start("sc.exe", "delete KymoteHost")?.WaitForExit();
             Console.WriteLine("Service stopped and deleted.");
         }
         private static async Task<(string token, string userId)> AttemptAutoLogin(AppSettings settings, string email, string password)
@@ -227,8 +233,17 @@ namespace Host
                         string uid = json.user?.id ?? "";
                         return (token, uid);
                     }
+                    else
+                    {
+                        Console.WriteLine($"[AutoLogin] Failed. Status: {response.StatusCode}");
+                        string errorBody = await response.Content.ReadAsStringAsync();
+                        Console.WriteLine($"[AutoLogin] Error details: {errorBody}");
+                    }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[AutoLogin] Exception: {ex.Message}");
+                }
             }
             return (null, null);
         }

@@ -18,6 +18,10 @@ namespace Host
 
         [JsonProperty("release_notes")]
         public string ReleaseNotes { get; set; } = "";
+
+        // [Security] 파일 무결성 검증을 위한 SHA256 해시 추가
+        [JsonProperty("host_hash")]
+        public string Hash { get; set; } = "";
     }
 
     public static class AutoUpdater
@@ -49,7 +53,7 @@ namespace Host
                 if (newVersion > currentVersion)
                 {
                     Console.WriteLine($"[Updater] New version available: {newVersion} (Current: {currentVersion})");
-                    await DownloadAndInstall(updateInfo.SetupUrl, isService);
+                    await DownloadAndInstall(updateInfo.SetupUrl, updateInfo.Hash, isService);
                 }
                 else
                 {
@@ -63,14 +67,35 @@ namespace Host
             }
         }
 
-        private static async Task DownloadAndInstall(string url, bool isService)
+        private static async Task DownloadAndInstall(string url, string expectedHash, bool isService)
         {
             try
             {
-                string tempPath = Path.Combine(Path.GetTempPath(), "Comote_Setup.exe");
+                string tempPath = Path.Combine(Path.GetTempPath(), "Kymote_Setup.exe");
                 Console.WriteLine($"[Updater] Downloading update to {tempPath}...");
 
                 var data = await _httpClient.GetByteArrayAsync(url);
+
+                // [Security] SHA256 해시 검증
+                if (!string.IsNullOrEmpty(expectedHash))
+                {
+                    using (var sha256 = System.Security.Cryptography.SHA256.Create())
+                    {
+                        var hashBytes = sha256.ComputeHash(data);
+                        string fileHash = BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+                        
+                        if (!fileHash.Equals(expectedHash.ToLower(), StringComparison.OrdinalIgnoreCase))
+                        {
+                            Console.WriteLine($"[Updater] SECURITY WARNING: Hash mismatch!");
+                            Console.WriteLine($"Expected: {expectedHash}");
+                            Console.WriteLine($"Actual:   {fileHash}");
+                            Console.WriteLine("[Updater] Update aborted due to integrity failure.");
+                            return;
+                        }
+                    }
+                    Console.WriteLine("[Updater] Hash verification successful.");
+                }
+
                 await File.WriteAllBytesAsync(tempPath, data);
 
                 Console.WriteLine("[Updater] Download complete. Executing installer...");

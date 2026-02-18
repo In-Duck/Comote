@@ -20,6 +20,7 @@ namespace Viewer
         public LoginWindow()
         {
             InitializeComponent();
+            try { Icon = new System.Windows.Media.Imaging.BitmapImage(new Uri("pack://application:,,,/Kymote.ico")); } catch { }
             _settings = AppSettings.Load();
             LoadSavedCredentials();
         }

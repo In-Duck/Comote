@@ -6,8 +6,8 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Comote - Control Anything, Anywhere",
-  description: "Ultra-low latency remote control via WebRTC",
+  title: "KYMOTE - The Golden Standard of Remote Control",
+  description: "Experience ultra-low latency, premium remote control with KYMOTE. Designed for perfection.",
 };
 
 export default function RootLayout({
@@ -17,7 +17,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${inter.className} bg-black text-white antialiased selection:bg-blue-500 selection:text-white`}>
+      <body className={`${inter.className} bg-black text-white antialiased selection:bg-amber-500 selection:text-black`}>
         {children}
       </body>
     </html>

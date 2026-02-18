@@ -23,3 +23,8 @@ publish/
 # Large/Temporary files
 *.log
 Thumbs.db
+
+# Large binary files (GitHub 100MB limit)
+web/public/downloads/*.zip
+Distribution/**/*.exe
+*.zip

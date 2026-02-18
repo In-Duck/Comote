@@ -41,6 +41,9 @@ namespace Viewer
 
         [JsonProperty("uptime")]
         public string Uptime { get; set; } = "N/A";
+
+        [JsonProperty("mac_address")]
+        public string MacAddress { get; set; } = "";
     }
 
     public class HostRepository

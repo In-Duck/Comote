@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace Host
@@ -10,10 +12,15 @@ namespace Host
     /// </summary>
     public class SetupForm : Form
     {
+        // Dragging logic
+        [DllImport("user32.dll")] public static extern int SendMessage(IntPtr hWnd, int Msg, int wParam, int lParam);
+        [DllImport("user32.dll")] public static extern bool ReleaseCapture();
+
         private TextBox _nameBox;
         private TextBox _passwordBox;
         private ComboBox _monitorCombo;
         private List<MonitorInfo> _monitors;
+        private Button _closeBtn;
 
         public string HostName => _nameBox.Text.Trim();
         public string? Password => string.IsNullOrWhiteSpace(_passwordBox.Text) ? null : _passwordBox.Text;
@@ -25,22 +32,42 @@ namespace Host
 
         public SetupForm()
         {
-            Text = "Comote Host 설정";
-            Size = new Size(380, 330);
+            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+            Text = "KYMOTE Host 설정";
+            Size = new Size(400, 360);
             StartPosition = FormStartPosition.CenterScreen;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
+            FormBorderStyle = FormBorderStyle.None; // Borderless
             MaximizeBox = false;
             MinimizeBox = false;
-            BackColor = Color.FromArgb(30, 30, 35);
+            BackColor = Color.FromArgb(25, 25, 28);
             ForeColor = Color.White;
             Font = new Font("Segoe UI", 10);
+            Padding = new Padding(2); // Border
+
+            // Dragging
+            _closeBtn = new Button {
+                Text = "✕",
+                Location = new Point(360, 10),
+                Size = new Size(30, 30),
+                FlatStyle = FlatStyle.Flat,
+                ForeColor = Color.Gray,
+                BackColor = Color.Transparent,
+                Cursor = Cursors.Hand
+            };
+            _closeBtn.FlatAppearance.BorderSize = 0;
+            _closeBtn.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
+            Controls.Add(_closeBtn);
+
+            this.MouseDown += (s, e) => {
+                if (e.Button == MouseButtons.Left) { ReleaseCapture(); SendMessage(Handle, 0xA1, 0x2, 0); }
+            };
 
             // 타이틀
             var titleLabel = new Label
             {
-                Text = "🖥️ Comote Host",
+                Text = "🖥️ KYMOTE Host",
                 Font = new Font("Segoe UI", 16, FontStyle.Bold),
-                ForeColor = Color.FromArgb(100, 160, 255),
+                ForeColor = Color.FromArgb(255, 215, 0), // Kymote Gold
                 Location = new Point(20, 15),
                 AutoSize = true
             };
@@ -130,11 +157,11 @@ namespace Host
             // 시작 버튼
             var startBtn = new Button
             {
-                Text = "▶ 시작",
-                Location = new Point(200, 240),
-                Size = new Size(140, 36),
-                BackColor = Color.FromArgb(60, 110, 200),
-                ForeColor = Color.White,
+                Text = "▶ 시작 (Start)",
+                Location = new Point(20, 290),
+                Size = new Size(360, 45),
+                BackColor = Color.FromArgb(255, 215, 0), // Kymote Gold
+                ForeColor = Color.Black,
                 FlatStyle = FlatStyle.Flat,
                 Font = new Font("Segoe UI", 11, FontStyle.Bold),
                 Cursor = Cursors.Hand
@@ -144,6 +171,12 @@ namespace Host
             Controls.Add(startBtn);
 
             AcceptButton = startBtn;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            ControlPaint.DrawBorder(e.Graphics, this.ClientRectangle, Color.FromArgb(60, 60, 60), ButtonBorderStyle.Solid);
         }
     }
 }

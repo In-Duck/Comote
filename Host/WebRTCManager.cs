@@ -44,9 +44,11 @@ namespace Host
         private const byte MSG_FILE_CHUNK = 0x31;
         private const byte MSG_FILE_END   = 0x32;
         private const byte MSG_FILE_ACK   = 0x33;
+        private const byte MSG_FILE_HASH_MISMATCH = 0x34;
 
         // 적응형 비트레이트 상태
         private int _viewerFps = 0;
+        private int _targetFps = 30; // 설정 FPS (기본 30)
         private string? _password;
 
         // 모니터 전환 상태
@@ -61,6 +63,7 @@ namespace Host
         private System.IO.MemoryStream? _fileReceiveStream;
         private string? _fileReceiveName;
         private uint _fileReceiveSize;
+        private string? _fileReceiveExpectedHash;
 
         public event Action<string, object>? OnSignalReady;
 
@@ -105,14 +108,17 @@ namespace Host
             _peerConnection.addTrack(audioTrack);
 
             // 최적의 비디오 인코더 선택 (GPU 가속 우선)
-            var (encoderName, encoderOpts) = SelectBestVideoEncoder();
-            Console.WriteLine($"[Video] Selected Encoder: {encoderName}");
+            // 최적의 비디오 인코더 선택 (HEVC > H264 > Software)
+            var (codecId, encoderName, encoderOpts) = SelectBestVideoEncoder();
+            Console.WriteLine($"[Video] Selected Encoder: {encoderName} (CodecID: {codecId})");
 
             try 
             {
-                _videoEncoder.SetCodec(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, encoderName, encoderOpts);
-                _videoEncoder.InitialiseEncoder(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, _capture.Width, _capture.Height, 30);
-                _videoEncoder.SetBitrate(20000000, null, null, null); // 20Mbps
+                _videoEncoder.SetCodec(codecId, encoderName, encoderOpts);
+                _videoEncoder.InitialiseEncoder(codecId, _capture.Width, _capture.Height, 30);
+                
+                // 비트레이트 설정 (H.265/AV1은 압축 효율이 좋으므로 H.264와 동일 비트레이트에서도 화질 우수)
+                _videoEncoder.SetBitrate(20_000_000, null, null, null); // 20Mbps (Start)
             }
             catch (Exception ex)
             {
@@ -120,17 +126,34 @@ namespace Host
                 var fallbackOpts = new System.Collections.Generic.Dictionary<string, string> { 
                     { "preset", "ultrafast" }, 
                     { "tune", "zerolatency" },
-                    { "crf", "18" } // 품질 확보
+                    { "crf", "18" }
                 };
                 _videoEncoder.SetCodec(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, "libx264", fallbackOpts);
                 _videoEncoder.InitialiseEncoder(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, _capture.Width, _capture.Height, 30);
             }
 
-            // 비트레이트 상향: 50Mbps (HQ)
-            _videoEncoder.SetBitrate(50_000_000, null, null, null); 
+            // SDP에 전송 코덱 명시 (SIPSorcery의 VideoFormat은 H264, VP8, VP9 만 기본 지원하므로 커스텀 페이로드 필요할 수 있음)
+            // 현재 SIPSorceryMedia.FFmpeg 구현상 VideoCodecsEnum으로 변환하는 과정이 있어 H264 외 사용이 까다로움.
+            // 일단 AV_CODEC_ID_HEVC로 인코딩하더라도 트랙 포맷은 H264라고 속이거나(위험), Custom VideoFormat을 써야 함.
+            // 여기서는 일단 H264 기본 호환성을 유지하되, 인코더만 교체 시도. (하지만 SDP 협상 없이는 Viewer가 디코딩 불가)
+            
+            // FIXME: Viewer가 HEVC/AV1을 받을 준비가 되어 있어야 함. 
+            // VP8/VP9 대신 HEVC(H.265) 페이로드 타입(97~127 동적 할당)을 명시해야 함.
+            // 하지만 WebRTC 표준에서 H.265 지원은 브라우저마다 다르며 SIPSorcery도 표준 Enum을 씀.
+            
+            // 임시: H.264 트랙만 추가 (실제 스트림이 HEVC면 디코더 에러 날 수 있음. 이 부분은 Viewer 수정과 맞물려야 함)
+            var videoFormat = new VideoFormat(VideoCodecsEnum.H264, 96, 90000, null);
+            if (codecId == FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_HEVC)
+            {
+                // Dynamic Payload Type for H.265
+                videoFormat = new VideoFormat(VideoCodecsEnum.H265, 100, 90000, null); 
+            }
+             // else if (codecId == FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_AV1)
+            // {
+            //     videoFormat = new VideoFormat(VideoCodecsEnum.AV1, 101, 90000, null);
+            // }
 
-            var h264Format = new VideoFormat(VideoCodecsEnum.H264, 96, 90000, null);
-            var videoTrack = new MediaStreamTrack(h264Format, MediaStreamStatusEnum.SendOnly);
+            var videoTrack = new MediaStreamTrack(videoFormat, MediaStreamStatusEnum.SendOnly);
             _peerConnection.addTrack(videoTrack);
 
             _peerConnection.onicecandidate += (candidate) =>
@@ -206,6 +229,8 @@ namespace Host
             Console.WriteLine($"[WebRTC] PeerConnection initialized for {remoteSocketId}");
         }
 
+
+
         private void HandleInputMessage(RTCDataChannel dc, byte[] data)
         {
             if (data == null || data.Length < 1) return;
@@ -217,6 +242,12 @@ namespace Host
                     {
                         _viewerFps = BitConverter.ToUInt16(data, 1);
                         Console.WriteLine($"[WebRTC] Viewer FPS: {_viewerFps}");
+                    }
+                    break;
+                case 0x07: // MSG_SETTINGS_UPDATE
+                    if (data.Length >= 3)
+                    {
+                        UpdateEncoderSettings(data[1], data[2]);
                     }
                     break;
                 case MSG_PING:
@@ -255,11 +286,47 @@ namespace Host
                 case 0x32: // MSG_FILE_END
                     HandleFileMessage(dc, data);
                     break;
-                default:
                     // 일반 입력 메시지 (마우스/키보드)
                     _inputSimulator.ProcessMessage(data);
                     break;
+
+
             }
+        }
+
+        private void UpdateEncoderSettings(int fps, int qualityLevel)
+        {
+            try
+            {
+                // Quality Multiplier
+                // 3: 20Mbps (Ultra), 2: 10Mbps (High/Default), 1: 5Mbps (Medium), 0: 2Mbps (Low)
+                long baseBitrate = 10_000_000;
+                long targetBitrate = baseBitrate;
+                
+                switch (qualityLevel)
+                {
+                    case 3: targetBitrate = 20_000_000; break; // 최상
+                    case 2: targetBitrate = 10_000_000; break; // 상
+                    case 1: targetBitrate = 5_000_000; break;  // 중
+                    case 0: targetBitrate = 2_000_000; break;  // 하
+                }
+
+                Console.WriteLine($"[WebRTC] Updating Encoder Settings -> FPS: {fps}, Bitrate: {targetBitrate / 1_000_000.0:F1}Mbps");
+                
+                // 비트레이트 적용
+                _videoEncoder.SetBitrate(targetBitrate, null, null, null); 
+                
+                // FPS 적용 (ChangeFps 메서드가 인코더 래퍼에 있다고 가정하거나, 캡처 루프 딜레이 조절 필요)
+                // 만약 ChangeFps가 없다면 InitialiseEncoder 재호출은 너무 무거움.
+                // 여기서는 비트레이트 변경에 집중하고 FPS는 인코더 내부 제어 혹은 캡처 딜레이 변수(_targetFps)를 둬야 함.
+                // 일단 _targetFps 변수를 필드로 만들고 캡처 루프에서 참조하도록 수정 필요.
+                _targetFps = fps > 0 ? fps : 30; // 0이면 기본값 30
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[WebRTC] Failed to update settings: {ex.Message}");
+            }
+
         }
 
         private void HandleFileMessage(RTCDataChannel dc, byte[] data)
@@ -271,11 +338,26 @@ namespace Host
                 if (data[0] == MSG_FILE_START && data.Length >= 5)
                 {
                     _fileReceiveSize = BitConverter.ToUInt32(data, 1);
-                    // 인코딩 디버깅: 원본 바이트 출력
-                    string hex = BitConverter.ToString(data, 5, Math.Min(data.Length - 5, 20));
-                    Console.WriteLine($"[FileTransfer] Name Bytes: {hex}...");
                     
-                    _fileReceiveName = Encoding.UTF8.GetString(data, 5, data.Length - 5);
+                    // Old header: [Type:1][Size:4][Name...] (Length: 5 + NameLen)
+                    // New header: [Type:1][Size:4][Name...][Hash:32] (Length: 5 + NameLen + 32)
+                    
+                    int nameLen = data.Length - 5;
+                    _fileReceiveExpectedHash = null;
+
+                    // 해시가 포함되어 있는지 확인 (파일 이름 길이를 적절히 추정하거나, 프로토콜 버전을 두면 좋음)
+                    // 여기서는 단순히 길이가 충분히 길면 맨 뒤 32바이트를 해시로 간주 (Viewer 수정 사항 반영)
+                    // Viewer는 Name + Hash 순으로 보냄
+                    if (data.Length > 5 + 32) 
+                    {
+                        nameLen = data.Length - 5 - 32;
+                        byte[] hashBytes = new byte[32];
+                        Array.Copy(data, 5 + nameLen, hashBytes, 0, 32);
+                        _fileReceiveExpectedHash = BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+                        Console.WriteLine($"[FileTransfer] Expected Hash: {_fileReceiveExpectedHash}");
+                    }
+
+                    _fileReceiveName = Encoding.UTF8.GetString(data, 5, nameLen);
                     _fileReceiveStream = new System.IO.MemoryStream();
                     Console.WriteLine($"[FileTransfer] Start Receiving: {_fileReceiveName} ({_fileReceiveSize} bytes)");
                 }
@@ -337,6 +419,34 @@ namespace Host
                     }
                 }
 
+                // 해시 검증
+                bool hashMismatch = false;
+                if (!string.IsNullOrEmpty(_fileReceiveExpectedHash))
+                {
+                    using (var sha256 = System.Security.Cryptography.SHA256.Create())
+                    {
+                        var writtenData = _fileReceiveStream.ToArray(); // Already in memory
+                        var computedBytes = sha256.ComputeHash(writtenData);
+                        string computedHash = BitConverter.ToString(computedBytes).Replace("-", "").ToLower();
+
+                        if (!computedHash.Equals(_fileReceiveExpectedHash, StringComparison.OrdinalIgnoreCase))
+                        {
+                            Console.WriteLine($"[FileTransfer] Hash Mismatch! Expected: {_fileReceiveExpectedHash}, Actual: {computedHash}");
+                            hashMismatch = true;
+                        }
+                        else
+                        {
+                            Console.WriteLine($"[FileTransfer] Hash Verified: {computedHash}");
+                        }
+                    }
+                }
+
+                if (hashMismatch)
+                {
+                     // 실패 시 저장된 파일 삭제? 정책 결정 필요. 일단 삭제하지 않고 실패 응답만 보냄.
+                     Console.WriteLine($"[FileTransfer] Integrity check failed. Saving anyway but reporting failure.");
+                }
+
                 Console.WriteLine($"[FileTransfer] Writing to {savePath}...");
                 System.IO.File.WriteAllBytes(savePath, _fileReceiveStream.ToArray());
                 Console.WriteLine($"[FileTransfer] Success: Saved to {savePath} ({_fileReceiveStream.Length} bytes)");
@@ -344,11 +454,20 @@ namespace Host
                 _fileReceiveStream.Dispose();
                 _fileReceiveStream = null;
                 _fileReceiveName = null;
+                _fileReceiveExpectedHash = null;
 
                 if (dc.readyState == RTCDataChannelState.open)
                 {
-                    dc.send(new byte[] { MSG_FILE_ACK });
-                    Console.WriteLine("[FileTransfer] ACK sent");
+                    if (hashMismatch)
+                    {
+                        dc.send(new byte[] { MSG_FILE_HASH_MISMATCH });
+                        Console.WriteLine("[FileTransfer] HASH MISMATCH sent");
+                    }
+                    else
+                    {
+                        dc.send(new byte[] { MSG_FILE_ACK });
+                        Console.WriteLine("[FileTransfer] ACK sent");
+                    }
                 }
                 else
                 {
@@ -406,43 +525,62 @@ namespace Host
             }
         }
 
-        private unsafe (string name, System.Collections.Generic.Dictionary<string, string> opts) SelectBestVideoEncoder()
+        private unsafe (FFmpeg.AutoGen.AVCodecID, string, System.Collections.Generic.Dictionary<string, string>) SelectBestVideoEncoder()
         {
-            // 1. NVIDIA NVENC (Performance -> Quality Balance)
-            if (FFmpeg.AutoGen.ffmpeg.avcodec_find_encoder_by_name("h264_nvenc") != null)
+            // 우선순위: AV1 (최고 효율) > HEVC (고효율) > H264 (호환성)
+            // 하드웨어: NVENC > QSV > AMF
+            
+            var commonOpts = new System.Collections.Generic.Dictionary<string, string>
             {
-                return ("h264_nvenc", new System.Collections.Generic.Dictionary<string, string> {
-                    { "preset", "p3" },      // p1(fastest) -> p3(fast/medium)
-                    { "tune", "ll" },        // Low Latency
-                    { "rc", "cbr" },         // CBR로 변경하여 일정한 품질 유도
-                    { "zerolatency", "1" },
-                    { "delay", "0" }
-                });
-            }
-            // 2. Intel QSV (Balanced)
-            if (FFmpeg.AutoGen.ffmpeg.avcodec_find_encoder_by_name("h264_qsv") != null)
+                { "preset", "llhq" }, // Low Latency High Quality
+                { "rc", "cbr_ld_hq" },
+                { "zerolatency", "1" },
+                { "delay", "0" }
+            };
+
+            // 1. NVIDIA NVENC
+            // HEVC
+            if (IsEncoderAvailable("hevc_nvenc")) return (FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_HEVC, "hevc_nvenc", commonOpts);
+            // H264
+            if (IsEncoderAvailable("h264_nvenc")) return (FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, "h264_nvenc", commonOpts);
+
+            // 2. Intel QSV
+            // HEVC
+            if (IsEncoderAvailable("hevc_qsv")) 
             {
-                return ("h264_qsv", new System.Collections.Generic.Dictionary<string, string> {
-                    { "preset", "medium" },  // veryfast -> medium
-                    { "look_ahead", "0" },
-                    { "low_power", "0" }     // 품질 위해 low_power 끔
-                });
+                var qsvOpts = new System.Collections.Generic.Dictionary<string, string> { { "profile", "main" }, { "global_quality", "25" } };
+                return (FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_HEVC, "hevc_qsv", qsvOpts);
             }
+            if (IsEncoderAvailable("h264_qsv"))
+            {
+                var qsvOpts = new System.Collections.Generic.Dictionary<string, string> { { "profile", "baseline" }, { "preset", "veryfast" } };
+                return (FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, "h264_qsv", qsvOpts);
+            }
+
             // 3. AMD AMF
-            if (FFmpeg.AutoGen.ffmpeg.avcodec_find_encoder_by_name("h264_amf") != null)
-            {
-                return ("h264_amf", new System.Collections.Generic.Dictionary<string, string> {
-                    { "usage", "lowlatency" },
-                    { "quality", "balanced" } // speed -> balanced
-                });
-            }
-            // 4. Default Software (libx264)
-            return ("libx264", new System.Collections.Generic.Dictionary<string, string> {
+            if (IsEncoderAvailable("hevc_amf")) return (FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_HEVC, "hevc_amf", new System.Collections.Generic.Dictionary<string, string> { { "usage", "lowlatency" } });
+            if (IsEncoderAvailable("h264_amf")) return (FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, "h264_amf", new System.Collections.Generic.Dictionary<string, string> { { "usage", "lowlatency" } });
+
+            // 4. Software Fallback
+            return (FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, "libx264", new System.Collections.Generic.Dictionary<string, string> {
                 { "preset", "ultrafast" },
                 { "tune", "zerolatency" },
-                { "crf", "18" },            // CRF 20 -> 18 (Better Quality)
+                { "crf", "18" },
                 { "rc-lookahead", "0" }
             });
+        }
+
+        private unsafe bool IsEncoderAvailable(string encoderName)
+        {
+            try 
+            {
+                var codec = FFmpeg.AutoGen.ffmpeg.avcodec_find_encoder_by_name(encoderName);
+                return codec != null;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private List<short> _audioAccumulator = new List<short>();
@@ -640,7 +778,7 @@ namespace Host
                     // Frame Pacing: 60 FPS (16.6ms) 목표
                     // 인코딩+전송에 걸린 시간을 제외한 남은 시간만 대기
                     long elapsedMs = loopWatch.ElapsedMilliseconds;
-                    int targetInterval = 16; // 60 FPS
+                    int targetInterval = _targetFps > 0 ? 1000 / _targetFps : 33; // Dynamic FPS
                     
                     int delay = targetInterval - (int)elapsedMs;
                     if (delay > 0)

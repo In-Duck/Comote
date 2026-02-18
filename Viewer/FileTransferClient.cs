@@ -31,6 +31,7 @@ namespace Viewer
         private const byte MSG_FILE_CHUNK = 0x31;
         private const byte MSG_FILE_END   = 0x32;
         private const byte MSG_FILE_ACK   = 0x33;
+        private const byte MSG_FILE_HASH_MISMATCH = 0x34;
 
         public FileTransferClient(SignalingClient signaling, string targetHostId)
         {
@@ -71,9 +72,10 @@ namespace Viewer
             _dc.onmessage += (dc, protocol, data) =>
             {
                 // ACK 처리
-                 if (data.Length > 0 && data[0] == MSG_FILE_ACK)
+                 if (data.Length > 0)
                  {
-                     _ackTcs.TrySetResult(true);
+                     if (data[0] == MSG_FILE_ACK) _ackTcs.TrySetResult(true);
+                     else if (data[0] == MSG_FILE_HASH_MISMATCH) _ackTcs.TrySetResult(false);
                  }
             };
 
@@ -174,10 +176,29 @@ namespace Viewer
 
             // 1. START
             byte[] nameBytes = System.Text.Encoding.UTF8.GetBytes(fileName);
-            byte[] startMsg = new byte[1 + 4 + nameBytes.Length];
+            
+            // 해시 계산 (SHA256)
+            using var sha256 = System.Security.Cryptography.SHA256.Create();
+            using var fsHash = fileInfo.OpenRead();
+            byte[] hashBytes = sha256.ComputeHash(fsHash);
+            fsHash.Close();
+
+            // 메시지 구조: [Type:1][Size:8][NameLen:4][Name:N][Hash:32] (구조 변경)
+            // 하위 호환성 유지를 위해 기존 구조 뒤에 Hash를 붙이는 것이 안전하지만, 
+            // Host측 파싱 로직도 수정하므로 구조를 명확히 함.
+            // 여기서는 간단히 기존 구조 뒤에 Hash를 붙임.
+            // 기존: [Type:1][Size:4][Name...] <- Size가 4바이트(uint)로 되어있음. 4GB 이상 불가. (수정 필요하지만 일단 유지)
+            
+            byte[] startMsg = new byte[1 + 4 + nameBytes.Length + 32];
             startMsg[0] = MSG_FILE_START;
-            BitConverter.GetBytes((uint)fileSize).CopyTo(startMsg, 1);
-            nameBytes.CopyTo(startMsg, 5);
+            BitConverter.GetBytes((uint)fileSize).CopyTo(startMsg, 1); // 4GB Limit warning
+            Array.Copy(nameBytes, 0, startMsg, 5, nameBytes.Length);
+            Array.Copy(hashBytes, 0, startMsg, 5 + nameBytes.Length, 32); // 이름 뒤에 해시 부착
+
+            // 이름 길이를 명시하지 않고 있어서 Host가 파싱할 때 애매했음. 
+            // 기존 Host는 (전체 - 5)를 이름으로 간주.
+            // Host 수정 시: (전체 - 5 - 32)를 이름으로 간주하도록 변경해야 함.
+
             _dc.send(startMsg);
 
             // 2. CHUNK
@@ -221,8 +242,17 @@ namespace Viewer
             }
             else
             {
-                 Console.WriteLine($"[FileTransfer] ACK received for {fileName}");
-                 OnStatus?.Invoke($"Transfer Complete");
+                 bool success = await ackTask; // Result check
+                 if (success)
+                 {
+                     Console.WriteLine($"[FileTransfer] ACK received for {fileName}");
+                     OnStatus?.Invoke($"Transfer Complete (Hash Verified)");
+                 }
+                 else
+                 {
+                     Console.WriteLine($"[FileTransfer] Hash Mismatch reported by Host");
+                     OnStatus?.Invoke($"Transfer Failed: Integrity Check Error");
+                 }
             }
         }
 

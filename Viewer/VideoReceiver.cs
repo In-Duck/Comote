@@ -103,8 +103,14 @@ namespace Viewer
             _waveOut.Play();
 
             // H.264 수신 전용 트랙 추가
-            var h264Format = new VideoFormat(VideoCodecsEnum.H264, 96, 90000, null);
-            var videoTrack = new MediaStreamTrack(h264Format, MediaStreamStatusEnum.RecvOnly);
+            // 비디오 수신 트랙 추가 (H.264, H.265, AV1)
+            var supportedFormats = new List<VideoFormat>
+            {
+                new VideoFormat(VideoCodecsEnum.H265, 100, 90000, null),
+                // new VideoFormat(VideoCodecsEnum.AV1, 101, 90000, null), // AV1 미지원
+                new VideoFormat(VideoCodecsEnum.H264, 96, 90000, null)
+            };
+            var videoTrack = new MediaStreamTrack(supportedFormats, MediaStreamStatusEnum.RecvOnly);
             _peerConnection.addTrack(videoTrack);
 
             // Opus 오디오 수신 전용 트랙 추가 (SDP에 오디오 라인 포함 필수)
@@ -264,7 +270,7 @@ namespace Viewer
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[VideoReceiver] Frame render error: {ex.Message}");
+                Console.WriteLine($"[VideoReceiver] Frame render error: {ex}");
             }
         }
 
@@ -419,7 +425,26 @@ namespace Viewer
 
             // DataChannel 생성 (Viewer → Host 입력 전송용)
             _inputChannel = await _peerConnection.createDataChannel("input");
-            _inputChannel.onopen += () => Console.WriteLine("[VideoReceiver] Input DataChannel opened");
+            _inputChannel.onopen += () => 
+            {
+                Console.WriteLine("[VideoReceiver] Input DataChannel opened");
+                try 
+                {
+                    var settings = AppSettings.Load();
+                    int qLevel = 2;
+                    switch(settings.Quality) {
+                        case "최상": qLevel = 3; break;
+                        case "상": qLevel = 2; break;
+                        case "중": qLevel = 1; break;
+                        case "하": qLevel = 0; break;
+                    }
+                    SendSettings(settings.GetTargetFps(), qLevel);
+                } 
+                catch (Exception ex) 
+                {
+                    Console.WriteLine($"[VideoReceiver] Failed to send initial settings: {ex.Message}");
+                }
+            };
 
             // DataChannel 생성 (파일 전송용)
             _fileChannel = await _peerConnection.createDataChannel("file");
@@ -518,6 +543,18 @@ namespace Viewer
             if (_inputChannel?.readyState == RTCDataChannelState.open)
             {
                 _inputChannel.send(new byte[] { 0x06 }); // MSG_MONITOR_SWITCH
+            }
+        }
+
+        public void SendSettings(int fps, int qualityLevel)
+        {
+            if (_inputChannel?.readyState == RTCDataChannelState.open)
+            {
+                // MSG_SETTINGS_UPDATE (0x07)
+                // Format: [Type][FPS][QualityLevel]
+                byte[] msg = new byte[] { 0x07, (byte)fps, (byte)qualityLevel };
+                _inputChannel.send(msg);
+                Console.WriteLine($"[Settings] Sent update: FPS={fps}, Quality={qualityLevel}");
             }
         }
 

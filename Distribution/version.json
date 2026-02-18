@@ -1,6 +1,8 @@
 {
-    "version": "1.0.0",
+    "version": "1.0.1",
     "host_setup_url": "https://github.com/In-Duck/Comote/raw/main/Distribution/Host/ComoteHost_Setup.exe",
     "viewer_setup_url": "https://github.com/In-Duck/Comote/raw/main/Distribution/Viewer/ComoteViewer_Setup.exe",
-    "release_notes": "- 첫 번째 정식 릴리스\n- 무인 액세스 기능\n- 자동 업데이트 시스템\n- 설치 프로그램(Setup.exe) 지원"
+    "host_hash": "B886F93ED811355B97F1F33816E97A420367D6D9DC2BEC9791A3EFD74CA7CD55",
+    "viewer_hash": "CD9DAF1716675007992F37CDBA9536A9F71074478C7742249024F8D898F1D62D",
+    "release_notes": "- [New] 뷰어: 이전/다음 호스트 전환 버튼 추가\n- [Security] 업데이트 파일 해시 검증 추가\n- [Fix] 파일 전송 안정성 개선"
 }

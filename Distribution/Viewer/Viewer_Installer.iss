@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Comote Viewer"
-#define MyAppVersion "1.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "Comote"
 #define MyAppURL "https://github.com/comote/comote"
 #define MyAppExeName "Viewer.exe"
@@ -27,6 +27,11 @@ OutputBaseFilename=ComoteViewer_Setup
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
+
+; [Security] 코드 서명 설정 (인증서 보유 시 주석 해제하여 사용)
+; 도구 > 옵션 > 서명 도구에서 'SignTool' 이름으로 sign tool 설정 필요
+; SignTool=SignTool sign /f "C:\Certs\MyCert.pfx" /p "password" /t http://timestamp.digicert.com /fd sha256 $f
+
 
 [Languages]
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"

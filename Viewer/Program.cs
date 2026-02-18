@@ -14,6 +14,19 @@ namespace Viewer
             // WPF Application 객체를 가장 먼저 생성하여 시스템 DLL 로딩을 보장
             Console.WriteLine("[DEBUG] Creating Application...");
             var app = new Application();
+            
+            try
+            {
+                var uri = new Uri("pack://application:,,,/Viewer;component/Styles.xaml");
+                app.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = uri });
+                Console.WriteLine("[UI] Styles.xaml loaded");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[UI] Failed to load styles: {ex.Message}");
+            }
+            
+
 
             try
             {

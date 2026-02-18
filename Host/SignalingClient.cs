@@ -131,17 +131,20 @@ namespace Host
                     host_id = _hostId,
                     user_id = _userId,
                     host_name = _hostName,
-                    ip = (string?)((dynamic)info).ip ?? "unknown",
-                    resolution = (string?)((dynamic)info).resolution ?? "N/A",
-                    cpu = (int?)((dynamic)info).cpu ?? 0,
-                    ram = (string?)((dynamic)info).ram ?? "N/A",
-                    hdd = (string?)((dynamic)info).hdd ?? "N/A",
-                    uptime = (string?)((dynamic)info).uptime ?? "N/A",
-                    last_seen = DateTime.UtcNow.ToString("o")
+                    // [Fix] DB 스키마 불일치로 인한 Heartbeat 에러 방지 (ip, resolution, cpu 등 제거)
+                    // ip = (string?)((dynamic)info).ip ?? "unknown",
+                    // resolution = (string?)((dynamic)info).resolution ?? "N/A",
+                    // [Fix] DB 스키마에 해당 컬럼이 없어 에러 발생 (임시 비활성화)
+                    // cpu = (int?)((dynamic)info).cpu ?? 0,
+                    // ram = (string?)((dynamic)info).ram ?? "N/A",
+                    // hdd = (string?)((dynamic)info).hdd ?? "N/A",
+                    // uptime = (string?)((dynamic)info).uptime ?? "N/A",
+                    last_seen = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
                 };
 
+                var baseUrl = _supabaseUrl.TrimEnd('/');
                 var request = new HttpRequestMessage(HttpMethod.Post,
-                    $"{_supabaseUrl}/rest/v1/hosts?on_conflict=user_id,host_id");
+                    $"{baseUrl}/rest/v1/hosts?on_conflict=user_id,host_id");
                 request.Headers.Add("apikey", _supabaseKey);
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
                 request.Headers.Add("Prefer", "resolution=merge-duplicates");
@@ -153,6 +156,10 @@ namespace Host
                 {
                     string body = await response.Content.ReadAsStringAsync();
                     Console.WriteLine($"[Heartbeat] Failed: {body}");
+                }
+                else
+                {
+                    // Console.WriteLine("[Heartbeat] Sent successfully"); // 너무 자주 뜨지 않게 주석 처리하거나 필요시 활성화
                 }
             }
             catch (Exception ex)
@@ -230,6 +237,27 @@ namespace Host
                     ? $"{(int)uptime.TotalHours}시간 {uptime.Minutes}분"
                     : $"{uptime.Minutes}분";
 
+            // MAC Address
+            var mac = "";
+            try {
+                foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()) {
+                    if (nic.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up && 
+                        nic.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Loopback) {
+                        mac = nic.GetPhysicalAddress().ToString();
+                        if (!string.IsNullOrEmpty(mac)) {
+                            // Format: XX:XX:XX:XX:XX:XX
+                            var sb = new System.Text.StringBuilder();
+                            for(int i=0; i<mac.Length; i++) {
+                                if (i>0 && i%2==0) sb.Append(":");
+                                sb.Append(mac[i]);
+                            }
+                            mac = sb.ToString();
+                            break;
+                        }
+                    }
+                }
+            } catch {}
+
             return new
             {
                 id = _hostId,
@@ -239,7 +267,8 @@ namespace Host
                 cpu = cpu,
                 ram = ram,
                 hdd = hdd,
-                uptime = uptimeStr
+                uptime = uptimeStr,
+                mac_address = mac
             };
         }
 

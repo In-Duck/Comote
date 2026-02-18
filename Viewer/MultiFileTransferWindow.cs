@@ -33,7 +33,8 @@ namespace Viewer
             Title = "파일 전송";
             Width = 800;
             Height = 600;
-            Background = new SolidColorBrush(Color.FromRgb(240, 240, 240)); // 밝은 테마 (참고 이미지)
+            Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)); // Kymote Dark Theme
+            Foreground = Brushes.White;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
             var mainGrid = new Grid { Margin = new Thickness(10) };
@@ -51,9 +52,9 @@ namespace Viewer
                 VerticalAlignment = VerticalAlignment.Center
             };
             // (이미지 대신 텍스트로 대체)
-            headerPanel.Children.Add(CreateHeaderIcon("Manager PC", Colors.Orange));
-            headerPanel.Children.Add(new TextBlock { Text = " > ", FontSize = 24, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(20,0,20,0) });
-            headerPanel.Children.Add(CreateHeaderIcon("Client PC", Colors.DodgerBlue));
+            headerPanel.Children.Add(CreateHeaderIcon("Manager PC", Color.FromRgb(255, 215, 0))); // Gold
+            headerPanel.Children.Add(new TextBlock { Text = " > ", FontSize = 24, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(20,0,20,0), Foreground = Brushes.Gray });
+            headerPanel.Children.Add(CreateHeaderIcon("Client PC", Color.FromRgb(200, 200, 200))); // Silver/White
             Grid.SetRow(headerPanel, 0);
             mainGrid.Children.Add(headerPanel);
 
@@ -110,7 +111,7 @@ namespace Viewer
             foreach (var h in _targetHosts) targetList.Items.Add($"{h.Name} ({h.Id})");
             targetGroup.Children.Add(targetList);
 
-            var tFooter = new TextBlock { Text = $"{_targetHosts.Count} slot 선택", HorizontalAlignment = HorizontalAlignment.Right, Foreground = Brushes.Blue, Margin = new Thickness(0,5,0,0) };
+            var tFooter = new TextBlock { Text = $"{_targetHosts.Count} slot 선택", HorizontalAlignment = HorizontalAlignment.Right, Foreground = new SolidColorBrush(Color.FromRgb(255, 215, 0)), Margin = new Thickness(0,5,0,0) };
             DockPanel.SetDock(tFooter, Dock.Bottom);
             targetGroup.Children.Add(tFooter);
 
@@ -159,7 +160,7 @@ namespace Viewer
 
             // === 5. 하단 버튼 ===
             var btnPanel = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-            _startBtn = new Button { Content = "전송시작", Width = 80, Margin = new Thickness(5) };
+            _startBtn = new Button { Content = "전송시작", Width = 80, Margin = new Thickness(5), Background = new SolidColorBrush(Color.FromRgb(255, 215, 0)), Foreground = Brushes.Black, FontWeight = FontWeights.Bold, BorderThickness = new Thickness(0) };
             _startBtn.Click += OnStartTransfer;
             _stopBtn = new Button { Content = "전송중단", Width = 80, Margin = new Thickness(5), IsEnabled = false };
             _stopBtn.Click += (s,e) => { /* Cancel Logic */ }; // TODO

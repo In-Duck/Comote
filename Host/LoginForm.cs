@@ -6,17 +6,23 @@ using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
-using System.IO;
+using System.Runtime.InteropServices;
+using System.Drawing.Drawing2D;
 
 namespace Host
 {
     public class LoginForm : Form
     {
+        // Dragging logic
+        [DllImport("user32.dll")] public static extern int SendMessage(IntPtr hWnd, int Msg, int wParam, int lParam);
+        [DllImport("user32.dll")] public static extern bool ReleaseCapture();
+
         private TextBox txtEmail;
         private TextBox txtPassword;
         private Button btnLogin;
         private Label lblStatus;
         private CheckBox chkSave;
+        private Button btnClose; // Custom close button
 
         public string AccessToken { get; private set; }
         public string UserEmail { get; private set; }
@@ -33,24 +39,95 @@ namespace Host
 
         private void InitializeComponent()
         {
-            this.Size = new Size(350, 250);
-            this.Text = "Login - Comote Host";
+            try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+            this.Size = new Size(360, 280);
+            this.Text = "Login - KYMOTE Host";
             this.StartPosition = FormStartPosition.CenterScreen;
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
+            this.FormBorderStyle = FormBorderStyle.None; // Borderless
             this.MaximizeBox = false;
+            this.BackColor = Color.FromArgb(25, 25, 28);
+            this.ForeColor = Color.WhiteSmoke;
+            this.Padding = new Padding(2); // For border
 
-            var lblEmail = new Label { Text = "Email:", Location = new Point(20, 20), AutoSize = true };
-            txtEmail = new TextBox { Location = new Point(100, 20), Width = 200 };
+            // Custom Title Bar Area (Logic mostly)
+            var titleLabel = new Label { 
+                Text = "Login", 
+                Location = new Point(20, 15), 
+                AutoSize = true, 
+                Font = new Font("Segoe UI", 12, FontStyle.Bold),
+                ForeColor = Color.FromArgb(255, 215, 0) // Kymote Gold
+            };
+            this.Controls.Add(titleLabel);
 
-            var lblPass = new Label { Text = "Password:", Location = new Point(20, 60), AutoSize = true };
-            txtPassword = new TextBox { Location = new Point(100, 60), Width = 200, PasswordChar = '*' };
+            // Close Button
+            btnClose = new Button {
+                Text = "✕",
+                Location = new Point(320, 10),
+                Size = new Size(30, 30),
+                FlatStyle = FlatStyle.Flat,
+                ForeColor = Color.Gray,
+                BackColor = Color.Transparent,
+                Cursor = Cursors.Hand
+            };
+            btnClose.FlatAppearance.BorderSize = 0;
+            btnClose.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, 40, 45);
+            btnClose.Click += (s, e) => this.Close();
+            this.Controls.Add(btnClose);
 
-            chkSave = new CheckBox { Text = "Save Login", Location = new Point(100, 90), AutoSize = true };
+            // Dragging
+            this.MouseDown += (s, e) => {
+                if (e.Button == MouseButtons.Left) {
+                    ReleaseCapture();
+                    SendMessage(Handle, 0xA1, 0x2, 0);
+                }
+            };
+            titleLabel.MouseDown += (s, e) => {
+                if (e.Button == MouseButtons.Left) {
+                    ReleaseCapture();
+                    SendMessage(Handle, 0xA1, 0x2, 0);
+                }
+            };
 
-            btnLogin = new Button { Text = "Login", Location = new Point(100, 130), Width = 100, Height = 30 };
+            var lblEmail = new Label { Text = "Email", Location = new Point(30, 60), AutoSize = true, ForeColor = Color.Gray, Font = new Font("Segoe UI", 9) };
+            txtEmail = new TextBox { 
+                Location = new Point(30, 80), 
+                Width = 300, 
+                BorderStyle = BorderStyle.FixedSingle, 
+                BackColor = Color.FromArgb(40, 40, 45), 
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 10)
+            };
+
+            var lblPass = new Label { Text = "Password", Location = new Point(30, 120), AutoSize = true, ForeColor = Color.Gray, Font = new Font("Segoe UI", 9) };
+            txtPassword = new TextBox { 
+                Location = new Point(30, 140), 
+                Width = 300, 
+                PasswordChar = '●', 
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = Color.FromArgb(40, 40, 45), 
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI", 10)
+            };
+
+            chkSave = new CheckBox { Text = "Remember me", Location = new Point(30, 180), AutoSize = true, ForeColor = Color.LightGray, Font = new Font("Segoe UI", 9) };
+
+            btnLogin = new Button { 
+                Text = "Sign In", 
+                Location = new Point(30, 220), 
+                Width = 300, 
+                Height = 36,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(255, 215, 0), // Kymote Gold
+                ForeColor = Color.Black,
+                Cursor = Cursors.Hand,
+                Font = new Font("Segoe UI", 10, FontStyle.Bold)
+            };
+            btnLogin.FlatAppearance.BorderSize = 0;
             btnLogin.Click += async (s, e) => await LoginAsync();
 
-            lblStatus = new Label { Text = "", Location = new Point(20, 170), Width = 300, ForeColor = Color.Red };
+            btnLogin.Click += async (s, e) => await LoginAsync();
+
+            lblStatus = new Label { Text = "", Location = new Point(30, 195), Width = 300, ForeColor = Color.IndianRed, Font = new Font("Segoe UI", 8) };
 
             this.Controls.Add(lblEmail);
             this.Controls.Add(txtEmail);
@@ -156,6 +233,14 @@ namespace Host
                     return null;
                 }
             }
+        }
+
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            // Draw Border
+            ControlPaint.DrawBorder(e.Graphics, this.ClientRectangle, Color.FromArgb(60, 60, 60), ButtonBorderStyle.Solid);
         }
     }
 }
