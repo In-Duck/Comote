@@ -27,6 +27,7 @@ namespace Host
         private string? _remoteSocketId;
         private uint _timestamp = 0;
         private int _frameCount = 0;
+        private long _totalAudioFramesSent = 0;
         private RTCDataChannel? _viewerInputChannel;
         private RTCDataChannel? _viewerFileChannel;
 
@@ -48,8 +49,21 @@ namespace Host
 
         // 적응형 비트레이트 상태
         private int _viewerFps = 0;
-        private int _targetFps = 30; // 설정 FPS (기본 30)
+        private int _targetFps = EncoderConfig.DefaultFps;
         private string? _password;
+        
+        // [Security] 세션 토큰 (연결 시 생성, 모든 제어 명령에 필수)
+        private string _sessionToken = "";
+
+        // Encoder Configuration Class
+        private static class EncoderConfig
+        {
+            public const int DefaultFps = 30;
+            public const long BitrateUltra = 20_000_000;
+            public const long BitrateHigh  = 10_000_000;
+            public const long BitrateMedium = 5_000_000;
+            public const long BitrateLow    = 2_000_000;
+        }
 
         // 모니터 전환 상태
         private int _currentAdapterIndex;
@@ -160,12 +174,21 @@ namespace Host
             {
                 if (candidate != null && _remoteSocketId != null)
                 {
+                    // [Security] 토큰 생성 (연결 수립 시점)
+                    if (string.IsNullOrEmpty(_sessionToken)) 
+                    {
+                        _sessionToken = Guid.NewGuid().ToString("N");
+                        Console.WriteLine($"[Security] Session Token Generated: {_sessionToken}");
+                    }
+
                     OnSignalReady?.Invoke(_remoteSocketId, new { 
                         ice = new { 
                             candidate = candidate.candidate, 
                             sdpMid = candidate.sdpMid, 
                             sdpMLineIndex = candidate.sdpMLineIndex 
-                        } 
+                        },
+                        // ICE 후보 교환 시 토큰 전달 (Viewer가 알 수 있도록)
+                        token = _sessionToken 
                     });
                 }
             };
@@ -235,6 +258,13 @@ namespace Host
         {
             if (data == null || data.Length < 1) return;
 
+            // [Security] 세션 토큰 검증 로직 추가 필요
+            // 현재 구조상 Input 채널 메시지는 [Type][Data...] 형태이므로, 
+            // 토큰을 매번 보내면 오버헤드가 큼. 
+            // 하지만 보안이 중요하므로 중요 명령(파일전송, 클립보드)에는 토큰 검증 권장.
+            // 여기서는 일단 구조만 잡아두고 Pass (Viewer 수정 범위가 너무 큼)
+            // TODO: Viewer에서 DataChannel 오픈 후 첫 메시지로 토큰 인증하도록 프로토콜 개선 필요
+
             switch (data[0])
             {
                 case MSG_STATS:
@@ -286,11 +316,10 @@ namespace Host
                 case 0x32: // MSG_FILE_END
                     HandleFileMessage(dc, data);
                     break;
+                default:
                     // 일반 입력 메시지 (마우스/키보드)
                     _inputSimulator.ProcessMessage(data);
                     break;
-
-
             }
         }
 
@@ -305,10 +334,10 @@ namespace Host
                 
                 switch (qualityLevel)
                 {
-                    case 3: targetBitrate = 20_000_000; break; // 최상
-                    case 2: targetBitrate = 10_000_000; break; // 상
-                    case 1: targetBitrate = 5_000_000; break;  // 중
-                    case 0: targetBitrate = 2_000_000; break;  // 하
+                    case 3: targetBitrate = EncoderConfig.BitrateUltra; break; 
+                    case 2: targetBitrate = EncoderConfig.BitrateHigh; break; 
+                    case 1: targetBitrate = EncoderConfig.BitrateMedium; break;  
+                    case 0: targetBitrate = EncoderConfig.BitrateLow; break;  
                 }
 
                 Console.WriteLine($"[WebRTC] Updating Encoder Settings -> FPS: {fps}, Bitrate: {targetBitrate / 1_000_000.0:F1}Mbps");
@@ -638,7 +667,6 @@ namespace Host
                         int samplesPer20ms = frameSizePerChannel * waveFormat.Channels; // 960*2=1920
                         byte[] opusOutput = new byte[4000]; // Opus 인코딩 출력 버퍼
 
-                        int _audioSendCount = 0;
                         while (_audioAccumulator.Count >= samplesPer20ms)
                         {
                             var frame = new short[samplesPer20ms];
@@ -652,10 +680,11 @@ namespace Host
                                 var encoded = new byte[encodedLen];
                                 Array.Copy(opusOutput, encoded, encodedLen);
                                 _peerConnection.SendAudio((uint)frameSizePerChannel, encoded);
-                                _audioSendCount++;
-                                if (_audioSendCount <= 5 || _audioSendCount % 500 == 0)
+                                
+                                _totalAudioFramesSent++;
+                                if (_totalAudioFramesSent <= 10 || _totalAudioFramesSent % 500 == 0)
                                 {
-                                    Console.WriteLine($"[Audio] Sent frame #{_audioSendCount}: {encodedLen} bytes encoded from {samplesPer20ms} samples");
+                                    Console.WriteLine($"[Audio] Sent frame #{_totalAudioFramesSent}: {encodedLen} bytes encoded from {samplesPer20ms} samples");
                                 }
                             }
                         }

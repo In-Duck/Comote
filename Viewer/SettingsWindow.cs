@@ -7,11 +7,19 @@ namespace Viewer
 {
     /// <summary>
     /// 환경 설정 윈도우 (WPF, 코드 기반 UI).
-    /// 참고 이미지를 기반으로 탭 구조 + 원격제어 옵션 구현.
+    /// 탭 구조(일반/단축키/정보) + 원격제어 옵션 + 라이선스 고지 구현.
     /// </summary>
     public class SettingsWindow : Window
     {
         private readonly AppSettings _settings;
+        
+        // UI Components
+        private Border _generalTab;
+        private Border _shortcutTab;
+        private Border _infoTab;
+        private ScrollViewer _contentPanel;
+
+        // Settings Controls
         private ComboBox _frameRateCombo = null!;
         private ComboBox _qualityCombo = null!;
         private CheckBox _clipboardCheck = null!;
@@ -40,110 +48,35 @@ namespace Viewer
             mainGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
             // === 좌측 탭 메뉴 ===
-            var tabPanel = new StackPanel
-            {
-                Background = new SolidColorBrush(Color.FromRgb(40, 40, 48))
-            };
+            var tabPanel = new StackPanel { Background = new SolidColorBrush(Color.FromRgb(40, 40, 48)) };
 
-            var generalTab = CreateTabItem("일반", true);
-            var shortcutTab = CreateTabItem("단축키", false);
-            var infoTab = CreateTabItem("정보", false);
-            tabPanel.Children.Add(generalTab);
-            tabPanel.Children.Add(shortcutTab);
-            tabPanel.Children.Add(infoTab);
+            _generalTab = CreateTabItem("일반", true);
+            _shortcutTab = CreateTabItem("단축키", false);
+            _infoTab = CreateTabItem("정보", false);
+
+            _generalTab.MouseLeftButtonDown += (s, e) => SwitchTab("General");
+            _shortcutTab.MouseLeftButtonDown += (s, e) => SwitchTab("Shortcut");
+            _infoTab.MouseLeftButtonDown += (s, e) => SwitchTab("Info");
+
+            tabPanel.Children.Add(_generalTab);
+            tabPanel.Children.Add(_shortcutTab);
+            tabPanel.Children.Add(_infoTab);
 
             Grid.SetColumn(tabPanel, 0);
             mainGrid.Children.Add(tabPanel);
 
             // === 우측 콘텐츠 패널 ===
-            var contentPanel = new ScrollViewer
+            _contentPanel = new ScrollViewer
             {
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Margin = new Thickness(16, 12, 16, 60)
             };
-            var contentStack = new StackPanel();
+            
+            // 초기 탭: 일반
+            _contentPanel.Content = CreateGeneralContent();
 
-            // 제목
-            contentStack.Children.Add(new TextBlock
-            {
-                Text = "General",
-                FontSize = 22,
-                FontWeight = FontWeights.Bold,
-                Foreground = new SolidColorBrush(Colors.White),
-                Margin = new Thickness(0, 0, 0, 4)
-            });
-            // 구분선
-            contentStack.Children.Add(new Border
-            {
-                Height = 2,
-                Background = new SolidColorBrush(Color.FromRgb(60, 110, 200)),
-                Margin = new Thickness(0, 0, 0, 16)
-            });
-
-            // 섹션: 원격제어 옵션
-            contentStack.Children.Add(CreateSectionHeader("원격제어 옵션"));
-
-            // 출력프레임수
-            var fpsRow = CreateOptionRow("출력프레임수 :");
-            _frameRateCombo = CreateComboBox(new[] { "최상", "상", "중", "하" }, _settings.FrameRate);
-            fpsRow.Children.Add(_frameRateCombo);
-            contentStack.Children.Add(fpsRow);
-
-            // 출력품질
-            var qualRow = CreateOptionRow("출력품질 :");
-            _qualityCombo = CreateComboBox(new[] { "최상", "상", "중", "하" }, _settings.Quality);
-            qualRow.Children.Add(_qualityCombo);
-            // 품질 힌트
-            qualRow.Children.Add(new TextBlock
-            {
-                Text = "※ 품질이 낮을수록 부드러운 제어 가능",
-                FontSize = 10,
-                Foreground = new SolidColorBrush(Color.FromRgb(200, 160, 60)),
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(8, 0, 0, 0)
-            });
-            contentStack.Children.Add(qualRow);
-
-            // 클립보드 자동 동기화
-            _clipboardCheck = CreateCheckBox("1:1 제어창 오픈시 Text 클립보드 자동 복사", _settings.AutoClipboard);
-            contentStack.Children.Add(_clipboardCheck);
-
-            // 원격제어 창 최상단 유지
-            _alwaysOnTopCheck = CreateCheckBox("원격제어 창 최상단 유지", _settings.AlwaysOnTop);
-            contentStack.Children.Add(_alwaysOnTopCheck);
-
-            // 창 크기 기억
-            _rememberSizeCheck = CreateCheckBox("원격제어 창 크기 및 위치 기억", _settings.RememberWindowSize);
-            contentStack.Children.Add(_rememberSizeCheck);
-
-            // 휠 민감도
-            var wheelRow = CreateOptionRow("1:1 제어창 휠 민감도 :");
-            _wheelCombo = CreateComboBox(new[] { "빠름", "보통", "느림" }, _settings.WheelSensitivity);
-            wheelRow.Children.Add(_wheelCombo);
-            contentStack.Children.Add(wheelRow);
-
-            // 구분선
-            contentStack.Children.Add(new Border
-            {
-                Height = 1,
-                Background = new SolidColorBrush(Color.FromRgb(60, 60, 70)),
-                Margin = new Thickness(0, 12, 0, 12)
-            });
-
-            // 섹션: 시스템 옵션
-            contentStack.Children.Add(CreateSectionHeader("시스템 옵션"));
-
-            // 풀스크린 단축키
-            _fullscreenCheck = CreateCheckBox("풀스크린 단축키 사용 (Ctrl+Shift+F)", _settings.EnableFullscreenShortcut);
-            contentStack.Children.Add(_fullscreenCheck);
-
-            // 절전모드 방지
-            _preventSleepCheck = CreateCheckBox("자동 절전모드 진입 않기", _settings.PreventSleep);
-            contentStack.Children.Add(_preventSleepCheck);
-
-            contentPanel.Content = contentStack;
-            Grid.SetColumn(contentPanel, 1);
-            mainGrid.Children.Add(contentPanel);
+            Grid.SetColumn(_contentPanel, 1);
+            mainGrid.Children.Add(_contentPanel);
 
             // === 하단 버튼 바 ===
             var btnBar = new StackPanel
@@ -191,16 +124,138 @@ namespace Viewer
             Content = mainGrid;
         }
 
+        private void SwitchTab(string tabName)
+        {
+            // Reset Styles
+            _generalTab.Background = Brushes.Transparent;
+            _shortcutTab.Background = Brushes.Transparent;
+            _infoTab.Background = Brushes.Transparent;
+
+            var activeBrush = new SolidColorBrush(Color.FromRgb(60, 110, 200));
+
+            switch (tabName)
+            {
+                case "General":
+                    _generalTab.Background = activeBrush;
+                    _contentPanel.Content = CreateGeneralContent();
+                    break;
+                case "Shortcut":
+                    _shortcutTab.Background = activeBrush;
+                    _contentPanel.Content = CreateShortcutContent();
+                    break;
+                case "Info":
+                    _infoTab.Background = activeBrush;
+                    _contentPanel.Content = CreateInfoContent();
+                    break;
+            }
+        }
+
+        private UIElement CreateGeneralContent()
+        {
+            var contentStack = new StackPanel();
+
+            contentStack.Children.Add(new TextBlock { Text = "General", FontSize = 22, FontWeight = FontWeights.Bold, Foreground = Brushes.White, Margin = new Thickness(0, 0, 0, 4) });
+            contentStack.Children.Add(new Border { Height = 2, Background = new SolidColorBrush(Color.FromRgb(60, 110, 200)), Margin = new Thickness(0, 0, 0, 16) });
+
+            contentStack.Children.Add(CreateSectionHeader("원격제어 옵션"));
+
+            var fpsRow = CreateOptionRow("출력프레임수 :");
+            _frameRateCombo = CreateComboBox(new[] { "최상", "상", "중", "하" }, _settings.FrameRate);
+            fpsRow.Children.Add(_frameRateCombo);
+            contentStack.Children.Add(fpsRow);
+
+            var qualRow = CreateOptionRow("출력품질 :");
+            _qualityCombo = CreateComboBox(new[] { "최상", "상", "중", "하" }, _settings.Quality);
+            qualRow.Children.Add(_qualityCombo);
+            qualRow.Children.Add(new TextBlock { Text = "※ 품질이 낮을수록 부드러운 제어 가능", FontSize = 10, Foreground = new SolidColorBrush(Color.FromRgb(200, 160, 60)), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) });
+            contentStack.Children.Add(qualRow);
+
+            _clipboardCheck = CreateCheckBox("1:1 제어창 오픈시 Text 클립보드 자동 복사", _settings.AutoClipboard);
+            contentStack.Children.Add(_clipboardCheck);
+
+            _alwaysOnTopCheck = CreateCheckBox("원격제어 창 최상단 유지", _settings.AlwaysOnTop);
+            contentStack.Children.Add(_alwaysOnTopCheck);
+
+            _rememberSizeCheck = CreateCheckBox("원격제어 창 크기 및 위치 기억", _settings.RememberWindowSize);
+            contentStack.Children.Add(_rememberSizeCheck);
+
+            var wheelRow = CreateOptionRow("1:1 제어창 휠 민감도 :");
+            _wheelCombo = CreateComboBox(new[] { "빠름", "보통", "느림" }, _settings.WheelSensitivity);
+            wheelRow.Children.Add(_wheelCombo);
+            contentStack.Children.Add(wheelRow);
+
+            contentStack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(60, 60, 70)), Margin = new Thickness(0, 12, 0, 12) });
+
+            contentStack.Children.Add(CreateSectionHeader("시스템 옵션"));
+
+            _fullscreenCheck = CreateCheckBox("풀스크린 단축키 사용 (Ctrl+Shift+F)", _settings.EnableFullscreenShortcut);
+            contentStack.Children.Add(_fullscreenCheck);
+
+            _preventSleepCheck = CreateCheckBox("자동 절전모드 진입 않기", _settings.PreventSleep);
+            contentStack.Children.Add(_preventSleepCheck);
+
+            return contentStack;
+        }
+
+        private UIElement CreateShortcutContent()
+        {
+            var stack = new StackPanel();
+            stack.Children.Add(new TextBlock { Text = "Shortcuts", FontSize = 22, FontWeight = FontWeights.Bold, Foreground = Brushes.White, Margin = new Thickness(0, 0, 0, 4) });
+            stack.Children.Add(new Border { Height = 2, Background = new SolidColorBrush(Color.FromRgb(60, 110, 200)), Margin = new Thickness(0, 0, 0, 16) });
+
+            stack.Children.Add(CreateOptionRow("전체화면 전환 : Ctrl + Shift + F"));
+            stack.Children.Add(CreateOptionRow("마우스 모드 전환 : Ctrl + Alt + M"));
+            
+            return stack;
+        }
+
+        private UIElement CreateInfoContent()
+        {
+            var stack = new StackPanel();
+            stack.Children.Add(new TextBlock { Text = "Information", FontSize = 22, FontWeight = FontWeights.Bold, Foreground = Brushes.White, Margin = new Thickness(0, 0, 0, 4) });
+            stack.Children.Add(new Border { Height = 2, Background = new SolidColorBrush(Color.FromRgb(60, 110, 200)), Margin = new Thickness(0, 0, 0, 16) });
+
+            stack.Children.Add(CreateSectionHeader("Program Info"));
+            stack.Children.Add(new TextBlock { Text = "KYMOTE Viewer v1.0.1", Foreground = Brushes.White, Margin = new Thickness(0,0,0,10) });
+            stack.Children.Add(new TextBlock { Text = "Copyright © 2026 AI Enterprise Alpha. All rights reserved.", Foreground = Brushes.Gray, FontSize = 11, Margin = new Thickness(0,0,0,20) });
+
+            stack.Children.Add(CreateSectionHeader("Open Source Licenses"));
+            
+            var licenseText = 
+@"FFmpeg (LGPL v2.1+)
+This software uses code of FFmpeg licensed under the LGPLv2.1 and its source can be downloaded at ffmpeg.org.
+
+NAudio (MIT License)
+SIPSorcery (BSD License)
+Concentus (ISC License)
+Newtonsoft.Json (MIT License)";
+
+            stack.Children.Add(new TextBox 
+            { 
+                Text = licenseText, 
+                Background = new SolidColorBrush(Color.FromRgb(40,40,45)),
+                Foreground = Brushes.LightGray,
+                BorderThickness = new Thickness(0),
+                IsReadOnly = true,
+                TextWrapping = TextWrapping.Wrap,
+                Padding = new Thickness(10),
+                Height = 200,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+            });
+
+            return stack;
+        }
+
         private void OnApplyClick(object sender, RoutedEventArgs e)
         {
-            _settings.FrameRate = _frameRateCombo.SelectedItem?.ToString() ?? "상";
-            _settings.Quality = _qualityCombo.SelectedItem?.ToString() ?? "상";
-            _settings.AutoClipboard = _clipboardCheck.IsChecked == true;
-            _settings.AlwaysOnTop = _alwaysOnTopCheck.IsChecked == true;
-            _settings.RememberWindowSize = _rememberSizeCheck.IsChecked == true;
-            _settings.WheelSensitivity = _wheelCombo.SelectedItem?.ToString() ?? "보통";
-            _settings.EnableFullscreenShortcut = _fullscreenCheck.IsChecked == true;
-            _settings.PreventSleep = _preventSleepCheck.IsChecked == true;
+            if (_frameRateCombo != null) _settings.FrameRate = _frameRateCombo.SelectedItem?.ToString() ?? "상";
+            if (_qualityCombo != null) _settings.Quality = _qualityCombo.SelectedItem?.ToString() ?? "상";
+            if (_clipboardCheck != null) _settings.AutoClipboard = _clipboardCheck.IsChecked == true;
+            if (_alwaysOnTopCheck != null) _settings.AlwaysOnTop = _alwaysOnTopCheck.IsChecked == true;
+            if (_rememberSizeCheck != null) _settings.RememberWindowSize = _rememberSizeCheck.IsChecked == true;
+            if (_wheelCombo != null) _settings.WheelSensitivity = _wheelCombo.SelectedItem?.ToString() ?? "보통";
+            if (_fullscreenCheck != null) _settings.EnableFullscreenShortcut = _fullscreenCheck.IsChecked == true;
+            if (_preventSleepCheck != null) _settings.PreventSleep = _preventSleepCheck.IsChecked == true;
 
             _settings.Save();
             SettingsChanged = true;

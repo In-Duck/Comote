@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Newtonsoft.Json;
 using System.Runtime.InteropServices;
 using System.Drawing.Drawing2D;
+using System.Security.Cryptography;
 
 namespace Host
 {
@@ -125,8 +126,6 @@ namespace Host
             btnLogin.FlatAppearance.BorderSize = 0;
             btnLogin.Click += async (s, e) => await LoginAsync();
 
-            btnLogin.Click += async (s, e) => await LoginAsync();
-
             lblStatus = new Label { Text = "", Location = new Point(30, 195), Width = 300, ForeColor = Color.IndianRed, Font = new Font("Segoe UI", 8) };
 
             this.Controls.Add(lblEmail);
@@ -140,19 +139,31 @@ namespace Host
             this.AcceptButton = btnLogin;
         }
 
-        private async void LoadSavedCredentials()
+        private void LoadSavedCredentials()
         {
-            if (File.Exists("login.dat"))
+            if (!File.Exists("login.dat")) return;
+            try
             {
-                try {
-                    var lines = File.ReadAllLines("login.dat");
-                    if (lines.Length >= 2)
-                    {
-                        txtEmail.Text = lines[0];
-                        txtPassword.Text = lines[1]; // Plaintext for now (PoC)
-                        chkSave.Checked = true;
-                    }
-                } catch { }
+                var lines = File.ReadAllLines("login.dat");
+                // [Security Fix] Check version header
+                if (lines.Length >= 3 && lines[0] == "KYMOTE_SEC_V1")
+                {
+                    byte[] encEmail = Convert.FromBase64String(lines[1]);
+                    byte[] encPass  = Convert.FromBase64String(lines[2]);
+                    txtEmail.Text    = Encoding.UTF8.GetString(ProtectedData.Unprotect(encEmail, null, DataProtectionScope.CurrentUser));
+                    txtPassword.Text = Encoding.UTF8.GetString(ProtectedData.Unprotect(encPass,  null, DataProtectionScope.CurrentUser));
+                    chkSave.Checked  = true;
+                }
+                else
+                {
+                    // Version mismatch or legacy file -> Delete
+                    try { File.Delete("login.dat"); } catch { }
+                }
+            }
+            catch
+            {
+                // Decryption failed -> Delete
+                try { File.Delete("login.dat"); } catch { }
             }
         }
 
@@ -176,7 +187,10 @@ namespace Host
                     
                     if (chkSave.Checked)
                     {
-                        File.WriteAllLines("login.dat", new[] { email, password });
+                        byte[] encEmail = ProtectedData.Protect(Encoding.UTF8.GetBytes(email),    null, DataProtectionScope.CurrentUser);
+                        byte[] encPass  = ProtectedData.Protect(Encoding.UTF8.GetBytes(password), null, DataProtectionScope.CurrentUser);
+                        // [Security Fix] Add version header
+                        File.WriteAllLines("login.dat", new[] { "KYMOTE_SEC_V1", Convert.ToBase64String(encEmail), Convert.ToBase64String(encPass) });
                     }
                     else
                     {

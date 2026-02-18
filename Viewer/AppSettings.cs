@@ -42,6 +42,9 @@ namespace Viewer
         /// <summary>저장된 창 높이</summary>
         public double WindowHeight { get; set; } = 800;
 
+        /// <summary>호스트 목록 순서 (HostId 리스트)</summary>
+        public System.Collections.Generic.List<string> HostOrder { get; set; } = new System.Collections.Generic.List<string>();
+
         // === 시그널링 설정 (Pusher) ===
         public string PusherAppId { get; set; } = "2114862";
         public string PusherAppKey { get; set; } = "50ef3c55ccd8c468f604";

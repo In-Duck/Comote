@@ -43,7 +43,8 @@ namespace Host
             var handle = GetStdHandle(-10);
             if (GetConsoleMode(handle, out uint mode))
             {
-                mode &= ~0x0040u;
+                // Enable Quick Edit Mode (0x0040) and Extended Flags (0x0080)
+                mode |= 0x0040u;
                 mode |= 0x0080u;
                 SetConsoleMode(handle, mode);
             }
@@ -59,24 +60,45 @@ namespace Host
             {
                 Console.WriteLine("[Service] Running in headless mode. Attempting auto-login...");
                 // Load credentials from file
+                bool loginSuccess = false;
+
                 if (File.Exists("login.dat"))
                 {
-                    var lines = File.ReadAllLines("login.dat");
-                    if (lines.Length >= 2)
+                    try
                     {
-                         // Simple auto-login logic (re-using LoginForm logic or duplicating it)
-                         // For simplicity, let's instantiate LoginForm but not show it? 
-                         // No, better to extract login logic. But for now, let's just do a quick manual request here or use a helper.
-                         // Or just use LoginForm hidden? No, WinForms specific.
-                         // Let's implement a simple non-GUI login helper here or inside Program.
-                         var loginResult = await AttemptAutoLogin(appSettings, lines[0], lines[1]);
-                         accessToken = loginResult.token;
-                         userId = loginResult.userId;
-                         userEmail = lines[0];
+                        var lines = File.ReadAllLines("login.dat");
+                        // [Security Fix] Check version header
+                        if (lines.Length >= 3 && lines[0] == "KYMOTE_SEC_V1") 
+                        {
+                            string decEmail = System.Text.Encoding.UTF8.GetString(System.Security.Cryptography.ProtectedData.Unprotect(Convert.FromBase64String(lines[1]), null, System.Security.Cryptography.DataProtectionScope.CurrentUser));
+                            string decPassword = System.Text.Encoding.UTF8.GetString(System.Security.Cryptography.ProtectedData.Unprotect(Convert.FromBase64String(lines[2]), null, System.Security.Cryptography.DataProtectionScope.CurrentUser));
+
+                            if (!string.IsNullOrEmpty(decEmail))
+                            {
+                                var loginResult = await AttemptAutoLogin(appSettings, decEmail, decPassword);
+                                if (!string.IsNullOrEmpty(loginResult.token))
+                                {
+                                    accessToken = loginResult.token;
+                                    userId = loginResult.userId;
+                                    userEmail = decEmail;
+                                    loginSuccess = true;
+                                }
+                            }
+                        }
+                        else
+                        {
+                            Console.WriteLine("[Service] login.dat version mismatch or corrupt. Deleting outdated file.");
+                            File.Delete("login.dat");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Service] login.dat Load Error: {ex.Message}");
+                        try { File.Delete("login.dat"); } catch { }
                     }
                 }
                 
-                if (string.IsNullOrEmpty(accessToken))
+                if (!loginSuccess)
                 {
                     Console.WriteLine("[Service] Auto-login failed. Please run with GUI once to save credentials.");
                     return;
@@ -153,14 +175,14 @@ namespace Host
                 System.Security.Cryptography.MD5.HashData(
                     System.Text.Encoding.UTF8.GetBytes(Environment.MachineName)))
                 .Replace("-", "").Substring(0, 8).ToLower();
-            string hostId = "host_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+            string hostId = "host_" + machineHash; // Use stable machine hash instead of random GUID
             if (!string.IsNullOrEmpty(appSettings.HostId))
             {
                 hostId = appSettings.HostId;
             }
             else
             {
-                // Save generated HostId
+                // Try to save, but if it fails, we still use the stable machineHash
                 appSettings.HostId = hostId;
                 appSettings.Save();
             }

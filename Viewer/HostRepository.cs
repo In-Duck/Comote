@@ -59,6 +59,7 @@ namespace Viewer
             _baseUrl = url;
             _key = key;
             _client = new HttpClient();
+            _client.Timeout = TimeSpan.FromSeconds(10); // [Stability] Prevent infinite hanging
         }
 
         /// <summary>
@@ -141,6 +142,28 @@ namespace Viewer
             catch (Exception ex)
             {
                 Console.WriteLine($"[HostRepository] UpsertHost Error: {ex.Message}");
+            }
+        }
+        public async Task DeleteHostAsync(string hostId)
+        {
+            try
+            {
+                // user_id와 host_id가 모두 일치하는 항목 삭제 (보안 강화)
+                var url = $"{_baseUrl}/rest/v1/hosts?host_id=eq.{Uri.EscapeDataString(hostId)}&user_id=eq.{Uri.EscapeDataString(_userId)}";
+                var request = new HttpRequestMessage(HttpMethod.Delete, url);
+                SetHeaders(request);
+
+                var response = await _client.SendAsync(request);
+                
+                if (!response.IsSuccessStatusCode)
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine($"[HostRepository] Delete Failed: {error}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[HostRepository] DeleteHost Error: {ex.Message}");
             }
         }
     }

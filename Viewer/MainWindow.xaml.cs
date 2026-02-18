@@ -292,13 +292,43 @@ namespace Viewer
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "해상도", Binding = new Binding("Resolution"), Width = 100 });
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "가동시간", Binding = new Binding("Uptime"), Width = 100 });
             _hostDataGrid.MouseDoubleClick += HostDataGrid_DoubleClick;
-            
+
+            // 우클릭 시 해당 행 선택 + 빈 영역 메뉴 차단
+            _hostDataGrid.PreviewMouseRightButtonDown += (s, e) =>
+            {
+                var row = FindVisualParent<DataGridRow>(e.OriginalSource as DependencyObject);
+                if (row != null)
+                {
+                    _hostDataGrid.SelectedItem = row.Item;
+                }
+                else
+                {
+                    e.Handled = true; // 빈 영역이면 컨텍스트 메뉴 열지 않음
+                }
+            };
+
             // 컨텍스트 메뉴
             var contextMenu = new ContextMenu();
             
             var sendFileMenuItem = new MenuItem { Header = "멀티 파일 전송" };
             sendFileMenuItem.Click += OnMultiFileTransferClick;
             contextMenu.Items.Add(sendFileMenuItem);
+
+            contextMenu.Items.Add(new Separator());
+
+            var moveUpItem = new MenuItem { Header = "▲ 위로 이동" };
+            moveUpItem.Click += (s, e) => MoveHost(-1);
+            contextMenu.Items.Add(moveUpItem);
+
+            var moveDownItem = new MenuItem { Header = "▼ 아래로 이동" };
+            moveDownItem.Click += (s, e) => MoveHost(1);
+            contextMenu.Items.Add(moveDownItem);
+
+            contextMenu.Items.Add(new Separator());
+
+            var deleteItem = new MenuItem { Header = "❌ 목록에서 삭제" };
+            deleteItem.Click += OnDeleteHostClick;
+            contextMenu.Items.Add(deleteItem);
 
             var wolMenuItem = new MenuItem { Header = "Wake Up (WoL)" };
             wolMenuItem.Click += (s, e) => {
@@ -504,6 +534,8 @@ namespace Viewer
             topBar.Children.Add(backBtn);
 
             grid.Children.Add(topBar);
+            // WindowChrome 캡션 영역에서도 버튼 클릭 가능하도록 설정
+            WindowChrome.SetIsHitTestVisibleInChrome(topBar, true);
 
             // 비밀번호 패널
             BuildPasswordPanel(grid);
@@ -687,7 +719,33 @@ namespace Viewer
         // ==========================================================
         private void UpdateLobbyUI(List<HostInfo> hosts)
         {
-            _currentHosts = hosts;
+            // [Fix] 중복 호스트 제거 (HostName 기준 최신 항목만 유지 - 서로 다른 HostId를 가진 동일 PC 숨김)
+            //_currentHosts = hosts;
+            var uniqueHosts = hosts
+                .GroupBy(h => h.Name) // HostName 기준으로 그룹화
+                .Select(g => g.OrderByDescending(h => h.IsOnline).ThenByDescending(h => h.LastSeen).First()) // 가장 최신/온라인 상태인 것 선택
+                .OrderByDescending(h => h.IsOnline) // 전체 목록 정렬: 온라인 우선
+                .ThenByDescending(h => h.LastSeen)  // 그 다음 최근 본 순서
+                .ToList();
+
+            // [New] 사용자 지정 순서 정렬
+            if (_settings.HostOrder != null && _settings.HostOrder.Count > 0)
+            {
+                // 사용자 지정 순서가 있는 항목과 없는 항목 분리
+                var orderedHosts = uniqueHosts.Where(h => _settings.HostOrder.Contains(h.Id))
+                                              .OrderBy(h => _settings.HostOrder.IndexOf(h.Id))
+                                              .ToList();
+                var otherHosts = uniqueHosts.Where(h => !_settings.HostOrder.Contains(h.Id))
+                                            .ToList();
+                
+                // 합치기 (사용자 지정 순서 우선)
+                _currentHosts = orderedHosts.Concat(otherHosts).ToList();
+            }
+            else
+            {
+                _currentHosts = uniqueHosts;
+            }
+
             int onlineCount = 0;
 
             // DataGrid 바인딩용 래퍼 리스트
@@ -1043,7 +1101,69 @@ namespace Viewer
 
             var win = new MultiFileTransferWindow(selectedHosts);
             win.Owner = this;
+            win.Owner = this;
             win.ShowDialog();
+        }
+
+        private async void OnDeleteHostClick(object sender, RoutedEventArgs e)
+        {
+            HostInfo? target = null;
+            if (_hostDataGrid.SelectedItem is HostDisplayItem item)
+            {
+                target = _currentHosts.Find(h => h.Id == item.HostId);
+            }
+            
+            if (target == null) return;
+
+            if (MessageBox.Show($"정말 '{target.Name}' 호스트를 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.", "호스트 삭제", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes)
+            {
+                // 1. DB 삭제
+                if (_hostRepo != null) await _hostRepo.DeleteHostAsync(target.Id);
+
+                // 2. 로컬 목록에서 즉시 제거
+                _persistentHosts.Remove(target.Id);
+                
+                // 3. 설정(순서)에서도 제거
+                if (_settings.HostOrder.Contains(target.Id))
+                {
+                    _settings.HostOrder.Remove(target.Id);
+                    _settings.Save();
+                }
+
+                // 4. UI 갱신
+                UpdateLobbyUI(_persistentHosts.Values.ToList());
+            }
+        }
+
+        private void MoveHost(int direction)
+        {
+            if (_hostDataGrid.SelectedItem is HostDisplayItem item)
+            {
+                var hostId = item.HostId;
+                // 현재 순서 리스트 확보
+                if (_settings.HostOrder == null) _settings.HostOrder = new List<string>();
+                
+                // 만약 설정에 없는 호스트라면, 현재 화면 순서대로 채워넣음
+                if (!_settings.HostOrder.Contains(hostId) || _settings.HostOrder.Count != _currentHosts.Count)
+                {
+                    _settings.HostOrder = _currentHosts.Select(h => h.Id).ToList();
+                }
+
+                int idx = _settings.HostOrder.IndexOf(hostId);
+                if (idx == -1) return;
+
+                int newIdx = idx + direction;
+                if (newIdx >= 0 && newIdx < _settings.HostOrder.Count)
+                {
+                    // Swap
+                    string temp = _settings.HostOrder[newIdx];
+                    _settings.HostOrder[newIdx] = hostId;
+                    _settings.HostOrder[idx] = temp;
+                    
+                    _settings.Save();
+                    UpdateLobbyUI(_persistentHosts.Values.ToList());
+                }
+            }
         }
 
         /// <summary>
@@ -1306,7 +1426,10 @@ namespace Viewer
 
                     foreach (var h in hosts)
                     {
-                        bool isOnline = (now - h.LastSeen).TotalSeconds < 60;
+                        // [Fix] UTC 기준 비교 강화 (Local Time 혼동 방지)
+                        // DB의 LastSeen은 UTC지만 DateTimeKind가 Unspecified일 수 있음 -> UTC로 강제
+                        var lastSeenUtc = DateTime.SpecifyKind(h.LastSeen, DateTimeKind.Utc);
+                        bool isOnline = (now - lastSeenUtc).TotalSeconds < 60;
 
                         if (_persistentHosts.ContainsKey(h.HostId))
                         {
@@ -1542,6 +1665,16 @@ namespace Viewer
             }
 
             _isReconnecting = false;
+        }
+
+        private static T? FindVisualParent<T>(DependencyObject? obj) where T : DependencyObject
+        {
+            while (obj != null)
+            {
+                if (obj is T t) return t;
+                obj = System.Windows.Media.VisualTreeHelper.GetParent(obj);
+            }
+            return null;
         }
     }
 

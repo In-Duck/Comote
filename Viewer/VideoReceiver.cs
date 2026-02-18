@@ -93,14 +93,49 @@ namespace Viewer
             Console.WriteLine("[Audio] Opus decoder initialized: 48000Hz, 2ch");
 
             // 오디오 재생기 초기화 (Opus 48kHz, 스테레오)
+            // 오디오 재생기 초기화 (Opus 48kHz, 스테레오)
             _waveProvider = new BufferedWaveProvider(new WaveFormat(48000, 16, 2))
             {
-                BufferDuration = TimeSpan.FromMilliseconds(500),
+                BufferDuration = TimeSpan.FromSeconds(3), // 버퍼 여유 확보 (3초)
                 DiscardOnBufferOverflow = true
             };
-            _waveOut = new WaveOutEvent();
-            _waveOut.Init(_waveProvider);
-            _waveOut.Play();
+            
+            // [Stability] Smart Buffering Logic (Drift Correction)
+            // _waveProvider의 버퍼가 너무 쌓이면(지연 발생) 일부를 버려서 최신 상태 유지
+            Task.Run(async () => 
+            {
+                // [Stability] Smart Buffering Logic
+                while (_peerConnection != null && _peerConnection.connectionState == RTCPeerConnectionState.connected)
+                {
+                    if (_waveProvider != null && _waveProvider.BufferedDuration.TotalMilliseconds > 1000)
+                    {
+                        // 1초 이상 지연 시 0.5초 분량 삭제 (Catch-up)
+                        _waveProvider.ClearBuffer(); 
+                        Console.WriteLine("[Audio] Buffer too large (>1000ms). Cleared to catch up.");
+                    }
+                    await Task.Delay(1000);
+                }
+            });
+
+            // [Fix] WaveOutEvent 대신 WasapiOut 사용 (지연 시간/안정성 개선)
+            // 지연 시간 50ms, Shared 모드
+            try 
+            {
+                var wasapiOut = new NAudio.Wave.WasapiOut(
+                    NAudio.CoreAudioApi.AudioClientShareMode.Shared, 50);
+                wasapiOut.Init(_waveProvider);
+                wasapiOut.Play();
+                _waveOut = wasapiOut;
+                Console.WriteLine("[Audio] Initialized WasapiOut (50ms latency)");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Audio] WasapiOut failed ({ex.Message}), falling back to WaveOutEvent");
+                var waveOut = new WaveOutEvent { DesiredLatency = 100 }; // 100ms
+                waveOut.Init(_waveProvider);
+                waveOut.Play();
+                _waveOut = waveOut;
+            }
 
             // H.264 수신 전용 트랙 추가
             // 비디오 수신 트랙 추가 (H.264, H.265, AV1)
@@ -201,6 +236,9 @@ namespace Viewer
                             int totalSamples = decodedSamples * 2; // 스테레오
                             byte[] byteData = new byte[totalSamples * 2]; // 16bit = 2bytes per sample
                             Buffer.BlockCopy(pcmOutput, 0, byteData, 0, byteData.Length);
+                            
+                            // [Stability] Jitter Buffer 처리 (너무 적으면 무시? 아니면 Silence 삽입?)
+                            // 여기서는 단순 추가하지만, 위쪽 Task에서 과다 버퍼링 제어
                             _waveProvider.AddSamples(byteData, 0, byteData.Length);
                         }
                     }

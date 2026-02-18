@@ -131,14 +131,13 @@ namespace Host
                     host_id = _hostId,
                     user_id = _userId,
                     host_name = _hostName,
-                    // [Fix] DB 스키마 불일치로 인한 Heartbeat 에러 방지 (ip, resolution, cpu 등 제거)
-                    // ip = (string?)((dynamic)info).ip ?? "unknown",
-                    // resolution = (string?)((dynamic)info).resolution ?? "N/A",
-                    // [Fix] DB 스키마에 해당 컬럼이 없어 에러 발생 (임시 비활성화)
-                    // cpu = (int?)((dynamic)info).cpu ?? 0,
-                    // ram = (string?)((dynamic)info).ram ?? "N/A",
-                    // hdd = (string?)((dynamic)info).hdd ?? "N/A",
-                    // uptime = (string?)((dynamic)info).uptime ?? "N/A",
+                    // [Fix] Uncommented system info fields
+                    ip = (string?)((dynamic)info).ip ?? "unknown",
+                    resolution = (string?)((dynamic)info).resolution ?? "N/A",
+                    cpu = (int?)((dynamic)info).cpu ?? 0,
+                    ram = (string?)((dynamic)info).ram ?? "N/A",
+                    hdd = (string?)((dynamic)info).hdd ?? "N/A",
+                    uptime = (string?)((dynamic)info).uptime ?? "N/A",
                     last_seen = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
                 };
 

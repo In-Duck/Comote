@@ -118,7 +118,7 @@ export default async function Index() {
                 <div className="text-4xl mb-6">🖥️</div>
                 <h3 className="text-2xl font-bold mb-2">KYMOTE Host</h3>
                 <p className="text-gray-400 mb-8">제어할 컴퓨터에 설치하세요.</p>
-                <a href="https://github.com/In-Duck/Comote/releases/download/v0.1.0/Host.zip" className="btn-primary w-full max-w-xs text-center">
+                <a href="https://github.com/In-Duck/Comote/releases/download/v0.1.1/Host.zip" className="btn-primary w-full max-w-xs text-center">
                   Windows용 다운로드 (Host)
                 </a>
               </div>
@@ -126,13 +126,13 @@ export default async function Index() {
                 <div className="text-4xl mb-6">📱</div>
                 <h3 className="text-2xl font-bold mb-2">KYMOTE Viewer</h3>
                 <p className="text-gray-400 mb-8">제어하는 기기(내 PC)에 설치하세요.</p>
-                <a href="https://github.com/In-Duck/Comote/releases/download/v0.1.0/Viewer.zip" className="btn-secondary w-full max-w-xs text-center">
+                <a href="https://github.com/In-Duck/Comote/releases/download/v0.1.1/Viewer.zip" className="btn-secondary w-full max-w-xs text-center">
                   Windows용 다운로드 (Viewer)
                 </a>
               </div>
             </div>
             <p className="mt-8 text-gray-500 text-sm">
-              현재 버전: v0.1.0-alpha (개발 중)
+              현재 버전: v0.1.1-beta (안정화 버전)
             </p>
           </div>
         </section>

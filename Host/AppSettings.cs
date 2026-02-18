@@ -27,9 +27,11 @@ namespace Host
 
         public static AppSettings Load()
         {
+            AppSettings? settings = null;
+
+            // 1. 임베디드 리소스 우선 로드 (단일 파일 배포용 - API Key 등 기본값)
             try
             {
-                // 1. 임베디드 리소스 우선 로드 (단일 파일 배포용)
                 var assembly = System.Reflection.Assembly.GetExecutingAssembly();
                 using (var stream = assembly.GetManifestResourceStream("Host.appsettings.json"))
                 {
@@ -37,34 +39,34 @@ namespace Host
                     {
                         using (var reader = new StreamReader(stream))
                         {
-                            string json = reader.ReadToEnd();
-                            return JsonConvert.DeserializeObject<AppSettings>(json) ?? new AppSettings();
+                            settings = JsonConvert.DeserializeObject<AppSettings>(reader.ReadToEnd());
                         }
                     }
                 }
             }
-            catch
-            {
-                // 리소스 로드 실패 시 무시하고 파일 시도
-            }
+            catch { }
 
-            // 2. 파일 시스템 로드 (개발 환경용)
+            // 2. 파일 시스템에서 런타임 값(HostId 등) 병합
+            // 임베디드 리소스에 HostId가 없으므로 파일에서 반드시 읽어야 함
             string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "appsettings.json");
-            if (!File.Exists(path))
+            if (File.Exists(path))
             {
-                // 기본값 또는 빈 설정 반환
-                return new AppSettings();
+                try
+                {
+                    var fileSettings = JsonConvert.DeserializeObject<AppSettings>(File.ReadAllText(path));
+                    if (fileSettings != null)
+                    {
+                        if (settings == null)
+                            return fileSettings;
+                        // 파일의 HostId를 임베디드 설정에 병합
+                        if (!string.IsNullOrEmpty(fileSettings.HostId))
+                            settings.HostId = fileSettings.HostId;
+                    }
+                }
+                catch { }
             }
 
-            try
-            {
-                string json = File.ReadAllText(path);
-                return JsonConvert.DeserializeObject<AppSettings>(json) ?? new AppSettings();
-            }
-            catch
-            {
-                return new AppSettings();
-            }
+            return settings ?? new AppSettings();
         }
 
         public void Save()
