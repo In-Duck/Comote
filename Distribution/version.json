@@ -1,8 +1,8 @@
 {
-    "version": "1.0.1",
-    "host_setup_url": "https://github.com/In-Duck/Comote/raw/main/Distribution/Host/ComoteHost_Setup.exe",
-    "viewer_setup_url": "https://github.com/In-Duck/Comote/raw/main/Distribution/Viewer/ComoteViewer_Setup.exe",
-    "host_hash": "B886F93ED811355B97F1F33816E97A420367D6D9DC2BEC9791A3EFD74CA7CD55",
-    "viewer_hash": "CD9DAF1716675007992F37CDBA9536A9F71074478C7742249024F8D898F1D62D",
-    "release_notes": "- [New] 뷰어: 이전/다음 호스트 전환 버튼 추가\n- [Security] 업데이트 파일 해시 검증 추가\n- [Fix] 파일 전송 안정성 개선"
+    "version": "1.1.0",
+    "host_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.1.0/ComoteHost_Setup.exe",
+    "viewer_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.1.0/ComoteViewer_Setup.exe",
+    "host_hash": "DF7153ABFD2F2CE4E6F3ED62E3F5E911CB7BE1BA707E6FAF34B38048959AA7E5",
+    "viewer_hash": "D82443F4F8A2258167E3F9B69AAAB2B09CFD50CA6BA7002E8FF1AF34D65B7E07",
+    "release_notes": "- [Security] 업데이트 파일 해시 검증 및 보안 강화\n- [Stability] 오디오 버퍼링 및 API 타임아웃 개선\n- [Fix] 호스트 목록 중복 문제 해결"
 }
