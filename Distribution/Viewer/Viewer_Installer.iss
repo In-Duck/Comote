@@ -41,7 +41,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 ; IMPORTANT: Adjust the path to where your published single-file EXE resides
-Source: "..\..\publish\Viewer-single-v1.2.1\Viewer.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\publish\Viewer-single-v1.2.2\Viewer.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]

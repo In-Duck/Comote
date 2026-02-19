@@ -23,7 +23,7 @@ namespace Viewer
             }
             catch { }
 
-            Console.WriteLine("[DEBUG] Main() started");
+            Console.WriteLine("KYMOTE Viewer v1.2.2 starting...");
             
             // WPF Application 객체를 가장 먼저 생성하여 시스템 DLL 로딩을 보장
             Console.WriteLine("[DEBUG] Creating Application...");

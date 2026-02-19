@@ -138,7 +138,7 @@ namespace Host
 
             Console.WriteLine($"[Auth] 로그인 성공: {userEmail}");
 
-            Console.WriteLine("KYMOTE 호스트 시작 중...");
+            Console.WriteLine("KYMOTE Host Service v1.2.2 starting...");
 
             string? hostName = null;
             string? password = null;

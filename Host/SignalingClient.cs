@@ -131,7 +131,7 @@ namespace Host
                     host_id = _hostId,
                     user_id = _userId,
                     host_name = _hostName,
-                    resolution = (string?)((dynamic)info).resolution ?? "N/A",
+                    // resolution = (string?)((dynamic)info).resolution ?? "N/A",
                     // cpu = (int?)((dynamic)info).cpu ?? 0,
                     // ram = (string?)((dynamic)info).ram ?? "N/A",
                     // hdd = (string?)((dynamic)info).hdd ?? "N/A",
@@ -156,7 +156,7 @@ namespace Host
                 }
                 else
                 {
-                    // Console.WriteLine("[Heartbeat] Sent successfully"); // 너무 자주 뜨지 않게 주석 처리하거나 필요시 활성화
+                    Console.WriteLine("[Heartbeat] Sent successfully");
                 }
             }
             catch (Exception ex)

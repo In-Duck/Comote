@@ -1,8 +1,8 @@
 {
-    "version": "1.2.1",
-    "host_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.2.1/ComoteHost_Setup.exe",
-    "viewer_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.2.1/ComoteViewer_Setup.exe",
-    "host_hash": "29234397308BC0A03F536F60DDC564A04F2CE25ACF81EE76809F1B27589E32B2",
-    "viewer_hash": "762B053557632D3FEC9DAC681F6C89A3608684F554765D3F6C15F1E47A3B30B6",
-    "release_notes": "- [Fix] Supabase 스키마 불일치로 인한 Heartbeat 전송 실패 수정\n- [Fix] 단일 파일 배포 시 네이티브 라이브러리 누락(DllNotFoundException) 수정\n- [Fix] 메인 화면 로그인 버튼 누락 복구"
+    "version": "1.2.2",
+    "host_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.2.2/ComoteHost_Setup.exe",
+    "viewer_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.2.2/ComoteViewer_Setup.exe",
+    "host_hash": "5F803B062C83DE69DD93582163F19B4712DC498681C03CEF3394AB79953166BF",
+    "viewer_hash": "D16E64677DB58F3E0126F85C42CE45F2C466DFB1CD5DF723F14E4D6CF50AFC3D",
+    "release_notes": "- [Critical] Heartbeat ‘resolution’ 컬럼 스키마 불일치긴급 수정 (v1.2.2)\n- [Web] KYMOTE 도메인 정식 적용"
 }

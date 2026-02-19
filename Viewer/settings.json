@@ -5,5 +5,5 @@
     "PusherCluster": "ap3",
     "SupabaseUrl": "https://nlodelehewbbniayzjuv.supabase.co",
     "SupabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5sb2RlbGVoZXdiYm5pYXl6anV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExMzc1MjksImV4cCI6MjA4NjcxMzUyOX0.-r_qNDErJPWLma1i3wjXZmvzXAZUGtHHK-L3YMcZYb4",
-    "WebAuthUrl": "https://comote.vercel.app/api/pusher/auth"
+    "WebAuthUrl": "https://kymote.vercel.app/api/pusher/auth"
 }

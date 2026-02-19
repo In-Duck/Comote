@@ -18,8 +18,10 @@ Distribution/**
 !Distribution/**/*.bat
 !Distribution/GUIDE.md
 
-# Explicitly ignore all EXEs everywhere to prevent large file errors
+# Explicitly ignore all EXEs and ZIPs to prevent large file errors
 **/*.exe
+**/*.zip
+web/public/downloads/
 publish/
 bin/
 obj/

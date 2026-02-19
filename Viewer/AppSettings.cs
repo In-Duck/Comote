@@ -54,7 +54,7 @@ namespace Viewer
         // Supabase Settings
         public string SupabaseUrl { get; set; } = "https://nlodelehewbbniayzjuv.supabase.co";
         public string SupabaseAnonKey { get; set; } = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5sb2RlbGVoZXdiYm5pYXl6anV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExMzc1MjksImV4cCI6MjA4NjcxMzUyOX0.-r_qNDErJPWLma1i3wjXZmvzXAZUGtHHK-L3YMcZYb4";
-        public string WebAuthUrl { get; set; } = "https://comote.vercel.app/api/pusher/auth";
+        public string WebAuthUrl { get; set; } = "https://kymote.vercel.app/api/pusher/auth";
 
         // === 파일 경로 ===
         private static readonly string SettingsFilePath =
