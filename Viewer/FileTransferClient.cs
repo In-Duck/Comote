@@ -227,7 +227,7 @@ namespace Viewer
 
             // 3. END
             _dc.send(new byte[] { MSG_FILE_END });
-            OnStatus?.Invoke($"Sent {fileName}, waiting for ACK...");
+            OnStatus?.Invoke($"{fileName} 전송 완료, 검증 대기 중...");
 
             // 4. ACK Wait (Host가 저장을 완료할 때까지 대기)
             // 최대 30초 대기 (대용량 파일 저장 시간 고려)
@@ -238,7 +238,7 @@ namespace Viewer
             if (completed == timeoutTask)
             {
                  Console.WriteLine($"[FileTransfer] ACK timeout for {fileName}");
-                 OnStatus?.Invoke($"Timeout waiting for ACK");
+                 OnStatus?.Invoke($"응답 시간 초과 (ACK Timeout)");
             }
             else
             {
@@ -246,12 +246,12 @@ namespace Viewer
                  if (success)
                  {
                      Console.WriteLine($"[FileTransfer] ACK received for {fileName}");
-                     OnStatus?.Invoke($"Transfer Complete (Hash Verified)");
+                     OnStatus?.Invoke($"전송 완료 (무결성 확인됨)");
                  }
                  else
                  {
                      Console.WriteLine($"[FileTransfer] Hash Mismatch reported by Host");
-                     OnStatus?.Invoke($"Transfer Failed: Integrity Check Error");
+                     OnStatus?.Invoke($"전송 실패: 파일 무결성 검증 오류");
                  }
             }
         }

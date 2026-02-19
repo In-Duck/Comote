@@ -86,19 +86,19 @@ namespace Host
                         
                         if (!fileHash.Equals(expectedHash.ToLower(), StringComparison.OrdinalIgnoreCase))
                         {
-                            Console.WriteLine($"[Updater] SECURITY WARNING: Hash mismatch!");
-                            Console.WriteLine($"Expected: {expectedHash}");
-                            Console.WriteLine($"Actual:   {fileHash}");
-                            Console.WriteLine("[Updater] Update aborted due to integrity failure.");
+                            Console.WriteLine($"[Updater] 보안 경고: 해시 불일치 발생!");
+                            Console.WriteLine($"기대값: {expectedHash}");
+                            Console.WriteLine($"실제값: {fileHash}");
+                            Console.WriteLine("[Updater] 무결성 검증 실패로 업데이트가 중단되었습니다.");
                             return;
                         }
                     }
-                    Console.WriteLine("[Updater] Hash verification successful.");
+                    Console.WriteLine("[Updater] 해시 무결성 검증 성공.");
                 }
 
                 await File.WriteAllBytesAsync(tempPath, data);
 
-                Console.WriteLine("[Updater] Download complete. Executing installer...");
+                Console.WriteLine("[Updater] 다운로드 완료. 설치 프로그램을 실행합니다...");
 
                 // Inno Setup Silent Install options:
                 // /VERYSILENT: UI 아예 안 보임
@@ -117,7 +117,7 @@ namespace Host
                 Process.Start(psi);
 
                 // 현재 프로세스 종료 (설치 프로그램이 파일을 교체할 수 있도록)
-                Console.WriteLine("[Updater] Closing current process for update...");
+                Console.WriteLine("[Updater] 업데이트 설치를 위해 프로그램을 종료합니다...");
                 Environment.Exit(0);
             }
             catch (Exception ex)

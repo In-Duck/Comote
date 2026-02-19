@@ -60,8 +60,8 @@ namespace Viewer
                     }
 
                     var result = MessageBox.Show(
-                        $"새 버전({newVersion})이 발견되었습니다!\n\n현재 버전: {currentVersion}\n내용: {updateInfo.ReleaseNotes}\n\n지금 업데이트하시겠습니까?",
-                        "업데이트 알림",
+                        $"새로운 버전({newVersion})이 출시되었습니다.\n\n현재 버전: {currentVersion}\n변경 사항: {updateInfo.ReleaseNotes}\n\n지금 업데이트를 진행하시겠습니까?",
+                        "KYMOTE 업데이트 알림",
                         MessageBoxButton.YesNo,
                         MessageBoxImage.Information);
 
@@ -96,10 +96,10 @@ namespace Viewer
                         
                         if (!fileHash.Equals(expectedHash.ToLower(), StringComparison.OrdinalIgnoreCase))
                         {
-                            string msg = $"보안 경고: 다운로드한 파일의 해시값이 일치하지 않습니다.\n\n기대값: {expectedHash}\n실제값: {fileHash}\n\n업데이트가 중단되었습니다.";
+                            string msg = $"[보안 경고] 데이터 무결성 검증 실패.\n\n다운로드된 파일이 변조되었거나 손상되었습니다.\n기대값: {expectedHash}\n실제값: {fileHash}\n\n업데이트가 안전을 위해 중단되었습니다.";
                             if (Environment.UserInteractive)
                             {
-                                MessageBox.Show(msg, "무결성 검증 실패", MessageBoxButton.OK, MessageBoxImage.Error);
+                                MessageBox.Show(msg, "무결성 검증 오류", MessageBoxButton.OK, MessageBoxImage.Error);
                             }
                             else
                             {
@@ -129,7 +129,7 @@ namespace Viewer
             {
                 if (Environment.UserInteractive)
                 {
-                    MessageBox.Show($"업데이트 다운로드 중 오류가 발생했습니다: {ex.Message}", "에러", MessageBoxButton.OK, MessageBoxImage.Error);
+                    MessageBox.Show($"업데이트 파일 다운로드 중 오류가 발생했습니다.\n{ex.Message}", "다운로드 오류", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
                 else
                 {

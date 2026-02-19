@@ -9,6 +9,20 @@ namespace Viewer
         [STAThread]
         public static void Main()
         {
+            // [Style] Mono Vintage Console Styling
+            try
+            {
+                Console.Title = "KYMOTE Viewer";
+                Console.BackgroundColor = ConsoleColor.Black;
+                Console.ForegroundColor = ConsoleColor.DarkYellow;
+                Console.Clear();
+                Console.WriteLine("=================================================");
+                Console.WriteLine("    KYMOTE - Premium Remote Control (v1.2.0)     ");
+                Console.WriteLine("=================================================");
+                Console.WriteLine("");
+            }
+            catch { }
+
             Console.WriteLine("[DEBUG] Main() started");
             
             // WPF Application 객체를 가장 먼저 생성하여 시스템 DLL 로딩을 보장

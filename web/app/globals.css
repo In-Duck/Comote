@@ -1,95 +1,98 @@
 @import "tailwindcss";
 
 @theme {
-  --animate-fade-in-up: fadeInUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  --animate-float: float 6s ease-in-out infinite;
-  --animate-pulse-slow: pulse-slow 4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-  --animate-blob: blob 7s infinite;
+  --font-mono: 'Share Tech Mono', monospace;
+  --color-primary: #ffb000;
+  --color-secondary: #00ff41;
+  --color-bg: #050505;
 
-  @keyframes fadeInUp {
-    from {
-      opacity: 0;
-      transform: translateY(30px);
-    }
-
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  @keyframes float {
-
-    0%,
-    100% {
-      transform: translateY(0);
-    }
-
-    50% {
-      transform: translateY(-20px);
-    }
-  }
-
-  @keyframes pulse-slow {
-
-    0%,
-    100% {
-      opacity: 1;
-    }
-
-    50% {
-      opacity: 0.5;
-    }
-  }
-
-  @keyframes blob {
+  @keyframes scanline {
     0% {
-      transform: translate(0px, 0px) scale(1);
-    }
-
-    33% {
-      transform: translate(30px, -50px) scale(1.1);
-    }
-
-    66% {
-      transform: translate(-20px, 20px) scale(0.9);
+      transform: translateY(-100%);
     }
 
     100% {
-      transform: translate(0px, 0px) scale(1);
+      transform: translateY(100%);
+    }
+  }
+
+  @keyframes glitch {
+    0% {
+      transform: translate(0);
+    }
+
+    20% {
+      transform: translate(-2px, 2px);
+    }
+
+    40% {
+      transform: translate(-2px, -2px);
+    }
+
+    60% {
+      transform: translate(2px, 2px);
+    }
+
+    80% {
+      transform: translate(2px, -2px);
+    }
+
+    100% {
+      transform: translate(0);
     }
   }
 }
+
+/* Import Font */
+@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
 
 @layer base {
   body {
-    @apply bg-black text-white selection:bg-amber-500/30 selection:text-amber-200 antialiased;
+    background-color: #050505;
+    color: #ffb000;
+    font-family: 'Share Tech Mono', monospace;
+    overflow-x: hidden;
   }
 }
 
-@layer components {
+@layer utilities {
+  .scanlines {
+    background: linear-gradient(to bottom,
+        rgba(255, 255, 255, 0),
+        rgba(255, 255, 255, 0) 50%,
+        rgba(0, 0, 0, 0.2) 50%,
+        rgba(0, 0, 0, 0.2));
+    background-size: 100% 4px;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    pointer-events: none;
+    z-index: 50;
+  }
+
+  .crt-flicker {
+    animation: opacity 0.1s infinite;
+  }
+
+  .text-glow {
+    text-shadow: 0 0 5px #ffb000, 0 0 10px #ffb000;
+  }
+
+  .border-glow {
+    box-shadow: 0 0 5px #ffb000, inset 0 0 5px #ffb000;
+  }
+
+  .btn-retro {
+    @apply px-8 py-3 text-xl font-bold uppercase transition-all duration-300 border-2 border-[#ffb000] text-[#ffb000] bg-transparent hover:bg-[#ffb000] hover:text-black hover:shadow-[0_0_20px_#ffb000];
+  }
+
+  .btn-retro-green {
+    @apply px-8 py-3 text-xl font-bold uppercase transition-all duration-300 border-2 border-[#00ff41] text-[#00ff41] bg-transparent hover:bg-[#00ff41] hover:text-black hover:shadow-[0_0_20px_#00ff41];
+  }
+
   .glass-card {
-    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
-    @apply bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl transition-all duration-300 hover:bg-white/10 hover:border-white/20 hover:shadow-amber-500/10 hover:shadow-2xl;
-  }
-
-  .glass-button {
-    @apply px-6 py-3 rounded-full font-medium transition-all duration-300 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
-  }
-
-  .btn-primary {
-    @apply px-6 py-3 rounded-full font-medium transition-all duration-300 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed bg-gradient-to-r from-yellow-400 via-amber-500 to-yellow-600 text-black font-bold shadow-lg shadow-amber-500/20 hover:shadow-amber-500/40 hover:scale-[1.02] border border-yellow-400/20;
-  }
-
-  .btn-secondary {
-    @apply px-6 py-3 rounded-full font-medium transition-all duration-300 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed bg-white/5 hover:bg-white/10 text-gray-200 border border-white/10 hover:border-white/30 backdrop-blur-md;
-  }
-
-  .text-gradient {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-yellow-300 via-amber-400 to-yellow-500;
-  }
-
-  .hero-glow {
-    @apply absolute -z-10 rounded-full blur-[100px] opacity-50 mix-blend-screen animate-pulse-slow;
+    @apply border border-[#ffb000]/30 bg-black/50 backdrop-blur-md;
   }
 }

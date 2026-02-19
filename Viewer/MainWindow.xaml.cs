@@ -173,44 +173,57 @@ namespace Viewer
             var menuBar = new Border
             {
                 BorderThickness = new Thickness(0, 0, 0, 1),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 60)),
-                Padding = new Thickness(16, 0, 16, 0)
+                BorderBrush = new SolidColorBrush(Color.FromRgb(255, 176, 0)), // Amber Border
+                Padding = new Thickness(16, 0, 16, 0),
+                Background = new SolidColorBrush(Color.FromRgb(5, 5, 5)) // Black BG
             };
-            try { menuBar.Background = (Brush)FindResource("ControlBackgroundBrush"); }
-            catch { menuBar.Background = new SolidColorBrush(Color.FromRgb(40, 40, 40)); }
+
             var menuPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            menuPanel.Children.Add(new TextBlock
+            
+            // [Style] Mono Vintage Logo
+            var logoBlock = new TextBlock
             {
-                Text = "🖥️ KYMOTE",
-                Foreground = new SolidColorBrush(Color.FromRgb(255, 215, 0)), // Kymote Gold (#FFD700)
+                Text = "KYMOTE :: REMOTE_TERMINAL",
+                Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)), // Amber
                 FontSize = 18,
                 FontWeight = FontWeights.Bold,
+                FontFamily = new FontFamily("Consolas"),
                 VerticalAlignment = VerticalAlignment.Center
-            });
+            };
+            // Glow Effect
+            logoBlock.Effect = new System.Windows.Media.Effects.DropShadowEffect 
+            { 
+                Color = Color.FromRgb(255, 176, 0), BlurRadius = 10, ShadowDepth = 0, Opacity = 0.5 
+            };
+            menuPanel.Children.Add(logoBlock);
 
             // ⚙ 설정 버튼 (우측 정렬)
             var settingsBtn = new Button
             {
-                Content = "⚙ 설정",
+                Content = "[ 환경 설정 ]",
                 Padding = new Thickness(12, 6, 12, 6),
-                FontSize = 13,
+                FontSize = 14,
+                FontFamily = new FontFamily("Consolas"),
                 Cursor = Cursors.Hand,
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(12, 0, 0, 0)
+                Margin = new Thickness(12, 0, 0, 0),
+                Background = Brushes.Transparent,
+                Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(255, 176, 0)),
+                BorderThickness = new Thickness(1)
             };
-            try { settingsBtn.Style = (Style)FindResource("PrimaryButtonStyle"); } catch { }
             
             // 윈도우 컨트롤 버튼 (최소화/최대화/닫기) - WindowChrome 사용 시 필요
             var winControlPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(20, 0, 0, 0) };
             
-            var minBtn = new Button { Content = "─", Width = 40, Height = 30, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Brushes.Gray };
+            var minBtn = new Button { Content = "_", Width = 40, Height = 30, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)) };
             minBtn.Click += (s, e) => WindowState = WindowState.Minimized;
             
-            var maxBtn = new Button { Content = "☐", Width = 40, Height = 30, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Brushes.Gray };
+            var maxBtn = new Button { Content = "□", Width = 40, Height = 30, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)) };
             maxBtn.Click += (s, e) => WindowState = (WindowState == WindowState.Maximized) ? WindowState.Normal : WindowState.Maximized;
             
-            var closeBtn = new Button { Content = "✕", Width = 40, Height = 30, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Brushes.Red };
+            var closeBtn = new Button { Content = "X", Width = 40, Height = 30, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Brushes.Red };
             closeBtn.Click += (s, e) => Close();
 
             // WindowChrome CaptionButton으로 작동하게 하려면 Click 이벤트가 아니라 WindowChrome.IsHitTestVisibleInChrome=true 설정 필요
@@ -242,14 +255,16 @@ namespace Viewer
             // --- 탭 바 ---
             var tabBar = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(30, 30, 35)),
-                Padding = new Thickness(8, 0, 8, 0)
+                Background = new SolidColorBrush(Color.FromRgb(10, 10, 10)),
+                Padding = new Thickness(8, 0, 8, 0),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(50, 50, 50)),
+                BorderThickness = new Thickness(0,0,0,1)
             };
             var tabPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            _listTabBtn = CreateTabButton("📋 리스트", false);
+            _listTabBtn = CreateTabButton("> 호스트 목록", true);
             _listTabBtn.Click += (s, e) => SwitchLobbyTab(true);
             tabPanel.Children.Add(_listTabBtn);
-            _gridTabBtn = CreateTabButton("🖥️ 모니터", true);
+            _gridTabBtn = CreateTabButton("> 썸네일 뷰", false);
             _gridTabBtn.Click += (s, e) => SwitchLobbyTab(false);
             tabPanel.Children.Add(_gridTabBtn);
             tabBar.Child = tabPanel;
@@ -273,24 +288,25 @@ namespace Viewer
                 IsReadOnly = true,
                 HeadersVisibility = DataGridHeadersVisibility.Column,
                 GridLinesVisibility = DataGridGridLinesVisibility.Horizontal,
-                Background = new SolidColorBrush(Color.FromRgb(25, 25, 28)),
-                Foreground = new SolidColorBrush(Colors.White),
+                Background = new SolidColorBrush(Color.FromRgb(5, 5, 5)),
+                Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)), // Amber Text
                 BorderThickness = new Thickness(0),
-                RowBackground = new SolidColorBrush(Color.FromRgb(30, 30, 35)),
-                AlternatingRowBackground = new SolidColorBrush(Color.FromRgb(35, 35, 40)),
-                HorizontalGridLinesBrush = new SolidColorBrush(Color.FromRgb(50, 50, 55)),
+                RowBackground = new SolidColorBrush(Color.FromRgb(10, 10, 10)),
+                AlternatingRowBackground = new SolidColorBrush(Color.FromRgb(15, 15, 15)),
+                HorizontalGridLinesBrush = new SolidColorBrush(Color.FromRgb(40, 30, 0)),
                 SelectionMode = DataGridSelectionMode.Single,
-                FontSize = 13
+                FontSize = 14,
+                FontFamily = new FontFamily("Consolas")
             };
-            // 컬럼 정의
+            // 컬럼 정의 (한글화)
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "상태", Binding = new Binding("StatusText"), Width = 60 });
-            _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "이름", Binding = new Binding("Name"), Width = 120 });
+            _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "식별명", Binding = new Binding("Name"), Width = 150 });
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "아이피", Binding = new Binding("Ip"), Width = 140 });
-            _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "CPU", Binding = new Binding("CpuText"), Width = 60 });
-            _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "RAM", Binding = new Binding("Ram"), Width = 120 });
-            _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "HDD", Binding = new Binding("Hdd"), Width = 120 });
-            _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "해상도", Binding = new Binding("Resolution"), Width = 100 });
-            _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "가동시간", Binding = new Binding("Uptime"), Width = 100 });
+            _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "CPU", Binding = new Binding("CpuText"), Width = 80 });
+            _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "메모리", Binding = new Binding("Ram"), Width = 120 });
+            _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "디스크", Binding = new Binding("Hdd"), Width = 120 });
+            _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "해상도", Binding = new Binding("Resolution"), Width = 120 });
+            _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "가동시간", Binding = new Binding("Uptime"), Width = 120 });
             _hostDataGrid.MouseDoubleClick += HostDataGrid_DoubleClick;
 
             // 우클릭 시 해당 행 선택 + 빈 영역 메뉴 차단
@@ -307,10 +323,10 @@ namespace Viewer
                 }
             };
 
-            // 컨텍스트 메뉴
+            // 컨텍스트 메뉴 (한글화)
             var contextMenu = new ContextMenu();
             
-            var sendFileMenuItem = new MenuItem { Header = "멀티 파일 전송" };
+            var sendFileMenuItem = new MenuItem { Header = "📁 파일 전송 (Multi)" };
             sendFileMenuItem.Click += OnMultiFileTransferClick;
             contextMenu.Items.Add(sendFileMenuItem);
 
@@ -330,18 +346,18 @@ namespace Viewer
             deleteItem.Click += OnDeleteHostClick;
             contextMenu.Items.Add(deleteItem);
 
-            var wolMenuItem = new MenuItem { Header = "Wake Up (WoL)" };
+            var wolMenuItem = new MenuItem { Header = "⚡ Wake Up (WoL)" };
             wolMenuItem.Click += (s, e) => {
                 if (_hostDataGrid.SelectedItem is HostDto host)
                 {
                     if (!string.IsNullOrEmpty(host.MacAddress))
                     {
                         WoLService.SendMagicPacket(host.MacAddress);
-                        MessageBox.Show($"Sent Magic Packet to {host.HostName} ({host.MacAddress})", "WoL Sent");
+                        MessageBox.Show($"매직 패킷 전송 완료: {host.HostName} ({host.MacAddress})", "WoL 전송");
                     }
                     else
                     {
-                        MessageBox.Show("MAC Address not available.", "WoL Error");
+                        MessageBox.Show("MAC 주소를 찾을 수 없습니다.", "WoL 오류");
                     }
                 }
             };
@@ -355,7 +371,8 @@ namespace Viewer
             // --- 그리드 탭 (썸네일) ---
             _gridTab = new ScrollViewer { 
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Padding = new Thickness(10)
+                Padding = new Thickness(10),
+                Background = new SolidColorBrush(Color.FromRgb(5,5,5))
             };
             _thumbnailPanel = new WrapPanel { Margin = new Thickness(0) };
             _gridTab.Content = _thumbnailPanel;
@@ -363,24 +380,24 @@ namespace Viewer
             // 썸네일 패널 ContextMenu
             _gridTab.ContextMenu = contextMenu; 
 
-            // 초기 뷰 설정: 모니터 뷰
-            _mainContent.Content = _gridTab;
-            // _listTab.Visibility/ _gridTab.Visibility 설정 불필요 (ContentControl이 처리)
+            // 초기 뷰 설정
+            _mainContent.Content = _listTab; // 리스트 뷰 기본
 
             // --- 하단 상태바 ---
             var statusBar = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(30, 30, 35)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(55, 55, 60)),
+                Background = new SolidColorBrush(Color.FromRgb(10, 10, 10)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(255, 176, 0)),
                 BorderThickness = new Thickness(0, 1, 0, 0),
                 Padding = new Thickness(12, 0, 12, 0)
             };
             var statusPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             _statusBarText = new TextBlock
             {
-                Text = "대기 중",
-                Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 160)),
+                Text = "시스템 대기 중",
+                Foreground = new SolidColorBrush(Color.FromRgb(0, 255, 65)), // Phosphor Green
                 FontSize = 12,
+                FontFamily = new FontFamily("Consolas"),
                 VerticalAlignment = VerticalAlignment.Center
             };
             statusPanel.Children.Add(_statusBarText);
@@ -394,8 +411,9 @@ namespace Viewer
             _hostCountText = new TextBlock
             {
                 Text = "호스트: 0",
-                Foreground = new SolidColorBrush(Color.FromRgb(150, 150, 160)),
+                Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)),
                 FontSize = 12,
+                FontFamily = new FontFamily("Consolas"),
                 VerticalAlignment = VerticalAlignment.Center
             };
             statusPanel.Children.Add(_hostCountText);
@@ -685,12 +703,15 @@ namespace Viewer
             {
                 Content = text,
                 FontSize = 13,
+                FontWeight = FontWeights.Bold,
                 Padding = new Thickness(12, 6, 12, 6),
                 Margin = new Thickness(0, 0, 4, 0),
-                Background = new SolidColorBrush(isActive ? Color.FromRgb(60, 110, 200) : Color.FromRgb(45, 45, 50)),
-                Foreground = new SolidColorBrush(Colors.White),
-                BorderThickness = new Thickness(0),
-                Cursor = Cursors.Hand
+                Background = new SolidColorBrush(isActive ? Color.FromRgb(255, 176, 0) : Colors.Transparent),
+                Foreground = new SolidColorBrush(isActive ? Colors.Black : Color.FromRgb(255, 176, 0)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(255, 176, 0)),
+                BorderThickness = new Thickness(1),
+                Cursor = Cursors.Hand,
+                FontFamily = new FontFamily("Consolas")
             };
         }
 
@@ -702,11 +723,14 @@ namespace Viewer
 
             try
             {
-                // ContentControl 교체 방식 (가장 확실함)
                 _mainContent.Content = showList ? _listTab : _gridTab;
 
-                _listTabBtn.Background = new SolidColorBrush(showList ? Color.FromRgb(60, 110, 200) : Color.FromRgb(45, 45, 50));
-                _gridTabBtn.Background = new SolidColorBrush(showList ? Color.FromRgb(45, 45, 50) : Color.FromRgb(60, 110, 200));
+                // Active Style: Amber BG, Black Text
+                _listTabBtn.Background = new SolidColorBrush(showList ? Color.FromRgb(255, 176, 0) : Colors.Transparent);
+                _listTabBtn.Foreground = new SolidColorBrush(showList ? Colors.Black : Color.FromRgb(255, 176, 0));
+
+                _gridTabBtn.Background = new SolidColorBrush(showList ? Colors.Transparent : Color.FromRgb(255, 176, 0));
+                _gridTabBtn.Foreground = new SolidColorBrush(showList ? Color.FromRgb(255, 176, 0) : Colors.Black);
             }
             catch (Exception ex)
             {
@@ -719,26 +743,23 @@ namespace Viewer
         // ==========================================================
         private void UpdateLobbyUI(List<HostInfo> hosts)
         {
-            // [Fix] 중복 호스트 제거 (HostName 기준 최신 항목만 유지 - 서로 다른 HostId를 가진 동일 PC 숨김)
-            //_currentHosts = hosts;
+            // [Fix] 중복 호스트 제거 (HostName 기준 최신 항목만 유지)
             var uniqueHosts = hosts
-                .GroupBy(h => h.Name) // HostName 기준으로 그룹화
-                .Select(g => g.OrderByDescending(h => h.IsOnline).ThenByDescending(h => h.LastSeen).First()) // 가장 최신/온라인 상태인 것 선택
-                .OrderByDescending(h => h.IsOnline) // 전체 목록 정렬: 온라인 우선
-                .ThenByDescending(h => h.LastSeen)  // 그 다음 최근 본 순서
+                .GroupBy(h => h.Name) 
+                .Select(g => g.OrderByDescending(h => h.IsOnline).ThenByDescending(h => h.LastSeen).First()) 
+                .OrderByDescending(h => h.IsOnline) 
+                .ThenByDescending(h => h.LastSeen)  
                 .ToList();
 
             // [New] 사용자 지정 순서 정렬
             if (_settings.HostOrder != null && _settings.HostOrder.Count > 0)
             {
-                // 사용자 지정 순서가 있는 항목과 없는 항목 분리
                 var orderedHosts = uniqueHosts.Where(h => _settings.HostOrder.Contains(h.Id))
                                               .OrderBy(h => _settings.HostOrder.IndexOf(h.Id))
                                               .ToList();
                 var otherHosts = uniqueHosts.Where(h => !_settings.HostOrder.Contains(h.Id))
                                             .ToList();
                 
-                // 합치기 (사용자 지정 순서 우선)
                 _currentHosts = orderedHosts.Concat(otherHosts).ToList();
             }
             else
@@ -748,7 +769,6 @@ namespace Viewer
 
             int onlineCount = 0;
 
-            // DataGrid 바인딩용 래퍼 리스트
             var displayList = new List<HostDisplayItem>();
             _thumbnailPanel.Children.Clear();
 
@@ -757,10 +777,9 @@ namespace Viewer
             {
                 if (host.IsOnline) onlineCount++;
 
-                // 리스트 뷰 데이터
                 displayList.Add(new HostDisplayItem
                 {
-                    StatusText = host.IsOnline ? "ON" : "OFF",
+                    StatusText = host.IsOnline ? "ON" : "OFF", // DataGrid에서는 심플하게
                     Name = host.Name,
                     Ip = host.Ip,
                     CpuText = $"{host.Cpu}%",
@@ -772,37 +791,33 @@ namespace Viewer
                     Index = index
                 });
 
-                // 썸네일 카드
                 var card = CreateHostCard(host, index);
                 _thumbnailPanel.Children.Add(card);
                 index++;
             }
 
             _hostDataGrid.ItemsSource = displayList;
-            _hostCountText.Text = $"호스트: {onlineCount}/{hosts.Count}";
+            _hostCountText.Text = $"HOSTR: {onlineCount}/{hosts.Count}";
             _statusBarText.Text = onlineCount > 0 ? "접속 가능" : "대기 중";
         }
 
         private Border CreateHostCard(HostInfo host, int index)
         {
-            // === 카드 스타일 (Mockup: #252526 Background, Rounded, Shadow) ===
+            // === 카드 스타일 Mono Vintage ===
             var card = new Border
             {
-                Width = 240,  // 넓게
-                Height = 210, // 컴팩트하게 -> 버튼 공간 확보 위해 늘림
+                Width = 240,  
+                Height = 210, 
                 Margin = new Thickness(10),
-                Background = new SolidColorBrush(Color.FromRgb(37, 37, 38)), // #252526
-                BorderBrush = new SolidColorBrush(Color.FromRgb(60, 60, 60)), // Subtle border
+                Background = new SolidColorBrush(Color.FromRgb(15, 15, 15)), // Very Dark Gray
+                BorderBrush = host.IsOnline ? new SolidColorBrush(Color.FromRgb(0, 255, 65)) : new SolidColorBrush(Color.FromRgb(60, 60, 60)), // Online: Green, Offline: Gray
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(6),
+                CornerRadius = new CornerRadius(0), // Sharp Edges
                 Cursor = Cursors.Hand,
                 Tag = host.Id,
-                Effect = null // [Perf] 렌더링 부하 감소를 위해 그림자 제거
-                // Effect = new System.Windows.Media.Effects.DropShadowEffect
-                // {
-                //     Color = Colors.Black, BlurRadius = 15, Opacity = 0.3, ShadowDepth = 4, Direction = 270
-                // }
+                Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = host.IsOnline ? Color.FromRgb(0, 255, 65) : Colors.Black, BlurRadius = host.IsOnline ? 5 : 2, ShadowDepth = 0, Opacity = 0.3 }
             };
+
 
             var grid = new Grid { Margin = new Thickness(16) };
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }); // Header
@@ -985,7 +1000,8 @@ namespace Viewer
             _lobbyGrid.Visibility = Visibility.Collapsed;
             _remoteGrid.Visibility = Visibility.Visible;
 
-            _statusText.Text = "연결 중...";
+            _statusText.Text = "시스템 연결 시도 중...";
+            _statusText.Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)); // Amber
             _statusText.Visibility = Visibility.Visible;
             _statsOverlay.Visibility = Visibility.Collapsed;
 
@@ -1002,7 +1018,8 @@ namespace Viewer
             catch (Exception ex)
             {
                 Console.WriteLine($"[UI] ConnectToHost error: {ex.Message}");
-                _statusText.Text = $"연결 오류: {ex.Message}";
+                _statusText.Text = $"연결 오류 발생: {ex.Message}";
+                _statusText.Foreground = Brushes.Red;
             }
         }
 

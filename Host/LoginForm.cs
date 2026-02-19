@@ -41,34 +41,35 @@ namespace Host
         private void InitializeComponent()
         {
             try { this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
-            this.Size = new Size(360, 280);
-            this.Text = "Login - KYMOTE Host";
+            this.Size = new Size(360, 300);
+            this.Text = "KYMOTE 호스트 로그인";
             this.StartPosition = FormStartPosition.CenterScreen;
             this.FormBorderStyle = FormBorderStyle.None; // Borderless
             this.MaximizeBox = false;
-            this.BackColor = Color.FromArgb(25, 25, 28);
-            this.ForeColor = Color.WhiteSmoke;
-            this.Padding = new Padding(2); // For border
+            this.BackColor = Color.FromArgb(5, 5, 5); // Black
+            this.ForeColor = Color.FromArgb(255, 176, 0); // Amber
+            this.Padding = new Padding(1); // For border
 
-            // Custom Title Bar Area (Logic mostly)
+            // Custom Title Bar Area
             var titleLabel = new Label { 
-                Text = "Login", 
+                Text = "KYMOTE :: LOGIN", 
                 Location = new Point(20, 15), 
                 AutoSize = true, 
-                Font = new Font("Segoe UI", 12, FontStyle.Bold),
-                ForeColor = Color.FromArgb(255, 215, 0) // Kymote Gold
+                Font = new Font("Consolas", 14, FontStyle.Bold),
+                ForeColor = Color.FromArgb(255, 176, 0) // Amber
             };
             this.Controls.Add(titleLabel);
 
             // Close Button
             btnClose = new Button {
-                Text = "✕",
+                Text = "X",
                 Location = new Point(320, 10),
                 Size = new Size(30, 30),
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = Color.Gray,
+                ForeColor = Color.Red,
                 BackColor = Color.Transparent,
-                Cursor = Cursors.Hand
+                Cursor = Cursors.Hand,
+                Font = new Font("Consolas", 10, FontStyle.Bold)
             };
             btnClose.FlatAppearance.BorderSize = 0;
             btnClose.FlatAppearance.MouseOverBackColor = Color.FromArgb(40, 40, 45);
@@ -89,44 +90,53 @@ namespace Host
                 }
             };
 
-            var lblEmail = new Label { Text = "Email", Location = new Point(30, 60), AutoSize = true, ForeColor = Color.Gray, Font = new Font("Segoe UI", 9) };
+            var lblEmail = new Label { Text = "이메일 / 아이디", Location = new Point(30, 60), AutoSize = true, ForeColor = Color.Gray, Font = new Font("Consolas", 10) };
             txtEmail = new TextBox { 
                 Location = new Point(30, 80), 
                 Width = 300, 
                 BorderStyle = BorderStyle.FixedSingle, 
-                BackColor = Color.FromArgb(40, 40, 45), 
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 10)
+                BackColor = Color.FromArgb(20, 20, 20), 
+                ForeColor = Color.FromArgb(255, 176, 0),
+                Font = new Font("Consolas", 11)
             };
 
-            var lblPass = new Label { Text = "Password", Location = new Point(30, 120), AutoSize = true, ForeColor = Color.Gray, Font = new Font("Segoe UI", 9) };
+            var lblPass = new Label { Text = "비밀번호", Location = new Point(30, 120), AutoSize = true, ForeColor = Color.Gray, Font = new Font("Consolas", 10) };
             txtPassword = new TextBox { 
                 Location = new Point(30, 140), 
                 Width = 300, 
-                PasswordChar = '●', 
+                PasswordChar = '*', 
                 BorderStyle = BorderStyle.FixedSingle,
-                BackColor = Color.FromArgb(40, 40, 45), 
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 10)
+                BackColor = Color.FromArgb(20, 20, 20), 
+                ForeColor = Color.FromArgb(255, 176, 0),
+                Font = new Font("Consolas", 11)
             };
 
-            chkSave = new CheckBox { Text = "Remember me", Location = new Point(30, 180), AutoSize = true, ForeColor = Color.LightGray, Font = new Font("Segoe UI", 9) };
+            chkSave = new CheckBox { Text = "로그인 정보 저장", Location = new Point(30, 180), AutoSize = true, ForeColor = Color.LightGray, Font = new Font("Consolas", 9) };
 
             btnLogin = new Button { 
-                Text = "Sign In", 
+                Text = "[ 로 그 인 ]", 
                 Location = new Point(30, 220), 
                 Width = 300, 
-                Height = 36,
+                Height = 40,
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(255, 215, 0), // Kymote Gold
-                ForeColor = Color.Black,
+                BackColor = Color.Transparent, 
+                ForeColor = Color.FromArgb(255, 176, 0),
                 Cursor = Cursors.Hand,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold)
+                Font = new Font("Consolas", 12, FontStyle.Bold)
             };
-            btnLogin.FlatAppearance.BorderSize = 0;
+            btnLogin.FlatAppearance.BorderColor = Color.FromArgb(255, 176, 0);
+            btnLogin.FlatAppearance.BorderSize = 1;
+            btnLogin.FlatAppearance.MouseOverBackColor = Color.FromArgb(255, 176, 0);
+            
+            // Hover effect for text color change requires manual handling in WinForms or custom control, 
+            // but setting MouseOverBackColor handles the background. The text color won't auto-invert easily without custom paint.
+            // We'll stick to a simple color change style.
+            btnLogin.MouseEnter += (s, e) => { btnLogin.ForeColor = Color.Black; };
+            btnLogin.MouseLeave += (s, e) => { btnLogin.ForeColor = Color.FromArgb(255, 176, 0); };
+
             btnLogin.Click += async (s, e) => await LoginAsync();
 
-            lblStatus = new Label { Text = "", Location = new Point(30, 195), Width = 300, ForeColor = Color.IndianRed, Font = new Font("Segoe UI", 8) };
+            lblStatus = new Label { Text = "", Location = new Point(30, 198), Width = 300, ForeColor = Color.Red, Font = new Font("Consolas", 9) };
 
             this.Controls.Add(lblEmail);
             this.Controls.Add(txtEmail);
@@ -170,8 +180,8 @@ namespace Host
         private async Task LoginAsync()
         {
             btnLogin.Enabled = false;
-            lblStatus.Text = "Logging in...";
-            lblStatus.ForeColor = Color.Blue;
+            lblStatus.Text = "로그인 중...";
+            lblStatus.ForeColor = Color.FromArgb(0, 255, 65); // Green
 
             string email = txtEmail.Text;
             string password = txtPassword.Text;
@@ -202,13 +212,13 @@ namespace Host
                 }
                 else
                 {
-                    lblStatus.Text = "Login failed. Check credentials.";
+                    lblStatus.Text = "로그인 실패. 정보를 확인하세요.";
                     lblStatus.ForeColor = Color.Red;
                 }
             }
             catch (Exception ex)
             {
-                lblStatus.Text = "Error: " + ex.Message;
+                lblStatus.Text = "오류: " + ex.Message;
                 lblStatus.ForeColor = Color.Red;
             }
             finally

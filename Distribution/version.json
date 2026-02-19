@@ -1,8 +1,8 @@
 {
-    "version": "1.1.0",
-    "host_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.1.0/ComoteHost_Setup.exe",
-    "viewer_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.1.0/ComoteViewer_Setup.exe",
-    "host_hash": "DF7153ABFD2F2CE4E6F3ED62E3F5E911CB7BE1BA707E6FAF34B38048959AA7E5",
-    "viewer_hash": "D82443F4F8A2258167E3F9B69AAAB2B09CFD50CA6BA7002E8FF1AF34D65B7E07",
-    "release_notes": "- [Security] 업데이트 파일 해시 검증 및 보안 강화\n- [Stability] 오디오 버퍼링 및 API 타임아웃 개선\n- [Fix] 호스트 목록 중복 문제 해결"
+    "version": "1.2.0",
+    "host_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.2.0/ComoteHost_Setup.exe",
+    "viewer_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.2.0/ComoteViewer_Setup.exe",
+    "host_hash": "D12EF28542265920911220E26A0F68F5778A188284B1D0D37EFC85D8D3845715",
+    "viewer_hash": "AB15D73B3DE9024A485122E5F0FF27AF2C3D3146442201A4A86D1E0A0387FB33",
+    "release_notes": "- [UI] Mono Vintage 테마 및 전체 한글화 적용\n- [Design] CRT 스트라이프 및 글래스모피즘 효과 추가\n- [Refactor] 코드 구조 개선 및 안정성 확보"
 }

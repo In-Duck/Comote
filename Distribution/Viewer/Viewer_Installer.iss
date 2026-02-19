@@ -2,9 +2,9 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Comote Viewer"
-#define MyAppVersion "1.1.0"
+#define MyAppVersion "1.2.0"
 #define MyAppPublisher "Comote"
-#define MyAppURL "https://github.com/comote/comote"
+#define MyAppURL "https://github.com/In-Duck/Comote"
 #define MyAppExeName "Viewer.exe"
 
 [Setup]

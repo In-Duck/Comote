@@ -492,7 +492,7 @@ namespace Viewer
                 if (data.Length > 0 && data[0] == MSG_FILE_ACK)
                 {
                     Console.WriteLine("[FileTransfer] Host acknowledged file receipt");
-                    OnFileComplete?.Invoke("파일 전송 완료");
+                    OnFileComplete?.Invoke("파일 전송 및 검증 완료");
                 }
             };
             _inputChannel.onclose += () =>
@@ -518,7 +518,7 @@ namespace Viewer
                         break;
                     case MSG_FILE_ACK:
                         Console.WriteLine("[FileTransfer] Host acknowledged file receipt");
-                        OnFileComplete?.Invoke("파일 전송 완료");
+                        OnFileComplete?.Invoke("파일 전송 및 검증 완료");
                         break;
                 }
             };

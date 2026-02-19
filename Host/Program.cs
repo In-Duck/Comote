@@ -40,6 +40,23 @@ namespace Host
             // [무인 업데이트] 시작 시 업데이트 체크
             await AutoUpdater.CheckAndApplyUpdate(isService);
             
+            // [Style] Mono Vintage Console Styling
+            if (!isService)
+            {
+                try
+                {
+                    Console.Title = "KYMOTE Host";
+                    Console.BackgroundColor = ConsoleColor.Black;
+                    Console.ForegroundColor = ConsoleColor.DarkYellow;
+                    Console.Clear();
+                    Console.WriteLine("=================================================");
+                    Console.WriteLine("    KYMOTE - Premium Remote Control (v1.2.0)     ");
+                    Console.WriteLine("=================================================");
+                    Console.WriteLine("");
+                }
+                catch { } // Ignore if console is not available or locked
+            }
+            
             var handle = GetStdHandle(-10);
             if (GetConsoleMode(handle, out uint mode))
             {
@@ -58,7 +75,7 @@ namespace Host
 
             if (isService)
             {
-                Console.WriteLine("[Service] Running in headless mode. Attempting auto-login...");
+                Console.WriteLine("[Service] 헤드리스 모드로 실행 중. 자동 로그인을 시도합니다...");
                 // Load credentials from file
                 bool loginSuccess = false;
 
@@ -87,20 +104,20 @@ namespace Host
                         }
                         else
                         {
-                            Console.WriteLine("[Service] login.dat version mismatch or corrupt. Deleting outdated file.");
+                            Console.WriteLine("[Service] login.dat 버전이 호환되지 않거나 손상되었습니다. 파일을 삭제합니다.");
                             File.Delete("login.dat");
                         }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[Service] login.dat Load Error: {ex.Message}");
+                        Console.WriteLine($"[Service] login.dat 로드 오류: {ex.Message}");
                         try { File.Delete("login.dat"); } catch { }
                     }
                 }
                 
                 if (!loginSuccess)
                 {
-                    Console.WriteLine("[Service] Auto-login failed. Please run with GUI once to save credentials.");
+                    Console.WriteLine("[Service] 자동 로그인 실패. GUI 모드로 실행하여 로그인 정보를 저장해주세요.");
                     return;
                 }
             }
@@ -119,9 +136,9 @@ namespace Host
                 userId = loginForm.UserId;
             }
 
-            Console.WriteLine($"[Auth] Logged in as: {userEmail}");
+            Console.WriteLine($"[Auth] 로그인 성공: {userEmail}");
 
-            Console.WriteLine("KYMOTE Host Starting...");
+            Console.WriteLine("KYMOTE 호스트 시작 중...");
 
             string? hostName = null;
             string? password = null;
@@ -135,7 +152,7 @@ namespace Host
                 {
                     if (setupForm.ShowDialog() != DialogResult.OK)
                     {
-                        Console.WriteLine("Setup cancelled. Exiting.");
+                        Console.WriteLine("설정이 취소되었습니다. 종료합니다.");
                         return;
                     }
                     hostName = setupForm.HostName;
@@ -152,11 +169,11 @@ namespace Host
                 password = serviceSettings.DefaultPassword;
                 adapterIndex = 0;
                 outputIndex = 0;
-                Console.WriteLine("[Service] Running in non-interactive mode.");
+                Console.WriteLine("[Service] 비대화형(Non-interactive) 모드로 실행 중.");
             }
 
             Console.OutputEncoding = System.Text.Encoding.UTF8;
-            Console.WriteLine("KYMOTE Host Starting...");
+            Console.WriteLine("KYMOTE 호스트 초기화...");
 
             string ffmpegPath = FFmpegExtractor.ExtractFFmpeg();
             FFmpegInit.Initialise(FfmpegLogLevelEnum.AV_LOG_WARNING, ffmpegPath);
@@ -167,7 +184,7 @@ namespace Host
             
             if (string.IsNullOrEmpty(appKey))
             {
-                Console.WriteLine("Error: Pusher AppKey is missing.");
+                Console.WriteLine("오류: Pusher AppKey가 누락되었습니다.");
                 return;
             }
 
@@ -187,7 +204,7 @@ namespace Host
                 appSettings.Save();
             }
 
-            Console.WriteLine($"Host ID: {hostId}");
+            Console.WriteLine($"Host ID 식별: {hostId}");
 
             var capture = new ScreenCapture(adapterIndex, outputIndex);
             string resolution = $"{capture.Width}x{capture.Height}";
@@ -200,8 +217,6 @@ namespace Host
 
             signaling.OnSignalReceived += async (from, signal) => await webRtc.HandleSignalAsync(from, signal);
             webRtc.OnSignalReady += async (to, signal) => await signaling.SendSignalAsync(to, signal);
-
-            Console.WriteLine($"Host ID: {hostId}");
             
             try 
             {
@@ -209,7 +224,7 @@ namespace Host
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Main] Signaling Connect Failed: {ex}");
+                Console.WriteLine($"[Main] 시그널링 서버 연결 실패: {ex}");
                 // 서비스 모드일 경우 여기서 종료되면 안 될 수도 있음 (재시도 로직 필요)
             }
 
@@ -226,14 +241,14 @@ namespace Host
             System.Diagnostics.Process.Start("sc.exe", cmd)?.WaitForExit();
             System.Diagnostics.Process.Start("sc.exe", "description KymoteHost \"KYMOTE Remote Control Host Service\"")?.WaitForExit();
             System.Diagnostics.Process.Start("sc.exe", "start KymoteHost")?.WaitForExit();
-            Console.WriteLine("Service installed and started.");
+            Console.WriteLine("서비스가 설치 및 시작되었습니다.");
         }
 
         static void UninstallService()
         {
             System.Diagnostics.Process.Start("sc.exe", "stop KymoteHost")?.WaitForExit();
             System.Diagnostics.Process.Start("sc.exe", "delete KymoteHost")?.WaitForExit();
-            Console.WriteLine("Service stopped and deleted.");
+            Console.WriteLine("서비스가 중지 및 삭제되었습니다.");
         }
         private static async Task<(string token, string userId)> AttemptAutoLogin(AppSettings settings, string email, string password)
         {
