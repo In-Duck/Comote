@@ -1,4 +1,3 @@
-import Image from "next/image";
 
 export default function Home() {
   return (
@@ -14,24 +13,21 @@ export default function Home() {
       </div>
 
       {/* Navbar */}
-      <nav className="border-b border-amber-900/50 bg-black/80 backdrop-blur-md sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 bg-amber-500 animate-pulse"></div>
-            <span className="text-2xl font-bold tracking-widest text-glow">KYMOTE</span>
-          </div>
-          <div className="hidden md:flex gap-8 text-sm tracking-widest">
-            <span className="opacity-50 hover:opacity-100 cursor-pointer">[시스템]</span>
-            <span className="opacity-50 hover:opacity-100 cursor-pointer">[모듈]</span>
-            <span className="opacity-50 hover:opacity-100 cursor-pointer">[로그]</span>
-          </div>
-          <div className="text-xs border border-amber-500/50 px-2 py-1 rounded bg-amber-500/10">
-            상태: 온라인
-          </div>
+      <nav className="sticky top-0 z-40 w-full px-6 py-4 flex justify-between items-center bg-black/90 backdrop-blur-md border-b border-amber-900/50">
+        <div className="text-xl font-bold tracking-tighter text-amber-500 drop-shadow-[0_0_10px_rgba(245,158,11,0.5)]">
+          KYMOTE <span className="text-xs align-top opacity-70">v1.2.1</span>
+        </div>
+        <div className="flex gap-4">
+          <a href="/login" className="px-6 py-2 border border-amber-500/70 text-amber-500 text-sm font-bold hover:bg-amber-500 hover:text-black transition-all uppercase tracking-widest">
+            [ 로그인 / 회원가입 ]
+          </a>
+          <a href="https://github.com/In-Duck/Comote" target="_blank" className="px-6 py-2 border border-amber-900/50 text-amber-500/80 text-sm hover:bg-amber-500/10 hover:border-amber-500/50 transition-all uppercase tracking-widest">
+            GitHub
+          </a>
         </div>
       </nav>
 
-      <main className="flex-grow flex flex-col relative z-10">
+      <main className="flex-grow flex flex-col">
         {/* Hero Section */}
         <section className="flex-grow flex flex-col items-center justify-center text-center px-4 py-20">
           <div className="mb-4 text-green-500 font-bold tracking-[0.5em] animate-pulse">
@@ -42,14 +38,14 @@ export default function Home() {
           </h1>
           <p className="text-xl md:text-2xl mb-12 max-w-2xl opacity-80 leading-relaxed font-bold">
             초고성능 원격 제어 프로토콜<br />
-            <span className="text-sm opacity-50 font-normal">v1.2.0 // 보안 // 속도 // 안정성</span>
+            <span className="text-sm opacity-50 font-normal">v1.2.1 // 보안 // 속도 // 안정성</span>
           </p>
 
           <div className="flex flex-col md:flex-row gap-6 w-full max-w-2xl justify-center">
-            <a href="https://github.com/In-Duck/Comote/releases/download/v1.2.0/ComoteHost_Setup.exe" className="btn-retro flex-1">
+            <a href="https://github.com/In-Duck/Comote/releases/download/v1.2.1/ComoteHost_Setup.exe" className="btn-retro flex-1">
               [ 호스트 다운로드 ]
             </a>
-            <a href="https://github.com/In-Duck/Comote/releases/download/v1.2.0/ComoteViewer_Setup.exe" className="btn-retro-green flex-1">
+            <a href="https://github.com/In-Duck/Comote/releases/download/v1.2.1/ComoteViewer_Setup.exe" className="btn-retro-green flex-1">
               [ 뷰어 다운로드 ]
             </a>
           </div>

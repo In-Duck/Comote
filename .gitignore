@@ -11,20 +11,15 @@ obj/
 publish/
 
 # Distribution (Release binaries)
-# Include setup files as requested
-!Distribution/**/*.exe
-!Distribution/*.exe
-# Scripts and docs
+# ONLY include small text files and scripts
+Distribution/**
+!Distribution/version.json
 !Distribution/**/*.iss
 !Distribution/**/*.bat
-!Distribution/version.json
 !Distribution/GUIDE.md
 
-# Large/Temporary files
-*.log
-Thumbs.db
-
-# Large binary files (GitHub 100MB limit)
-web/public/downloads/*.zip
-Distribution/**/*.exe
-*.zip
+# Explicitly ignore all EXEs everywhere to prevent large file errors
+**/*.exe
+publish/
+bin/
+obj/

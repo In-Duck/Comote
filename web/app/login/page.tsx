@@ -70,10 +70,10 @@ export default function LoginPage() {
 
             <div className="glass-card w-full max-w-md p-8 relative z-10">
                 <div className="text-center mb-10">
-                    <Link href="/" className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400 inline-block mb-2">
-                        Comote
+                    <Link href="/" className="text-3xl font-bold text-amber-500 inline-block mb-2 tracking-widest">
+                        KYMOTE
                     </Link>
-                    <p className="text-gray-400 text-sm">세상을 제어하세요</p>
+                    <p className="text-amber-500/50 text-sm">세상을 제어하세요</p>
                 </div>
 
                 <div className="space-y-6">

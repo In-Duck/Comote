@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Comote Host"
-#define MyAppVersion "1.2.0"
+#define MyAppVersion "1.2.1"
 #define MyAppPublisher "Comote"
 #define MyAppURL "https://github.com/In-Duck/Comote"
 #define MyAppExeName "Host.exe"
@@ -41,7 +41,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 ; IMPORTANT: Adjust the path to where your published single-file EXE resides
-Source: "..\..\publish\Host-single\Host.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\publish\Host-single-v1.2.1\Host.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]

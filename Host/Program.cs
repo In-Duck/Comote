@@ -50,7 +50,7 @@ namespace Host
                     Console.ForegroundColor = ConsoleColor.DarkYellow;
                     Console.Clear();
                     Console.WriteLine("=================================================");
-                    Console.WriteLine("    KYMOTE - Premium Remote Control (v1.2.0)     ");
+                    Console.WriteLine("    KYMOTE - Premium Remote Control (v1.2.1)     ");
                     Console.WriteLine("=================================================");
                     Console.WriteLine("");
                 }

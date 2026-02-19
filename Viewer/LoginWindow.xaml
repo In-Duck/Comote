@@ -2,35 +2,31 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="KYMOTE - 로그인" Height="380" Width="400"
-        WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
-        Style="{StaticResource WindowStyle}">
-    
+        WindowStartupLocation="CenterScreen" ResizeMode="NoResize">
+
     <Grid Margin="30">
         <StackPanel VerticalAlignment="Center">
             <!-- Header -->
-            <TextBlock Text="KYMOTE :: LOGIN" FontSize="24" FontWeight="Bold" 
-                       Foreground="{StaticResource BrushPrimary}" 
-                       HorizontalAlignment="Center" Margin="0,0,0,30"
-                       Effect="{StaticResource TextGlow}"/>
-            
+            <TextBlock Text="KYMOTE :: LOGIN" FontSize="24" FontWeight="Bold"
+                       Foreground="{StaticResource BrushPrimary}"
+                       HorizontalAlignment="Center" Margin="0,0,0,30"/>
+
             <!-- Email -->
-            <TextBlock Text="이메일 / 아이디" Foreground="{StaticResource BrushTextDim}" Margin="0,5"/>
-            <TextBox Name="txtEmail" Height="35" Style="{StaticResource TextBoxStyle}"/>
-            
+            <TextBlock Text="이메일 / 아이디" Foreground="{StaticResource BrushDim}" Margin="0,5"/>
+            <TextBox Name="txtEmail" Height="35"/>
+
             <!-- Password -->
-            <TextBlock Text="비밀번호" Foreground="{StaticResource BrushTextDim}" Margin="0,15,0,5"/>
-            <PasswordBox Name="txtPassword" Height="35" Style="{StaticResource PasswordBoxStyle}"/>
-            
+            <TextBlock Text="비밀번호" Foreground="{StaticResource BrushDim}" Margin="0,15,0,5"/>
+            <PasswordBox Name="txtPassword" Height="35"/>
+
             <!-- Save Login -->
-            <CheckBox Name="chkSave" Content="로그인 정보 저장" 
-                      Foreground="{StaticResource BrushText}" Margin="0,15,0,0"
-                      Style="{StaticResource CheckBoxStyle}"/>
-            
+            <CheckBox Name="chkSave" Content="로그인 정보 저장"
+                      Foreground="{StaticResource BrushPrimary}" Margin="0,15,0,0"/>
+
             <!-- Login Button -->
-            <Button Name="btnLogin" Content="[ 로 그 인 ]" Height="45" Margin="0,25,0,0" 
-                    Style="{StaticResource ButtonStyle}"
+            <Button Name="btnLogin" Content="[ 로 그 인 ]" Height="45" Margin="0,25,0,0"
                     Click="btnLogin_Click"/>
-            
+
             <!-- Status -->
             <TextBlock Name="lblStatus" Text="" Foreground="#FF4444" HorizontalAlignment="Center" Margin="0,15,0,0" TextWrapping="Wrap"/>
         </StackPanel>

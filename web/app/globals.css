@@ -95,4 +95,16 @@
   .glass-card {
     @apply border border-[#ffb000]/30 bg-black/50 backdrop-blur-md;
   }
+
+  .btn-primary {
+    @apply px-6 py-3 font-bold uppercase tracking-widest transition-all duration-300 bg-[#ffb000] text-black hover:bg-[#ffb000]/80 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply px-6 py-3 font-bold uppercase tracking-widest transition-all duration-300 border border-[#ffb000]/50 text-[#ffb000]/80 bg-transparent hover:bg-[#ffb000]/10 hover:border-[#ffb000] disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .input-field {
+    @apply w-full bg-black border border-[#ffb000]/30 text-[#ffb000] px-4 py-2 focus:outline-none focus:border-[#ffb000] placeholder-[#ffb000]/30;
+  }
 }

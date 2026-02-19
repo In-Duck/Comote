@@ -1,8 +1,8 @@
 {
-    "version": "1.2.0",
-    "host_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.2.0/ComoteHost_Setup.exe",
-    "viewer_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.2.0/ComoteViewer_Setup.exe",
-    "host_hash": "D12EF28542265920911220E26A0F68F5778A188284B1D0D37EFC85D8D3845715",
-    "viewer_hash": "AB15D73B3DE9024A485122E5F0FF27AF2C3D3146442201A4A86D1E0A0387FB33",
-    "release_notes": "- [UI] Mono Vintage 테마 및 전체 한글화 적용\n- [Design] CRT 스트라이프 및 글래스모피즘 효과 추가\n- [Refactor] 코드 구조 개선 및 안정성 확보"
+    "version": "1.2.1",
+    "host_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.2.1/ComoteHost_Setup.exe",
+    "viewer_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.2.1/ComoteViewer_Setup.exe",
+    "host_hash": "29234397308BC0A03F536F60DDC564A04F2CE25ACF81EE76809F1B27589E32B2",
+    "viewer_hash": "762B053557632D3FEC9DAC681F6C89A3608684F554765D3F6C15F1E47A3B30B6",
+    "release_notes": "- [Fix] Supabase 스키마 불일치로 인한 Heartbeat 전송 실패 수정\n- [Fix] 단일 파일 배포 시 네이티브 라이브러리 누락(DllNotFoundException) 수정\n- [Fix] 메인 화면 로그인 버튼 누락 복구"
 }

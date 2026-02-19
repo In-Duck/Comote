@@ -131,13 +131,11 @@ namespace Host
                     host_id = _hostId,
                     user_id = _userId,
                     host_name = _hostName,
-                    // [Fix] Uncommented system info fields
-                    ip = (string?)((dynamic)info).ip ?? "unknown",
                     resolution = (string?)((dynamic)info).resolution ?? "N/A",
-                    cpu = (int?)((dynamic)info).cpu ?? 0,
-                    ram = (string?)((dynamic)info).ram ?? "N/A",
-                    hdd = (string?)((dynamic)info).hdd ?? "N/A",
-                    uptime = (string?)((dynamic)info).uptime ?? "N/A",
+                    // cpu = (int?)((dynamic)info).cpu ?? 0,
+                    // ram = (string?)((dynamic)info).ram ?? "N/A",
+                    // hdd = (string?)((dynamic)info).hdd ?? "N/A",
+                    // uptime = (string?)((dynamic)info).uptime ?? "N/A",
                     last_seen = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
                 };
 
