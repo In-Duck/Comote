@@ -21,9 +21,6 @@ export default function Home() {
           <a href="/login" className="px-6 py-2 border border-amber-500/70 text-amber-500 text-sm font-bold hover:bg-amber-500 hover:text-black transition-all uppercase tracking-widest">
             [ 로그인 / 회원가입 ]
           </a>
-          <a href="https://github.com/In-Duck/Comote" target="_blank" className="px-6 py-2 border border-amber-900/50 text-amber-500/80 text-sm hover:bg-amber-500/10 hover:border-amber-500/50 transition-all uppercase tracking-widest">
-            GitHub
-          </a>
         </div>
       </nav>
 
