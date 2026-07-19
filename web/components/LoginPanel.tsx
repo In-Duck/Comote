@@ -5,12 +5,21 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient, isSupabaseConfigured } from "@/utils/supabase/client";
 
+function friendlyAuthError(message: string) {
+  if (message === "Invalid login credentials") return "이메일 또는 비밀번호를 확인해 주세요.";
+  if (message.includes("Email rate limit exceeded")) return "인증 메일을 너무 자주 요청했습니다. 잠시 후 다시 시도해 주세요.";
+  if (message.includes("Token has expired") || message.includes("otp_expired")) return "인증번호가 만료되었습니다. 새 인증번호를 받아 주세요.";
+  return message;
+}
+
 export default function LoginPanel() {
   const router = useRouter();
   const configured = isSupabaseConfigured();
   const supabase = configured ? createClient() : null;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [otp, setOtp] = useState("");
+  const [verificationEmail, setVerificationEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [message, setMessage] = useState("");
@@ -21,17 +30,34 @@ export default function LoginPanel() {
     setLoading(true);
     setMessage("");
     try {
+      if (verificationEmail) {
+        const { error } = await supabase.auth.verifyOtp({
+          email: verificationEmail,
+          token: otp.trim(),
+          type: "signup",
+        });
+        if (error) {
+          setMessage(friendlyAuthError(error.message));
+        } else {
+          router.push("/dashboard");
+          router.refresh();
+        }
+        return;
+      }
+
       const result = mode === "login"
         ? await supabase.auth.signInWithPassword({ email, password })
-        : await supabase.auth.signUp({ email, password });
+        : await supabase.auth.signUp({
+            email,
+            password,
+            options: { emailRedirectTo: window.location.origin },
+          });
 
       if (result.error) {
-        const friendlyMessage = result.error.message === "Invalid login credentials"
-          ? "이메일 또는 비밀번호를 확인해 주세요."
-          : result.error.message;
-        setMessage(friendlyMessage);
+        setMessage(friendlyAuthError(result.error.message));
       } else if (mode === "signup") {
-        setMessage("가입 확인 메일을 확인해 주세요.");
+        setVerificationEmail(email);
+        setMessage("메일로 전송된 6자리 인증번호를 입력해 주세요.");
       } else {
         router.push("/dashboard");
         router.refresh();
@@ -41,6 +67,29 @@ export default function LoginPanel() {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function resendOtp() {
+    if (!supabase || !verificationEmail) return;
+    setLoading(true);
+    setMessage("");
+    try {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email: verificationEmail,
+      });
+      setMessage(error ? friendlyAuthError(error.message) : "새 인증번호를 보냈습니다.");
+    } catch {
+      setMessage("인증번호를 다시 보내지 못했습니다. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function resetVerification() {
+    setVerificationEmail("");
+    setOtp("");
+    setMessage("");
   }
 
   return (
@@ -53,14 +102,32 @@ export default function LoginPanel() {
       <section className="flex items-center justify-center p-6">
         <form onSubmit={submit} className="w-full max-w-md rounded-3xl border border-white/10 bg-[#0b1828] p-8 shadow-2xl">
           <Link href="/" className="mb-8 flex items-center gap-3 font-bold lg:hidden"><span className="grid h-9 w-9 place-items-center rounded-xl bg-cyan-400 text-[#07111f]">C</span>Comote</Link>
-          <h2 className="text-2xl font-semibold">{mode === "login" ? "계정 로그인" : "새 계정 만들기"}</h2>
-          <p className="mt-2 text-sm text-slate-400">매니저와 클라이언트에서 동일한 계정을 사용하세요.</p>
+          <h2 className="text-2xl font-semibold">{verificationEmail ? "이메일 인증" : mode === "login" ? "계정 로그인" : "새 계정 만들기"}</h2>
+          <p className="mt-2 text-sm text-slate-400">{verificationEmail ? <><span className="text-slate-200">{verificationEmail}</span>로 인증번호를 보냈습니다.</> : "매니저와 클라이언트에서 동일한 계정을 사용하세요."}</p>
           {!configured && <div className="mt-6 rounded-xl border border-amber-300/20 bg-amber-300/10 p-4 text-sm text-amber-200">계정 서버 연결 정보가 아직 설정되지 않았습니다.</div>}
-          <label className="mt-7 block text-sm text-slate-300">이메일<input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-[#07111f] px-4 py-3 outline-none focus:border-cyan-300" placeholder="name@example.com" /></label>
-          <label className="mt-4 block text-sm text-slate-300">비밀번호<input type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-[#07111f] px-4 py-3 outline-none focus:border-cyan-300" placeholder="8자 이상" /></label>
+
+          {verificationEmail ? (
+            <label className="mt-7 block text-sm text-slate-300">6자리 인증번호
+              <input autoFocus type="text" required inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))} className="mt-2 w-full rounded-xl border border-white/10 bg-[#07111f] px-4 py-3 text-center text-2xl tracking-[0.35em] outline-none focus:border-cyan-300" placeholder="000000" />
+            </label>
+          ) : (
+            <>
+              <label className="mt-7 block text-sm text-slate-300">이메일<input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-[#07111f] px-4 py-3 outline-none focus:border-cyan-300" placeholder="name@example.com" /></label>
+              <label className="mt-4 block text-sm text-slate-300">비밀번호<input type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-[#07111f] px-4 py-3 outline-none focus:border-cyan-300" placeholder="8자 이상" /></label>
+            </>
+          )}
+
           {message && <p className="mt-4 rounded-xl bg-white/5 p-3 text-sm text-slate-300">{message}</p>}
-          <button disabled={!configured || loading} className="mt-6 w-full rounded-xl bg-cyan-400 px-5 py-3 font-semibold text-[#07111f] disabled:cursor-not-allowed disabled:opacity-40">{loading ? "처리 중..." : mode === "login" ? "로그인" : "회원가입"}</button>
-          <button type="button" onClick={() => { setMode(mode === "login" ? "signup" : "login"); setMessage(""); }} className="mt-3 w-full rounded-xl px-5 py-3 text-sm text-slate-400 hover:bg-white/5">{mode === "login" ? "처음이신가요? 계정 만들기" : "이미 계정이 있나요? 로그인"}</button>
+          <button disabled={!configured || loading || Boolean(verificationEmail && otp.length !== 6)} className="mt-6 w-full rounded-xl bg-cyan-400 px-5 py-3 font-semibold text-[#07111f] disabled:cursor-not-allowed disabled:opacity-40">{loading ? "처리 중..." : verificationEmail ? "인증 완료" : mode === "login" ? "로그인" : "회원가입"}</button>
+
+          {verificationEmail ? (
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button type="button" disabled={loading} onClick={resendOtp} className="rounded-xl px-3 py-3 text-sm text-cyan-300 hover:bg-white/5 disabled:opacity-40">인증번호 다시 받기</button>
+              <button type="button" onClick={resetVerification} className="rounded-xl px-3 py-3 text-sm text-slate-400 hover:bg-white/5">이메일 변경</button>
+            </div>
+          ) : (
+            <button type="button" onClick={() => { setMode(mode === "login" ? "signup" : "login"); setMessage(""); }} className="mt-3 w-full rounded-xl px-5 py-3 text-sm text-slate-400 hover:bg-white/5">{mode === "login" ? "처음이신가요? 계정 만들기" : "이미 계정이 있나요? 로그인"}</button>
+          )}
         </form>
       </section>
     </main>
