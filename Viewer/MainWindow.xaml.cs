@@ -104,7 +104,7 @@ namespace Viewer
             _isOfflineMode = offlineMode;
             Console.WriteLine("[DEBUG] MainWindow constructor started");
 
-            Title = "KYMOTE Viewer";
+            Title = "Comote Manager";
             try { Icon = new System.Windows.Media.Imaging.BitmapImage(new Uri("pack://application:,,,/Kymote.ico")); } catch { }
             
             // [UI] Apply Modern Window Style
@@ -203,9 +203,9 @@ namespace Viewer
             var menuBar = new Border
             {
                 BorderThickness = new Thickness(0, 0, 0, 1),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(255, 176, 0)), // Amber Border
+                BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248)), // Amber Border
                 Padding = new Thickness(16, 0, 16, 0),
-                Background = new SolidColorBrush(Color.FromRgb(5, 5, 5)) // Black BG
+                Background = new SolidColorBrush(Color.FromRgb(11, 18, 32)) // Black BG
             };
 
             var menuPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
@@ -213,44 +213,44 @@ namespace Viewer
             // [Style] Mono Vintage Logo
             var logoBlock = new TextBlock
             {
-                Text = "KYMOTE :: REMOTE_TERMINAL",
-                Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)), // Amber
+                Text = "Comote Manager",
+                Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)), // Amber
                 FontSize = 18,
                 FontWeight = FontWeights.Bold,
-                FontFamily = new FontFamily("Consolas"),
+                FontFamily = new FontFamily("Segoe UI, Malgun Gothic"),
                 VerticalAlignment = VerticalAlignment.Center
             };
             // Glow Effect
             logoBlock.Effect = new System.Windows.Media.Effects.DropShadowEffect 
             { 
-                Color = Color.FromRgb(255, 176, 0), BlurRadius = 10, ShadowDepth = 0, Opacity = 0.5 
+                Color = Color.FromRgb(56, 189, 248), BlurRadius = 10, ShadowDepth = 0, Opacity = 0.5 
             };
             menuPanel.Children.Add(logoBlock);
 
             // ⚙ 설정 버튼 (우측 정렬)
             var settingsBtn = new Button
             {
-                Content = "[ 환경 설정 ]",
+                Content = "설정",
                 Padding = new Thickness(12, 6, 12, 6),
                 FontSize = 14,
-                FontFamily = new FontFamily("Consolas"),
+                FontFamily = new FontFamily("Segoe UI, Malgun Gothic"),
                 Cursor = Cursors.Hand,
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(12, 0, 0, 0),
                 Background = Brushes.Transparent,
-                Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(255, 176, 0)),
+                Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
                 BorderThickness = new Thickness(1)
             };
             
             // 윈도우 컨트롤 버튼 (최소화/최대화/닫기) - WindowChrome 사용 시 필요
             var winControlPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(20, 0, 0, 0) };
             
-            var minBtn = new Button { Content = "_", Width = 40, Height = 30, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)) };
+            var minBtn = new Button { Content = "_", Width = 40, Height = 30, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)) };
             minBtn.Click += (s, e) => WindowState = WindowState.Minimized;
             
-            var maxBtn = new Button { Content = "□", Width = 40, Height = 30, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)) };
+            var maxBtn = new Button { Content = "□", Width = 40, Height = 30, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)) };
             maxBtn.Click += (s, e) => WindowState = (WindowState == WindowState.Maximized) ? WindowState.Normal : WindowState.Maximized;
             
             var closeBtn = new Button { Content = "X", Width = 40, Height = 30, Background = Brushes.Transparent, BorderThickness = new Thickness(0), Foreground = Brushes.Red };
@@ -285,19 +285,19 @@ namespace Viewer
             // --- 탭 바 ---
             var tabBar = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(10, 10, 10)),
+                Background = new SolidColorBrush(Color.FromRgb(17, 28, 46)),
                 Padding = new Thickness(8, 0, 8, 0),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(50, 50, 50)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(42, 57, 82)),
                 BorderThickness = new Thickness(0,0,0,1)
             };
             var tabPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            _listTabBtn = CreateTabButton("> 호스트 목록", true);
+            _listTabBtn = CreateTabButton("PC 목록", true);
             _listTabBtn.Click += (s, e) => SwitchLobbyTab(true);
             tabPanel.Children.Add(_listTabBtn);
-            _gridTabBtn = CreateTabButton("> 썸네일 뷰", false);
+            _gridTabBtn = CreateTabButton("썸네일", false);
             _gridTabBtn.Click += (s, e) => SwitchLobbyTab(false);
             tabPanel.Children.Add(_gridTabBtn);
-            var operationsButton = CreateTabButton("> 작업 패널", false);
+            var operationsButton = CreateTabButton("작업 패널", false);
             operationsButton.Click += (_, _) => ToggleOperationsPanel();
             tabPanel.Children.Add(operationsButton);
             tabBar.Child = tabPanel;
@@ -323,15 +323,15 @@ namespace Viewer
                 IsReadOnly = true,
                 HeadersVisibility = DataGridHeadersVisibility.Column,
                 GridLinesVisibility = DataGridGridLinesVisibility.Horizontal,
-                Background = new SolidColorBrush(Color.FromRgb(5, 5, 5)),
-                Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)), // Amber Text
+                Background = new SolidColorBrush(Color.FromRgb(11, 18, 32)),
+                Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)), // Amber Text
                 BorderThickness = new Thickness(0),
-                RowBackground = new SolidColorBrush(Color.FromRgb(10, 10, 10)),
-                AlternatingRowBackground = new SolidColorBrush(Color.FromRgb(15, 15, 15)),
-                HorizontalGridLinesBrush = new SolidColorBrush(Color.FromRgb(40, 30, 0)),
+                RowBackground = new SolidColorBrush(Color.FromRgb(17, 28, 46)),
+                AlternatingRowBackground = new SolidColorBrush(Color.FromRgb(23, 36, 58)),
+                HorizontalGridLinesBrush = new SolidColorBrush(Color.FromRgb(42, 57, 82)),
                 SelectionMode = DataGridSelectionMode.Extended,
                 FontSize = 14,
-                FontFamily = new FontFamily("Consolas")
+                FontFamily = new FontFamily("Segoe UI, Malgun Gothic")
             };
             // 컬럼 정의 (한글화)
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "상태", Binding = new Binding("StatusText"), Width = 60 });
@@ -412,7 +412,7 @@ namespace Viewer
             _gridTab = new ScrollViewer { 
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Padding = new Thickness(10),
-                Background = new SolidColorBrush(Color.FromRgb(5,5,5))
+                Background = new SolidColorBrush(Color.FromRgb(11,18,32))
             };
             _thumbnailPanel = new WrapPanel { Margin = new Thickness(0) };
             var thumbnailSurface = new Grid();
@@ -441,8 +441,8 @@ namespace Viewer
             // --- 하단 상태바 ---
             var statusBar = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(10, 10, 10)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(255, 176, 0)),
+                Background = new SolidColorBrush(Color.FromRgb(17, 28, 46)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
                 BorderThickness = new Thickness(0, 1, 0, 0),
                 Padding = new Thickness(12, 0, 12, 0)
             };
@@ -450,25 +450,25 @@ namespace Viewer
             _statusBarText = new TextBlock
             {
                 Text = "시스템 대기 중",
-                Foreground = new SolidColorBrush(Color.FromRgb(0, 255, 65)), // Phosphor Green
+                Foreground = new SolidColorBrush(Color.FromRgb(34, 197, 94)), // Phosphor Green
                 FontSize = 12,
-                FontFamily = new FontFamily("Consolas"),
+                FontFamily = new FontFamily("Segoe UI, Malgun Gothic"),
                 VerticalAlignment = VerticalAlignment.Center
             };
             statusPanel.Children.Add(_statusBarText);
             statusPanel.Children.Add(new TextBlock
             {
                 Text = " | ",
-                Foreground = new SolidColorBrush(Color.FromRgb(60, 60, 65)),
+                Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
                 Margin = new Thickness(8, 0, 8, 0),
                 VerticalAlignment = VerticalAlignment.Center
             });
             _hostCountText = new TextBlock
             {
                 Text = "호스트: 0",
-                Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)),
+                Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
                 FontSize = 12,
-                FontFamily = new FontFamily("Consolas"),
+                FontFamily = new FontFamily("Segoe UI, Malgun Gothic"),
                 VerticalAlignment = VerticalAlignment.Center
             };
             statusPanel.Children.Add(_hostCountText);
@@ -761,12 +761,12 @@ namespace Viewer
                 FontWeight = FontWeights.Bold,
                 Padding = new Thickness(12, 6, 12, 6),
                 Margin = new Thickness(0, 0, 4, 0),
-                Background = new SolidColorBrush(isActive ? Color.FromRgb(255, 176, 0) : Colors.Transparent),
-                Foreground = new SolidColorBrush(isActive ? Colors.Black : Color.FromRgb(255, 176, 0)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(255, 176, 0)),
+                Background = new SolidColorBrush(isActive ? Color.FromRgb(56, 189, 248) : Colors.Transparent),
+                Foreground = new SolidColorBrush(isActive ? Colors.Black : Color.FromRgb(56, 189, 248)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
                 BorderThickness = new Thickness(1),
                 Cursor = Cursors.Hand,
-                FontFamily = new FontFamily("Consolas")
+                FontFamily = new FontFamily("Segoe UI, Malgun Gothic")
             };
         }
 
@@ -781,11 +781,11 @@ namespace Viewer
                 _mainContent.Content = showList ? _listTab : _gridTab;
 
                 // Active Style: Amber BG, Black Text
-                _listTabBtn.Background = new SolidColorBrush(showList ? Color.FromRgb(255, 176, 0) : Colors.Transparent);
-                _listTabBtn.Foreground = new SolidColorBrush(showList ? Colors.Black : Color.FromRgb(255, 176, 0));
+                _listTabBtn.Background = new SolidColorBrush(showList ? Color.FromRgb(56, 189, 248) : Colors.Transparent);
+                _listTabBtn.Foreground = new SolidColorBrush(showList ? Colors.Black : Color.FromRgb(56, 189, 248));
 
-                _gridTabBtn.Background = new SolidColorBrush(showList ? Colors.Transparent : Color.FromRgb(255, 176, 0));
-                _gridTabBtn.Foreground = new SolidColorBrush(showList ? Color.FromRgb(255, 176, 0) : Colors.Black);
+                _gridTabBtn.Background = new SolidColorBrush(showList ? Colors.Transparent : Color.FromRgb(56, 189, 248));
+                _gridTabBtn.Foreground = new SolidColorBrush(showList ? Color.FromRgb(56, 189, 248) : Colors.Black);
             }
             catch (Exception ex)
             {
@@ -856,7 +856,7 @@ namespace Viewer
 
             UpdateThumbnailSelectionVisuals();
             _hostDataGrid.ItemsSource = displayList;
-            _hostCountText.Text = $"HOSTS: {onlineCount}/{_currentHosts.Count}";
+            _hostCountText.Text = $"PC {onlineCount}/{_currentHosts.Count} 온라인";
             _statusBarText.Text = onlineCount > 0 ? "접속 가능" : "대기 중";
         }
 
@@ -865,16 +865,16 @@ namespace Viewer
             // === 카드 스타일 Mono Vintage ===
             var card = new Border
             {
-                Width = 240,  
-                Height = 210, 
+                Width = 260,  
+                Height = 236, 
                 Margin = new Thickness(10),
-                Background = new SolidColorBrush(Color.FromRgb(15, 15, 15)), // Very Dark Gray
-                BorderBrush = host.IsOnline ? new SolidColorBrush(Color.FromRgb(0, 255, 65)) : new SolidColorBrush(Color.FromRgb(60, 60, 60)), // Online: Green, Offline: Gray
+                Background = new SolidColorBrush(Color.FromRgb(23, 36, 58)), // Very Dark Gray
+                BorderBrush = host.IsOnline ? new SolidColorBrush(Color.FromRgb(34, 197, 94)) : new SolidColorBrush(Color.FromRgb(60, 60, 60)), // Online: Green, Offline: Gray
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(0), // Sharp Edges
+                CornerRadius = new CornerRadius(12),
                 Cursor = Cursors.Hand,
                 Tag = host.Id,
-                Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = host.IsOnline ? Color.FromRgb(0, 255, 65) : Colors.Black, BlurRadius = host.IsOnline ? 5 : 2, ShadowDepth = 0, Opacity = 0.3 }
+                Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = host.IsOnline ? Color.FromRgb(34, 197, 94) : Colors.Black, BlurRadius = host.IsOnline ? 5 : 2, ShadowDepth = 0, Opacity = 0.3 }
             };
 
 
@@ -893,7 +893,7 @@ namespace Viewer
             // 호스트 이름
             headerStack.Children.Add(new TextBlock
             {
-                Text = host.Name.ToUpper(),
+                Text = host.Name,
                 Foreground = new SolidColorBrush(Colors.White),
                 FontSize = 14,
                 FontWeight = FontWeights.Bold,
@@ -911,7 +911,7 @@ namespace Viewer
             });
             statusPanel.Children.Add(new TextBlock
             {
-                Text = host.IsOnline ? "Online" : "Offline",
+                Text = host.IsOnline ? "온라인" : "오프라인",
                 Foreground = new SolidColorBrush(host.IsOnline ? Color.FromRgb(150, 200, 150) : Color.FromRgb(120, 120, 120)),
                 FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center
@@ -923,7 +923,7 @@ namespace Viewer
             {
                 Margin = new Thickness(0, 8, 0, 8),
                 Background = Brushes.Black,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(42, 57, 82)),
                 BorderThickness = new Thickness(1),
                 ClipToBounds = true
             };
@@ -972,7 +972,7 @@ namespace Viewer
             // Progress Bar Track
             var track = new Border 
             { 
-                Height = 4, Background = new SolidColorBrush(Color.FromRgb(50, 50, 50)), CornerRadius = new CornerRadius(2), Margin = new Thickness(0, 4, 0, 0) 
+                Height = 4, Background = new SolidColorBrush(Color.FromRgb(42, 57, 82)), CornerRadius = new CornerRadius(2), Margin = new Thickness(0, 4, 0, 0) 
             };
             
             // Progress Fill
@@ -1019,7 +1019,7 @@ namespace Viewer
             // Mockup: 파란색(#007ACC), 꽉 참.
             var connectBtn = new Button
             {
-                Content = "Connect",
+                Content = "원격 연결",
                 Height = 30,
                 Background = new SolidColorBrush(host.IsOnline ? Color.FromRgb(0, 122, 204) : Color.FromRgb(60, 60, 60)), // VS Blue #007ACC
                 Foreground = new SolidColorBrush(Colors.White),
@@ -1109,7 +1109,7 @@ namespace Viewer
             ShowRemoteControlWindow(hostId);
 
             _statusText.Text = "시스템 연결 시도 중...";
-            _statusText.Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)); // Amber
+            _statusText.Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)); // Amber
             _statusText.Visibility = Visibility.Visible;
             _statsOverlay.Visibility = Visibility.Collapsed;
 

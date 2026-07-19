@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using Newtonsoft.Json;
@@ -21,8 +21,8 @@ namespace Viewer
 
         public string PusherAppKey { get; set; } = "50ef3c55ccd8c468f604";
         public string PusherCluster { get; set; } = "ap3";
-        public string SupabaseUrl { get; set; } = "https://nlodelehewbbniayzjuv.supabase.co";
-        public string SupabaseAnonKey { get; set; } = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5sb2RlbGVoZXdiYm5pYXl6anV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExMzc1MjksImV4cCI6MjA4NjcxMzUyOX0.-r_qNDErJPWLma1i3wjXZmvzXAZUGtHHK-L3YMcZYb4";
+        public string SupabaseUrl { get; set; } = "https://xhdpmxarnkntbkwqobzm.supabase.co";
+        public string SupabaseAnonKey { get; set; } = "sb_publishable_0DND4OEVX8lTX5qGIgs1Xg_Bnm7ORhO";
         public string WebAuthUrl { get; set; } = "https://kymote.vercel.app/api/pusher/auth";
 
         public static string DataDirectory =>

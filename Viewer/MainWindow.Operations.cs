@@ -46,7 +46,7 @@ namespace Viewer
             var title = new TextBlock
             {
                 Text = "작업 패널",
-                Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)),
+                Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
                 FontWeight = FontWeights.Bold,
                 VerticalAlignment = VerticalAlignment.Center,
             };
@@ -228,3 +228,4 @@ namespace Viewer
     public sealed record RemoteStopTask(string Name, string ProcessName) { public string Display => $"{Name}  |  {ProcessName}"; }
     public sealed class TaskLibrary { public List<RemoteRunTask> RunTasks { get; set; } = []; public List<RemoteStopTask> StopTasks { get; set; } = []; }
 }
+

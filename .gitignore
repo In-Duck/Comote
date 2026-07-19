@@ -1,4 +1,4 @@
-# Visual Studio / .NET
+﻿# Visual Studio / .NET
 .vs/
 bin/
 obj/
@@ -16,6 +16,7 @@ Distribution/**
 !Distribution/version.json
 !Distribution/**/*.iss
 !Distribution/**/*.bat
+!Distribution/**/*.cmd
 !Distribution/**/*.ps1
 !Distribution/GUIDE.md
 
@@ -29,3 +30,4 @@ obj/
 
 artifacts/
 .site-deploy-source/
+

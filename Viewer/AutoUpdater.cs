@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Net.Http;
 using System.Threading.Tasks;
@@ -61,7 +61,7 @@ namespace Viewer
 
                     var result = MessageBox.Show(
                         $"새로운 버전({newVersion})이 출시되었습니다.\n\n현재 버전: {currentVersion}\n변경 사항: {updateInfo.ReleaseNotes}\n\n지금 업데이트를 진행하시겠습니까?",
-                        "KYMOTE 업데이트 알림",
+                        "Comote 업데이트 알림",
                         MessageBoxButton.YesNo,
                         MessageBoxImage.Information);
 
@@ -139,3 +139,4 @@ namespace Viewer
         }
     }
 }
+

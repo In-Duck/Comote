@@ -33,7 +33,7 @@ namespace Viewer
                 Text = host.IsOnline ? "WAITING FOR SCREEN" : "OFFLINE",
                 Foreground = new SolidColorBrush(
                     Color.FromRgb(100, 100, 100)),
-                FontFamily = new FontFamily("Consolas"),
+                FontFamily = new FontFamily("Segoe UI, Malgun Gothic"),
                 FontSize = 11,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -55,7 +55,7 @@ namespace Viewer
                 Height = 8,
                 Margin = new Thickness(6, 0, 0, 0),
                 Fill = host.IsOnline
-                    ? new SolidColorBrush(Color.FromRgb(0, 255, 65))
+                    ? new SolidColorBrush(Color.FromRgb(34, 197, 94))
                     : new SolidColorBrush(Color.FromRgb(90, 90, 90)),
             };
             var overlay = new Border
@@ -146,3 +146,4 @@ namespace Viewer
         }
     }
 }
+

@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
@@ -27,7 +27,7 @@ namespace Viewer
             ResizeMode = ResizeMode.NoResize;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             Background = new SolidColorBrush(Color.FromRgb(10, 10, 10));
-            Foreground = new SolidColorBrush(Color.FromRgb(0, 255, 65));
+            Foreground = new SolidColorBrush(Color.FromRgb(34, 197, 94));
 
             var root = new StackPanel { Margin = new Thickness(32) };
             Content = root;
@@ -77,7 +77,7 @@ namespace Viewer
                     "필수: Client 공유기에서 위 TCP 포트를 Client PC의 " +
                     "내부 IP로 포트포워딩하고 Windows 방화벽에서도 허용하세요.",
                 TextWrapping = TextWrapping.Wrap,
-                Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)),
+                Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
                 Margin = new Thickness(0, 0, 0, 18),
             });
 
@@ -236,3 +236,4 @@ namespace Viewer
         }
     }
 }
+

@@ -350,9 +350,9 @@ namespace Viewer
                             $"해상도: {host.Resolution}\n" +
                             $"CPU: {host.Cpu}%\n\n" +
                             "실제 서버 연결 시 이 영역에 원격 화면이 표시됩니다.",
-                        FontFamily = new FontFamily("Consolas"),
+                        FontFamily = new FontFamily("Segoe UI, Malgun Gothic"),
                         Foreground = new SolidColorBrush(
-                            Color.FromRgb(0, 255, 65)),
+                            Color.FromRgb(34, 197, 94)),
                     });
 
                 new Window
@@ -642,3 +642,4 @@ namespace Viewer
         }
     }
 }
+

@@ -1,4 +1,4 @@
-using System.Drawing;
+﻿using System.Drawing;
 using System.Windows.Forms;
 
 namespace Host
@@ -37,7 +37,7 @@ namespace Host
             MaximizeBox = false;
             MinimizeBox = false;
             BackColor = Color.FromArgb(12, 12, 12);
-            ForeColor = Color.FromArgb(0, 255, 65);
+            ForeColor = Color.FromArgb(34, 197, 94);
             Font = new Font("Segoe UI", 10);
 
             var title = new Label
@@ -175,4 +175,5 @@ namespace Host
         }
     }
 }
+
 

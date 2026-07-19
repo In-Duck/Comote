@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -216,7 +216,7 @@ namespace Viewer
             stack.Children.Add(new Border { Height = 2, Background = new SolidColorBrush(Color.FromRgb(60, 110, 200)), Margin = new Thickness(0, 0, 0, 16) });
 
             stack.Children.Add(CreateSectionHeader("Program Info"));
-            stack.Children.Add(new TextBlock { Text = "KYMOTE Viewer v1.0.1", Foreground = Brushes.White, Margin = new Thickness(0,0,0,10) });
+            stack.Children.Add(new TextBlock { Text = "Comote Viewer v1.0.1", Foreground = Brushes.White, Margin = new Thickness(0,0,0,10) });
             stack.Children.Add(new TextBlock { Text = "Copyright © 2026 AI Enterprise Alpha. All rights reserved.", Foreground = Brushes.Gray, FontSize = 11, Margin = new Thickness(0,0,0,20) });
 
             stack.Children.Add(CreateSectionHeader("Open Source Licenses"));
@@ -347,3 +347,4 @@ Newtonsoft.Json (MIT License)";
         }
     }
 }
+

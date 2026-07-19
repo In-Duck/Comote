@@ -29,18 +29,18 @@ namespace Viewer
             // [Style] Mono Vintage Console Styling
             try
             {
-                Console.Title = "KYMOTE Viewer";
+                Console.Title = "Comote Viewer";
                 Console.BackgroundColor = ConsoleColor.Black;
                 Console.ForegroundColor = ConsoleColor.DarkYellow;
                 Console.Clear();
                 Console.WriteLine("=================================================");
-                Console.WriteLine("    KYMOTE - Premium Remote Control (v1.3.0)     ");
+                Console.WriteLine("    Comote - Premium Remote Control (v1.3.0)     ");
                 Console.WriteLine("=================================================");
                 Console.WriteLine("");
             }
             catch { }
 
-            Console.WriteLine("KYMOTE Viewer v1.3.0 starting...");
+            Console.WriteLine("Comote Viewer v1.3.0 starting...");
             
             // WPF Application 객체를 가장 먼저 생성하여 시스템 DLL 로딩을 보장
             Console.WriteLine("[DEBUG] Creating Application...");
@@ -167,3 +167,4 @@ namespace Viewer
         }
     }
 }
+

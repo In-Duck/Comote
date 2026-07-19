@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - .github/workflows/release-preview10.yml
 
 permissions:
   contents: write
@@ -36,6 +34,23 @@ jobs:
             -DestinationPath artifacts/ComoteClient-1.6.0-preview.10-win-x64.zip `
             -CompressionLevel Optimal
 
+      - name: Build offline and online installers
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          ./Distribution/Build_All_Preview10_Installers.ps1 `
+            -PackagePath artifacts/Comote-1.6.0-preview.10-win-x64.zip `
+            -InnoCompiler $iscc
+          & $iscc Distribution/Client/Client_Online_Installer.iss
+
+          Copy-Item `
+            artifacts/Comote-1.6.0-preview.10/Client/ComoteClient.exe `
+            artifacts/ComoteClient.exe
+          (Get-FileHash `
+            -Algorithm SHA256 `
+            artifacts/ComoteClient.exe).Hash |
+            Set-Content -NoNewline artifacts/ComoteClient.exe.sha256
       - name: Publish GitHub Release
         shell: pwsh
         env:
@@ -45,7 +60,15 @@ jobs:
             artifacts/ComoteManager-1.6.0-preview.10-win-x64.zip `
             artifacts/ComoteClient-1.6.0-preview.10-win-x64.zip `
             artifacts/Comote-1.6.0-preview.10-win-x64.zip `
+            artifacts/installers/ComoteManager_Setup_1.6.0-preview.10_Offline.exe `
+            artifacts/installers/ComoteClient_Setup_1.6.0-preview.10_Offline.exe `
+            artifacts/installers/ComoteClient_Setup_1.6.0-preview.10_Online.exe `
+            artifacts/ComoteClient.exe `
+            artifacts/ComoteClient.exe.sha256 `
             --title "Comote 1.6.0 Preview 10" `
             --notes "Central account mode by default, unique device identity for duplicate PC names, improved remote input delivery, and shared device lists for managers signed in to the same account."
+
+
+
 
 

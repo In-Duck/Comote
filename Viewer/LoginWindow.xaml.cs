@@ -1,5 +1,6 @@
 using System;
 using System.Net.Http;
+using System.Diagnostics;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
@@ -31,6 +32,13 @@ namespace Viewer
 
             _settings = AppSettings.Load();
             LoadSavedCredentials();
+            Loaded += (_, _) =>
+            {
+                if (string.IsNullOrWhiteSpace(txtEmail.Text))
+                    txtEmail.Focus();
+                else
+                    txtPassword.Focus();
+            };
 
             var configurationErrors = _settings.GetConfigurationErrors();
             if (configurationErrors.Count > 0)
@@ -56,7 +64,8 @@ namespace Viewer
         private async void btnLogin_Click(object sender, RoutedEventArgs e)
         {
             btnLogin.IsEnabled = false;
-            lblStatus.Text = "로그인 중...";
+            statusPanel.Visibility = Visibility.Visible;
+            lblStatus.Text = "계정 정보를 확인하고 있습니다...";
             lblStatus.Foreground = System.Windows.Media.Brushes.LightBlue;
 
             var email = txtEmail.Text.Trim();
@@ -73,7 +82,7 @@ namespace Viewer
                 var result = await SignInWithEmailPassword(email, password);
                 if (result == null)
                 {
-                    lblStatus.Text = "로그인에 실패했습니다. 계정 정보를 확인해 주세요.";
+                    lblStatus.Text = "로그인하지 못했습니다. 이메일 인증 여부와 비밀번호를 확인해 주세요.";
                     lblStatus.Foreground = System.Windows.Media.Brushes.Red;
                     return;
                 }
@@ -90,9 +99,9 @@ namespace Viewer
                 DialogResult = true;
                 Close();
             }
-            catch (Exception ex)
+            catch
             {
-                lblStatus.Text = "로그인 오류: " + ex.Message;
+                lblStatus.Text = "인증 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.";
                 lblStatus.Foreground = System.Windows.Media.Brushes.Red;
             }
             finally
@@ -101,6 +110,23 @@ namespace Viewer
             }
         }
 
+        private void CreateAccount_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "https://kymote.vercel.app/login",
+                    UseShellExecute = true,
+                });
+            }
+            catch
+            {
+                statusPanel.Visibility = Visibility.Visible;
+                lblStatus.Text =
+                    "브라우저를 열 수 없습니다. kymote.vercel.app/login에 접속해 주세요.";
+            }
+        }
         private async Task<(string Token, string UserId)?> SignInWithEmailPassword(
             string email,
             string password)
@@ -131,3 +157,5 @@ namespace Viewer
         }
     }
 }
+
+

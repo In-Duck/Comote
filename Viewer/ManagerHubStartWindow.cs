@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 
@@ -20,7 +20,7 @@ namespace Viewer
             ResizeMode = ResizeMode.NoResize;
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             Background = new SolidColorBrush(Color.FromRgb(10, 10, 10));
-            Foreground = new SolidColorBrush(Color.FromRgb(0, 255, 65));
+            Foreground = new SolidColorBrush(Color.FromRgb(34, 197, 94));
 
             var root = new StackPanel { Margin = new Thickness(32) };
             Content = root;
@@ -60,7 +60,7 @@ namespace Viewer
                     "Manager 공유기에서 위 TCP 포트 하나만 이 PC로 " +
                     "포트포워딩합니다. Client 측 포트포워딩은 필요 없습니다.",
                 TextWrapping = TextWrapping.Wrap,
-                Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)),
+                Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)),
                 Margin = new Thickness(0, 0, 0, 18),
             });
 
@@ -110,4 +110,5 @@ namespace Viewer
         }
     }
 }
+
 

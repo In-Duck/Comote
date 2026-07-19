@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Media;
 
 namespace Viewer
@@ -14,7 +14,7 @@ namespace Viewer
             _statusText.Text =
                 $"Client {_lanHost}:{_lanPort}에 직접 연결 중...";
             _statusText.Foreground = new SolidColorBrush(
-                Color.FromRgb(255, 176, 0));
+                Color.FromRgb(56, 189, 248));
             _statusText.Visibility = Visibility.Visible;
             _statsOverlay.Visibility = Visibility.Collapsed;
 
@@ -61,3 +61,4 @@ namespace Viewer
         }
     }
 }
+

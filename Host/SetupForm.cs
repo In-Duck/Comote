@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -33,15 +33,15 @@ namespace Host
         public SetupForm()
         {
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
-            Text = "KYMOTE 호스트 설정";
+            Text = "Comote Client 설정";
             Size = new Size(400, 380); // Slightly taller for better spacing
             StartPosition = FormStartPosition.CenterScreen;
-            FormBorderStyle = FormBorderStyle.None; // Borderless
+            FormBorderStyle = FormBorderStyle.FixedDialog; // Borderless
             MaximizeBox = false;
             MinimizeBox = false;
-            BackColor = Color.FromArgb(5, 5, 5); // Black
-            ForeColor = Color.FromArgb(255, 176, 0); // Amber
-            Font = new Font("Consolas", 10);
+            BackColor = Color.FromArgb(11, 18, 32); // Black
+            ForeColor = Color.FromArgb(248, 250, 252); // Amber
+            Font = new Font("Segoe UI", 10);
             Padding = new Padding(1); // Border
 
             // Dragging
@@ -53,7 +53,7 @@ namespace Host
                 ForeColor = Color.Red,
                 BackColor = Color.Transparent,
                 Cursor = Cursors.Hand,
-                Font = new Font("Consolas", 10, FontStyle.Bold)
+                Font = new Font("Segoe UI", 10, FontStyle.Bold)
             };
             _closeBtn.FlatAppearance.BorderSize = 0;
             _closeBtn.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
@@ -66,9 +66,9 @@ namespace Host
             // 타이틀
             var titleLabel = new Label
             {
-                Text = "KYMOTE :: SETUP",
-                Font = new Font("Consolas", 16, FontStyle.Bold),
-                ForeColor = Color.FromArgb(255, 176, 0), // Amber
+                Text = "Client 초기 설정",
+                Font = new Font("Segoe UI", 16, FontStyle.Bold),
+                ForeColor = Color.FromArgb(56, 189, 248), // Amber
                 Location = new Point(20, 15),
                 AutoSize = true
             };
@@ -80,7 +80,7 @@ namespace Host
                 Text = "시스템 식별명 (PC Name)",
                 Location = new Point(20, 60),
                 AutoSize = true,
-                ForeColor = Color.Gray
+                ForeColor = Color.FromArgb(148, 163, 184)
             };
             Controls.Add(nameLabel);
 
@@ -89,10 +89,10 @@ namespace Host
                 Text = Environment.MachineName,
                 Location = new Point(20, 85),
                 Size = new Size(360, 30),
-                BackColor = Color.FromArgb(20, 20, 20),
-                ForeColor = Color.White,
+                BackColor = Color.FromArgb(248, 250, 252),
+                ForeColor = Color.FromArgb(15, 23, 42),
                 BorderStyle = BorderStyle.FixedSingle,
-                Font = new Font("Consolas", 11)
+                Font = new Font("Segoe UI", 11)
             };
             Controls.Add(_nameBox);
 
@@ -102,7 +102,7 @@ namespace Host
                 Text = "직접 연결 암호 (최소 8자, 12자 이상 권장)",
                 Location = new Point(20, 125),
                 AutoSize = true,
-                ForeColor = Color.Gray
+                ForeColor = Color.FromArgb(148, 163, 184)
             };
             Controls.Add(pwdLabel);
 
@@ -110,10 +110,10 @@ namespace Host
             {
                 Location = new Point(20, 150),
                 Size = new Size(360, 30),
-                BackColor = Color.FromArgb(20, 20, 20),
-                ForeColor = Color.White,
+                BackColor = Color.FromArgb(248, 250, 252),
+                ForeColor = Color.FromArgb(15, 23, 42),
                 BorderStyle = BorderStyle.FixedSingle,
-                Font = new Font("Consolas", 11),
+                Font = new Font("Segoe UI", 11),
                 UseSystemPasswordChar = true
             };
             Controls.Add(_passwordBox);
@@ -124,7 +124,7 @@ namespace Host
                 Text = "캡처 대상 모니터",
                 Location = new Point(20, 190),
                 AutoSize = true,
-                ForeColor = Color.Gray
+                ForeColor = Color.FromArgb(148, 163, 184)
             };
             Controls.Add(monLabel);
 
@@ -133,9 +133,9 @@ namespace Host
                 Location = new Point(20, 215),
                 Size = new Size(360, 30),
                 DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = Color.FromArgb(20, 20, 20),
-                ForeColor = Color.White,
-                Font = new Font("Consolas", 10),
+                BackColor = Color.FromArgb(248, 250, 252),
+                ForeColor = Color.FromArgb(15, 23, 42),
+                Font = new Font("Segoe UI", 10),
                 FlatStyle = FlatStyle.Flat
             };
             Controls.Add(_monitorCombo);
@@ -158,21 +158,19 @@ namespace Host
             // 시작 버튼
             var startBtn = new Button
             {
-                Text = "[ 시스템 가동 시작 ]",
+                Text = "설정 저장하고 시작",
                 Location = new Point(20, 310),
                 Size = new Size(360, 45),
-                BackColor = Color.Transparent,
-                ForeColor = Color.FromArgb(0, 255, 65), // Phosphor Green
+                BackColor = Color.FromArgb(59, 130, 246),
+                ForeColor = Color.White, // Phosphor Green
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Consolas", 12, FontStyle.Bold),
+                Font = new Font("Segoe UI", 11, FontStyle.Bold),
                 Cursor = Cursors.Hand
             };
-            startBtn.FlatAppearance.BorderColor = Color.FromArgb(0, 255, 65);
+            startBtn.FlatAppearance.BorderColor = Color.FromArgb(59, 130, 246);
             startBtn.FlatAppearance.BorderSize = 1;
-            startBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(0, 255, 65);
+            startBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(37, 99, 235);
             
-            startBtn.MouseEnter += (s, e) => { startBtn.ForeColor = Color.Black; };
-            startBtn.MouseLeave += (s, e) => { startBtn.ForeColor = Color.FromArgb(0, 255, 65); };
 
             startBtn.Click += (s, e) =>
             {
@@ -187,8 +185,8 @@ namespace Host
 
                 DialogResult = DialogResult.OK;
                 Close();
-            Controls.Add(startBtn);
             };
+            Controls.Add(startBtn);
 
             AcceptButton = startBtn;
         }
@@ -200,3 +198,5 @@ namespace Host
         }
     }
 }
+
+
