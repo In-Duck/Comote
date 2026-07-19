@@ -127,13 +127,19 @@ namespace Viewer
                     "브라우저를 열 수 없습니다. kymote.vercel.app/login에 접속해 주세요.";
             }
         }
+        private static string ToAccountEmail(string accountId)
+        {
+            var normalized = accountId.Trim().ToLowerInvariant();
+            return $"{normalized}@accounts.kymote.app";
+        }
+
         private async Task<(string Token, string UserId)?> SignInWithEmailPassword(
-            string email,
+            string accountId,
             string password)
         {
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
             var url = $"{_settings.SupabaseUrl.TrimEnd('/')}/auth/v1/token?grant_type=password";
-            var body = new { email, password };
+            var body = new { email = ToAccountEmail(accountId), password };
             using var content = new StringContent(
                 JsonConvert.SerializeObject(body),
                 Encoding.UTF8,

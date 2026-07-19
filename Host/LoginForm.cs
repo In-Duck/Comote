@@ -115,9 +115,9 @@ namespace Host
             };
             card.Controls.Add(subtitle);
 
-            card.Controls.Add(CreateFieldLabel("이메일", 91));
+            card.Controls.Add(CreateFieldLabel("ID", 91));
             _emailTextBox = CreateInput(113);
-            _emailTextBox.PlaceholderText = "name@example.com";
+            _emailTextBox.PlaceholderText = "Comote account ID";
             card.Controls.Add(_emailTextBox);
 
             card.Controls.Add(CreateFieldLabel("비밀번호", 166));
@@ -336,8 +336,14 @@ namespace Host
             }
         }
 
+        private static string ToAccountEmail(string accountId)
+        {
+            var normalized = accountId.Trim().ToLowerInvariant();
+            return $"{normalized}@accounts.kymote.app";
+        }
+
         private async Task<(string AccessToken, string RefreshToken, string UserId)?>
-            SignInWithEmailPassword(string email, string password)
+            SignInWithEmailPassword(string accountId, string password)
         {
             using var client = new HttpClient
             {
@@ -347,7 +353,7 @@ namespace Host
                 $"{_settings.SupabaseUrl.TrimEnd('/')}/auth/v1/token" +
                 "?grant_type=password";
             using var content = new StringContent(
-                JsonConvert.SerializeObject(new { email, password }),
+                JsonConvert.SerializeObject(new { email = ToAccountEmail(accountId), password }),
                 Encoding.UTF8,
                 "application/json");
             client.DefaultRequestHeaders.Add(

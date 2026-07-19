@@ -41,10 +41,10 @@
                     <TextBlock Text="계정 로그인" FontSize="25" FontWeight="Bold"/>
                     <TextBlock Text="Client에 등록한 것과 동일한 계정을 입력하세요."
                                Foreground="#94A3B8" FontSize="13" Margin="0,7,0,24"/>
-                    <TextBlock Text="이메일" FontWeight="SemiBold" Foreground="#CBD5E1" Margin="0,0,0,8"/>
+                    <TextBlock Text="ID" FontWeight="SemiBold" Foreground="#CBD5E1" Margin="0,0,0,8"/>
                     <TextBox x:Name="txtEmail" Height="46" FontSize="14"
-                             AutomationProperties.Name="이메일"
-                             ToolTip="가입할 때 사용한 이메일 주소"/>
+                             AutomationProperties.Name="ID"
+                             ToolTip="Comote account ID"/>
                     <TextBlock Text="비밀번호" FontWeight="SemiBold"
                                Foreground="#CBD5E1" Margin="0,18,0,8"/>
                     <PasswordBox x:Name="txtPassword" Height="46" FontSize="14"

@@ -5,10 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createClient, isSupabaseConfigured } from "@/utils/supabase/client";
 
+const accountEmail = (accountId: string) =>
+  `${accountId.trim().toLowerCase()}@accounts.kymote.app`;
+
 function friendlyAuthError(message: string) {
-  if (message === "Invalid login credentials") return "이메일 또는 비밀번호를 확인해 주세요.";
-  if (message.includes("Email rate limit exceeded")) return "인증 메일을 너무 자주 요청했습니다. 잠시 후 다시 시도해 주세요.";
-  if (message.includes("Token has expired") || message.includes("otp_expired")) return "인증번호가 만료되었습니다. 새 인증번호를 받아 주세요.";
+  if (message === "Invalid login credentials") return "\uc544\uc774\ub514 \ub610\ub294 \ube44\ubc00\ubc88\ud638\ub97c \ud655\uc778\ud574 \uc8fc\uc138\uc694.";
+  if (message.includes("already registered")) return "\uc774\ubbf8 \uc0ac\uc6a9 \uc911\uc778 \uc544\uc774\ub514\uc785\ub2c8\ub2e4.";
   return message;
 }
 
@@ -16,10 +18,8 @@ export default function LoginPanel() {
   const router = useRouter();
   const configured = isSupabaseConfigured();
   const supabase = configured ? createClient() : null;
-  const [email, setEmail] = useState("");
+  const [accountId, setAccountId] = useState("");
   const [password, setPassword] = useState("");
-  const [otp, setOtp] = useState("");
-  const [verificationEmail, setVerificationEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [message, setMessage] = useState("");
@@ -27,107 +27,51 @@ export default function LoginPanel() {
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!supabase) return;
+    const normalizedId = accountId.trim();
+    if (!/^[a-zA-Z0-9._-]{4,32}$/.test(normalizedId)) {
+      setMessage("\uc544\uc774\ub514\ub294 \uc601\ubb38, \uc22b\uc790, \ub9c8\uce68\ud45c, \ubc11\uc904, \ud558\uc774\ud508\uc73c\ub85c 4~32\uc790\uae4c\uc9c0 \uc0ac\uc6a9\ud560 \uc218 \uc788\uc2b5\ub2c8\ub2e4.");
+      return;
+    }
     setLoading(true);
     setMessage("");
     try {
-      if (verificationEmail) {
-        const { error } = await supabase.auth.verifyOtp({
-          email: verificationEmail,
-          token: otp.trim(),
-          type: "signup",
-        });
-        if (error) {
-          setMessage(friendlyAuthError(error.message));
-        } else {
-          router.push("/dashboard");
-          router.refresh();
-        }
-        return;
-      }
-
+      const email = accountEmail(normalizedId);
       const result = mode === "login"
         ? await supabase.auth.signInWithPassword({ email, password })
-        : await supabase.auth.signUp({
-            email,
-            password,
-            options: { emailRedirectTo: window.location.origin },
-          });
-
+        : await supabase.auth.signUp({ email, password });
       if (result.error) {
         setMessage(friendlyAuthError(result.error.message));
-      } else if (mode === "signup") {
-        setVerificationEmail(email);
-        setMessage("메일로 전송된 6자리 인증번호를 입력해 주세요.");
+      } else if (mode === "signup" && !result.data.session) {
+        setMessage("\uc989\uc2dc \uac00\uc785 \uc124\uc815\uc774 \uc544\uc9c1 \uc801\uc6a9\ub418\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4.");
       } else {
         router.push("/dashboard");
         router.refresh();
       }
     } catch {
-      setMessage("계정 서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.");
+      setMessage("\uacc4\uc815 \uc11c\ubc84\uc5d0 \uc5f0\uacb0\ud560 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4. \uc7a0\uc2dc \ud6c4 \ub2e4\uc2dc \uc2dc\ub3c4\ud574 \uc8fc\uc138\uc694.");
     } finally {
       setLoading(false);
     }
-  }
-
-  async function resendOtp() {
-    if (!supabase || !verificationEmail) return;
-    setLoading(true);
-    setMessage("");
-    try {
-      const { error } = await supabase.auth.resend({
-        type: "signup",
-        email: verificationEmail,
-      });
-      setMessage(error ? friendlyAuthError(error.message) : "새 인증번호를 보냈습니다.");
-    } catch {
-      setMessage("인증번호를 다시 보내지 못했습니다. 잠시 후 다시 시도해 주세요.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function resetVerification() {
-    setVerificationEmail("");
-    setOtp("");
-    setMessage("");
   }
 
   return (
     <main className="grid min-h-screen bg-[#07111f] text-slate-100 lg:grid-cols-2">
       <section className="hidden border-r border-white/8 bg-[#0b1828] p-12 lg:flex lg:flex-col lg:justify-between">
         <Link href="/" className="flex items-center gap-3 text-lg font-bold"><span className="grid h-9 w-9 place-items-center rounded-xl bg-cyan-400 text-[#07111f]">C</span>Comote</Link>
-        <div><p className="text-sm font-medium text-cyan-300">하나의 계정, 모든 PC</p><h1 className="mt-4 text-5xl font-bold leading-tight">어디서 로그인해도<br />내 PC가 그대로</h1><p className="mt-5 max-w-md leading-7 text-slate-400">클라이언트와 매니저에서 같은 계정을 사용하면 등록된 PC 목록과 상태가 자동으로 동기화됩니다.</p></div>
+        <div><p className="text-sm font-medium text-cyan-300">&#54616;&#45208;&#51032; &#44228;&#51221;, &#47784;&#46304; PC</p><h1 className="mt-4 text-5xl font-bold leading-tight">&#50612;&#46356;&#49436; &#47196;&#44536;&#51064;&#54644;&#46020;<br />&#45236; PC&#44032; &#44536;&#45824;&#47196;</h1><p className="mt-5 max-w-md leading-7 text-slate-400">&#53364;&#46972;&#51060;&#50616;&#53944;&#50752; &#47588;&#45768;&#51200;&#50640;&#49436; &#44057;&#51008; &#50500;&#51060;&#46356;&#47484; &#49324;&#50857;&#54616;&#47732; &#46321;&#47197;&#46108; PC &#47785;&#47197;&#44284; &#49345;&#53468;&#44032; &#51088;&#46041;&#51004;&#47196; &#46041;&#44592;&#54868;&#46121;&#45768;&#45796;.</p></div>
         <p className="text-xs text-slate-600">Comote Remote Fleet</p>
       </section>
       <section className="flex items-center justify-center p-6">
         <form onSubmit={submit} className="w-full max-w-md rounded-3xl border border-white/10 bg-[#0b1828] p-8 shadow-2xl">
           <Link href="/" className="mb-8 flex items-center gap-3 font-bold lg:hidden"><span className="grid h-9 w-9 place-items-center rounded-xl bg-cyan-400 text-[#07111f]">C</span>Comote</Link>
-          <h2 className="text-2xl font-semibold">{verificationEmail ? "이메일 인증" : mode === "login" ? "계정 로그인" : "새 계정 만들기"}</h2>
-          <p className="mt-2 text-sm text-slate-400">{verificationEmail ? <><span className="text-slate-200">{verificationEmail}</span>로 인증번호를 보냈습니다.</> : "매니저와 클라이언트에서 동일한 계정을 사용하세요."}</p>
-          {!configured && <div className="mt-6 rounded-xl border border-amber-300/20 bg-amber-300/10 p-4 text-sm text-amber-200">계정 서버 연결 정보가 아직 설정되지 않았습니다.</div>}
-
-          {verificationEmail ? (
-            <label className="mt-7 block text-sm text-slate-300">6자리 인증번호
-              <input autoFocus type="text" required inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))} className="mt-2 w-full rounded-xl border border-white/10 bg-[#07111f] px-4 py-3 text-center text-2xl tracking-[0.35em] outline-none focus:border-cyan-300" placeholder="000000" />
-            </label>
-          ) : (
-            <>
-              <label className="mt-7 block text-sm text-slate-300">이메일<input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-[#07111f] px-4 py-3 outline-none focus:border-cyan-300" placeholder="name@example.com" /></label>
-              <label className="mt-4 block text-sm text-slate-300">비밀번호<input type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-[#07111f] px-4 py-3 outline-none focus:border-cyan-300" placeholder="8자 이상" /></label>
-            </>
-          )}
-
+          <h2 className="text-2xl font-semibold">{mode === "login" ? "\uacc4\uc815 \ub85c\uadf8\uc778" : "\uc0c8 \uacc4\uc815 \ub9cc\ub4e4\uae30"}</h2>
+          <p className="mt-2 text-sm text-slate-400">&#51064;&#51613; &#51208;&#52264; &#50630;&#51060; &#51593;&#49884; &#44032;&#51077;&#46104;&#45716; &#53580;&#49828;&#53944; &#47784;&#46300;&#51077;&#45768;&#45796;.</p>
+          {!configured && <div className="mt-6 rounded-xl border border-amber-300/20 bg-amber-300/10 p-4 text-sm text-amber-200">&#44228;&#51221; &#49436;&#48260; &#50672;&#44208; &#51221;&#48372;&#44032; &#50500;&#51649; &#49444;&#51221;&#46104;&#51648; &#50506;&#50520;&#49845;&#45768;&#45796;.</div>}
+          <label className="mt-7 block text-sm text-slate-300">&#50500;&#51060;&#46356;<input autoCapitalize="none" autoComplete="username" type="text" required minLength={4} maxLength={32} value={accountId} onChange={(e) => setAccountId(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-[#07111f] px-4 py-3 outline-none focus:border-cyan-300" placeholder="ID (4-32 characters)" /></label>
+          <label className="mt-4 block text-sm text-slate-300">&#48708;&#48128;&#48264;&#54840;<input type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} className="mt-2 w-full rounded-xl border border-white/10 bg-[#07111f] px-4 py-3 outline-none focus:border-cyan-300" placeholder="8+ characters" /></label>
           {message && <p className="mt-4 rounded-xl bg-white/5 p-3 text-sm text-slate-300">{message}</p>}
-          <button disabled={!configured || loading || Boolean(verificationEmail && otp.length !== 6)} className="mt-6 w-full rounded-xl bg-cyan-400 px-5 py-3 font-semibold text-[#07111f] disabled:cursor-not-allowed disabled:opacity-40">{loading ? "처리 중..." : verificationEmail ? "인증 완료" : mode === "login" ? "로그인" : "회원가입"}</button>
-
-          {verificationEmail ? (
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <button type="button" disabled={loading} onClick={resendOtp} className="rounded-xl px-3 py-3 text-sm text-cyan-300 hover:bg-white/5 disabled:opacity-40">인증번호 다시 받기</button>
-              <button type="button" onClick={resetVerification} className="rounded-xl px-3 py-3 text-sm text-slate-400 hover:bg-white/5">이메일 변경</button>
-            </div>
-          ) : (
-            <button type="button" onClick={() => { setMode(mode === "login" ? "signup" : "login"); setMessage(""); }} className="mt-3 w-full rounded-xl px-5 py-3 text-sm text-slate-400 hover:bg-white/5">{mode === "login" ? "처음이신가요? 계정 만들기" : "이미 계정이 있나요? 로그인"}</button>
-          )}
+          <button disabled={!configured || loading} className="mt-6 w-full rounded-xl bg-cyan-400 px-5 py-3 font-semibold text-[#07111f] disabled:cursor-not-allowed disabled:opacity-40">{loading ? "\ucc98\ub9ac \uc911..." : mode === "login" ? "\ub85c\uadf8\uc778" : "\ubc14\ub85c \uac00\uc785"}</button>
+          <button type="button" onClick={() => { setMode(mode === "login" ? "signup" : "login"); setMessage(""); }} className="mt-3 w-full rounded-xl px-5 py-3 text-sm text-slate-400 hover:bg-white/5">{mode === "login" ? "\ud14c\uc2a4\ud2b8 \uacc4\uc815 \ub9cc\ub4e4\uae30" : "\uc774\ubbf8 \uacc4\uc815\uc774 \uc788\ub098\uc694? \ub85c\uadf8\uc778"}</button>
         </form>
       </section>
     </main>
