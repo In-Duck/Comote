@@ -1,9 +1,15 @@
 import { createServerClient } from '@supabase/ssr'
 import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
+import { publicSupabaseConfig } from './config'
 
 function requireEnvironmentVariable(name: string): string {
-    const value = process.env[name]
+    const publicConfig = publicSupabaseConfig()
+    const value = name === 'NEXT_PUBLIC_SUPABASE_URL'
+        ? publicConfig.url
+        : name === 'NEXT_PUBLIC_SUPABASE_ANON_KEY'
+            ? publicConfig.key
+            : process.env[name]
     if (!value) {
         throw new Error(`Missing required environment variable: ${name}`)
     }

@@ -1,9 +1,8 @@
 
 import { createBrowserClient } from '@supabase/ssr'
+import { publicSupabaseConfig } from './config'
 
-// Supabase 환경변수가 설정되지 않았을 때 크래시 방지
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ''
+const { url: supabaseUrl, key: supabaseAnonKey } = publicSupabaseConfig()
 
 export function isSupabaseConfigured(): boolean {
     return supabaseUrl.startsWith('http://') || supabaseUrl.startsWith('https://')

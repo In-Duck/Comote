@@ -20,13 +20,27 @@ export default function LoginPanel() {
     if (!supabase) return;
     setLoading(true);
     setMessage("");
-    const result = mode === "login"
-      ? await supabase.auth.signInWithPassword({ email, password })
-      : await supabase.auth.signUp({ email, password });
-    if (result.error) setMessage(result.error.message);
-    else if (mode === "signup") setMessage("가입 확인 메일을 확인해 주세요.");
-    else { router.push("/dashboard"); router.refresh(); }
-    setLoading(false);
+    try {
+      const result = mode === "login"
+        ? await supabase.auth.signInWithPassword({ email, password })
+        : await supabase.auth.signUp({ email, password });
+
+      if (result.error) {
+        const friendlyMessage = result.error.message === "Invalid login credentials"
+          ? "이메일 또는 비밀번호를 확인해 주세요."
+          : result.error.message;
+        setMessage(friendlyMessage);
+      } else if (mode === "signup") {
+        setMessage("가입 확인 메일을 확인해 주세요.");
+      } else {
+        router.push("/dashboard");
+        router.refresh();
+      }
+    } catch {
+      setMessage("계정 서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요.");
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
