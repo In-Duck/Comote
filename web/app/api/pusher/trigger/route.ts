@@ -1,55 +1,81 @@
-
 import { createClient } from '@/utils/supabase/server'
+import {
+    isRecord,
+    parsePusherChannel,
+    userOwnsHost,
+} from '@/utils/pusher-authorization'
 import { NextResponse } from 'next/server'
 import Pusher from 'pusher'
 
-const pusher = new Pusher({
-    appId: process.env.PUSHER_APP_ID!,
-    key: process.env.NEXT_PUBLIC_PUSHER_APP_KEY!,
-    secret: process.env.PUSHER_SECRET!,
-    cluster: process.env.NEXT_PUBLIC_PUSHER_CLUSTER!,
-    useTLS: true,
-})
+const maxRequestBytes = 64 * 1024
+
+function createPusher(): Pusher {
+    const appId = process.env.PUSHER_APP_ID
+    const key = process.env.NEXT_PUBLIC_PUSHER_APP_KEY
+    const secret = process.env.PUSHER_SECRET
+    const cluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER
+
+    if (!appId || !key || !secret || !cluster) {
+        throw new Error('Pusher server environment is not configured')
+    }
+
+    return new Pusher({ appId, key, secret, cluster, useTLS: true })
+}
 
 export async function POST(request: Request) {
-    const supabase = await createClient()
-
-    // 1. Verify JWT
-    const authHeader = request.headers.get('Authorization')
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return NextResponse.json({ error: 'Missing Authorization Token' }, { status: 401 })
-    }
-    const token = authHeader.substring(7)
-    const { data: { user }, error } = await supabase.auth.getUser(token)
-
-    if (error || !user) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    // 2. Parse Trigger params
-    const body = await request.json()
-    const { channel, event, data } = body
-
-    if (!channel || !event || !data) {
-        return NextResponse.json({ error: 'Missing channel, event, or data' }, { status: 400 })
-    }
-
-    // 3. Validate channel & event (보안: 허용된 채널/이벤트만 전송 가능)
-    const allowedPrefixes = ['private-control-', 'private-viewer-']
-    if (!allowedPrefixes.some(prefix => channel.startsWith(prefix))) {
-        return NextResponse.json({ error: 'Forbidden channel' }, { status: 403 })
-    }
-
-    const allowedEvents = ['signal']
-    if (!allowedEvents.includes(event)) {
-        return NextResponse.json({ error: 'Forbidden event' }, { status: 403 })
-    }
-
-    // 4. Trigger Event
     try {
-        await pusher.trigger(channel, event, data)
+        const contentLength = Number(request.headers.get('content-length') ?? '0')
+        if (contentLength > maxRequestBytes) {
+            return NextResponse.json({ error: 'Request too large' }, { status: 413 })
+        }
+
+        const authHeader = request.headers.get('authorization')
+        if (!authHeader?.startsWith('Bearer ')) {
+            return NextResponse.json({ error: 'Missing authorization token' }, { status: 401 })
+        }
+
+        const supabase = await createClient()
+        const { data: { user }, error } = await supabase.auth.getUser(authHeader.slice(7))
+        if (error || !user) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
+
+        const body: unknown = await request.json()
+        if (!isRecord(body)) {
+            return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
+        }
+
+        const { channel, event, data } = body
+        if (typeof channel !== 'string' || event !== 'signal' || !isRecord(data)) {
+            return NextResponse.json({ error: 'Invalid signal request' }, { status: 400 })
+        }
+
+        const target = parsePusherChannel(channel)
+        if (!target) {
+            return NextResponse.json({ error: 'Forbidden channel' }, { status: 403 })
+        }
+
+        if (target.kind === 'control') {
+            if (!(await userOwnsHost(authHeader.slice(7), user.id, target.hostId))) {
+                return NextResponse.json({ error: 'Host access denied' }, { status: 403 })
+            }
+        } else {
+            const sourceHostId = data.from
+            if (
+                typeof sourceHostId !== 'string' ||
+                !(await userOwnsHost(authHeader.slice(7), user.id, sourceHostId))
+            ) {
+                return NextResponse.json({ error: 'Signal source denied' }, { status: 403 })
+            }
+        }
+
+        await createPusher().trigger(channel, event, data)
         return NextResponse.json({ success: true })
-    } catch (e: any) {
-        return NextResponse.json({ error: e.message }, { status: 500 })
+    } catch (error: unknown) {
+        console.error('Pusher trigger failed', error)
+        return NextResponse.json(
+            { error: 'Signaling service unavailable' },
+            { status: 503 }
+        )
     }
 }

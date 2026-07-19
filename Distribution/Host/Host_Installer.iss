@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Comote Host"
-#define MyAppVersion "1.2.1"
+#define MyAppVersion "1.3.0"
 #define MyAppPublisher "Comote"
 #define MyAppURL "https://github.com/In-Duck/Comote"
 #define MyAppExeName "Host.exe"
@@ -41,7 +41,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 ; IMPORTANT: Adjust the path to where your published single-file EXE resides
-Source: "..\..\publish\Host-single-v1.2.2\Host.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\publish\Host-single\Host.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
@@ -52,10 +52,10 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 ; Install the service after files are copied
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--install"; Flags: runhidden waituntilterminated; StatusMsg: "Installing Comote Host Service..."
 ; Start the service
-Filename: "sc.exe"; Parameters: "start ComoteHost"; Flags: runhidden waituntilterminated; StatusMsg: "Starting Service..."
+Filename: "sc.exe"; Parameters: "start KymoteHost"; Flags: runhidden waituntilterminated; StatusMsg: "Starting Service..."
 
 [UninstallRun]
 ; Stop the service before uninstallation starts
-Filename: "sc.exe"; Parameters: "stop ComoteHost"; Flags: runhidden waituntilterminated; StatusMsg: "Stopping Service..."
+Filename: "sc.exe"; Parameters: "stop KymoteHost"; Flags: runhidden waituntilterminated; StatusMsg: "Stopping Service..."
 ; Remove the service
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--uninstall"; Flags: runhidden waituntilterminated; StatusMsg: "Removing Service..."

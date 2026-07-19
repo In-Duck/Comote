@@ -1,78 +1,54 @@
-using System;
+﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using Newtonsoft.Json;
 
 namespace Viewer
 {
-    /// <summary>
-    /// Viewer 환경 설정 값 저장/로드.
-    /// 설정 파일은 EXE 옆에 settings.json으로 저장됩니다.
-    /// </summary>
     public class AppSettings
     {
-        // === 원격제어 옵션 ===
-
-        /// <summary>출력프레임수: "최상"(60) / "상"(30) / "중"(20) / "하"(10)</summary>
         public string FrameRate { get; set; } = "상";
-
-        /// <summary>출력품질: "최상" / "상" / "중" / "하"</summary>
         public string Quality { get; set; } = "상";
-
-        /// <summary>클립보드 자동 동기화</summary>
         public bool AutoClipboard { get; set; } = true;
-
-        /// <summary>원격제어 창 최상단 유지</summary>
-        public bool AlwaysOnTop { get; set; } = false;
-
-        /// <summary>창 크기 및 위치 기억</summary>
+        public bool AlwaysOnTop { get; set; }
         public bool RememberWindowSize { get; set; } = true;
-
-        /// <summary>마우스 휠 민감도: "빠름" / "보통" / "느림"</summary>
         public string WheelSensitivity { get; set; } = "보통";
-
-        /// <summary>풀스크린 단축키 활성화</summary>
         public bool EnableFullscreenShortcut { get; set; } = true;
-
-        /// <summary>자동 절전모드 진입 방지</summary>
         public bool PreventSleep { get; set; } = true;
-
-        /// <summary>저장된 창 너비</summary>
         public double WindowWidth { get; set; } = 1200;
-
-        /// <summary>저장된 창 높이</summary>
         public double WindowHeight { get; set; } = 800;
+        public List<string> HostOrder { get; set; } = new();
 
-        /// <summary>호스트 목록 순서 (HostId 리스트)</summary>
-        public System.Collections.Generic.List<string> HostOrder { get; set; } = new System.Collections.Generic.List<string>();
-
-        // === 시그널링 설정 (Pusher) ===
-        public string PusherAppId { get; set; } = "2114862";
         public string PusherAppKey { get; set; } = "50ef3c55ccd8c468f604";
-        public string PusherSecret { get; set; } = "18c2f6cbcfe14071733b";
         public string PusherCluster { get; set; } = "ap3";
-        
-        // Supabase Settings
         public string SupabaseUrl { get; set; } = "https://nlodelehewbbniayzjuv.supabase.co";
         public string SupabaseAnonKey { get; set; } = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5sb2RlbGVoZXdiYm5pYXl6anV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExMzc1MjksImV4cCI6MjA4NjcxMzUyOX0.-r_qNDErJPWLma1i3wjXZmvzXAZUGtHHK-L3YMcZYb4";
         public string WebAuthUrl { get; set; } = "https://kymote.vercel.app/api/pusher/auth";
 
-        // === 파일 경로 ===
-        private static readonly string SettingsFilePath =
-            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.json");
+        public static string DataDirectory =>
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Comote", "Viewer");
 
-        /// <summary>설정 파일에서 로드. 실패 시 기본값 반환.</summary>
+        public static string SettingsFilePath => Path.Combine(DataDirectory, "settings.json");
+
         public static AppSettings Load()
         {
+            var settings = new AppSettings();
+
             try
             {
                 if (File.Exists(SettingsFilePath))
                 {
-                    string json = File.ReadAllText(SettingsFilePath);
-                    var settings = JsonConvert.DeserializeObject<AppSettings>(json);
-                    if (settings != null)
+                    var loaded = JsonConvert.DeserializeObject<AppSettings>(
+                        File.ReadAllText(SettingsFilePath));
+                    if (loaded != null)
                     {
-                        Console.WriteLine("[Settings] Loaded from file");
-                        return settings;
+                        var defaults = settings;
+                        if (string.IsNullOrWhiteSpace(loaded.PusherAppKey)) loaded.PusherAppKey = defaults.PusherAppKey;
+                        if (string.IsNullOrWhiteSpace(loaded.PusherCluster)) loaded.PusherCluster = defaults.PusherCluster;
+                        if (string.IsNullOrWhiteSpace(loaded.SupabaseUrl)) loaded.SupabaseUrl = defaults.SupabaseUrl;
+                        if (string.IsNullOrWhiteSpace(loaded.SupabaseAnonKey)) loaded.SupabaseAnonKey = defaults.SupabaseAnonKey;
+                        if (string.IsNullOrWhiteSpace(loaded.WebAuthUrl)) loaded.WebAuthUrl = defaults.WebAuthUrl;
+                        settings = loaded;
                     }
                 }
             }
@@ -80,18 +56,19 @@ namespace Viewer
             {
                 Console.WriteLine($"[Settings] Load error: {ex.Message}");
             }
-            Console.WriteLine("[Settings] Using defaults");
-            return new AppSettings();
+
+            ApplyEnvironmentOverrides(settings);
+            return settings;
         }
 
-        /// <summary>현재 설정을 파일에 저장.</summary>
         public void Save()
         {
             try
             {
-                string json = JsonConvert.SerializeObject(this, Formatting.Indented);
+                Directory.CreateDirectory(DataDirectory);
+                var json = JsonConvert.SerializeObject(this, Formatting.Indented);
                 File.WriteAllText(SettingsFilePath, json);
-                Console.WriteLine("[Settings] Saved");
+                Console.WriteLine($"[Settings] Saved to {SettingsFilePath}");
             }
             catch (Exception ex)
             {
@@ -99,7 +76,24 @@ namespace Viewer
             }
         }
 
-        // === 헬퍼: 프레임레이트 값 변환 ===
+        public IReadOnlyList<string> GetConfigurationErrors()
+        {
+            var errors = new List<string>();
+
+            if (!Uri.TryCreate(SupabaseUrl, UriKind.Absolute, out _))
+                errors.Add("SupabaseUrl");
+            if (string.IsNullOrWhiteSpace(SupabaseAnonKey))
+                errors.Add("SupabaseAnonKey");
+            if (string.IsNullOrWhiteSpace(PusherAppKey))
+                errors.Add("PusherAppKey");
+            if (string.IsNullOrWhiteSpace(PusherCluster))
+                errors.Add("PusherCluster");
+            if (!Uri.TryCreate(WebAuthUrl, UriKind.Absolute, out _))
+                errors.Add("WebAuthUrl");
+
+            return errors;
+        }
+
         public int GetTargetFps()
         {
             return FrameRate switch
@@ -112,7 +106,6 @@ namespace Viewer
             };
         }
 
-        // === 헬퍼: 품질 → 비트레이트 배율 ===
         public double GetQualityMultiplier()
         {
             return Quality switch
@@ -125,7 +118,6 @@ namespace Viewer
             };
         }
 
-        // === 헬퍼: 휠 민감도 배율 ===
         public double GetWheelMultiplier()
         {
             return WheelSensitivity switch
@@ -135,6 +127,22 @@ namespace Viewer
                 "느림" => 0.5,
                 _ => 1.0
             };
+        }
+
+        private static void ApplyEnvironmentOverrides(AppSettings settings)
+        {
+            SetIfPresent("COMOTE_PUSHER_APP_KEY", value => settings.PusherAppKey = value);
+            SetIfPresent("COMOTE_PUSHER_CLUSTER", value => settings.PusherCluster = value);
+            SetIfPresent("COMOTE_SUPABASE_URL", value => settings.SupabaseUrl = value.TrimEnd('/'));
+            SetIfPresent("COMOTE_SUPABASE_ANON_KEY", value => settings.SupabaseAnonKey = value);
+            SetIfPresent("COMOTE_WEB_AUTH_URL", value => settings.WebAuthUrl = value);
+        }
+
+        private static void SetIfPresent(string name, Action<string> setter)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            if (!string.IsNullOrWhiteSpace(value))
+                setter(value.Trim());
         }
     }
 }

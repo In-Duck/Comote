@@ -1,110 +1,38 @@
 @import "tailwindcss";
 
-@theme {
-  --font-mono: 'Share Tech Mono', monospace;
-  --color-primary: #ffb000;
-  --color-secondary: #00ff41;
-  --color-bg: #050505;
-
-  @keyframes scanline {
-    0% {
-      transform: translateY(-100%);
-    }
-
-    100% {
-      transform: translateY(100%);
-    }
-  }
-
-  @keyframes glitch {
-    0% {
-      transform: translate(0);
-    }
-
-    20% {
-      transform: translate(-2px, 2px);
-    }
-
-    40% {
-      transform: translate(-2px, -2px);
-    }
-
-    60% {
-      transform: translate(2px, 2px);
-    }
-
-    80% {
-      transform: translate(2px, -2px);
-    }
-
-    100% {
-      transform: translate(0);
-    }
-  }
+:root {
+  color-scheme: dark;
 }
 
-/* Import Font */
-@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
-
 @layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
   body {
-    background-color: #050505;
-    color: #ffb000;
-    font-family: 'Share Tech Mono', monospace;
+    margin: 0;
+    background: #07111f;
+    color: #e5eef8;
+    font-family: Inter, Pretendard, "Segoe UI", sans-serif;
     overflow-x: hidden;
+    text-rendering: optimizeLegibility;
   }
 }
 
 @layer utilities {
-  .scanlines {
-    background: linear-gradient(to bottom,
-        rgba(255, 255, 255, 0),
-        rgba(255, 255, 255, 0) 50%,
-        rgba(0, 0, 0, 0.2) 50%,
-        rgba(0, 0, 0, 0.2));
-    background-size: 100% 4px;
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    pointer-events: none;
-    z-index: 50;
-  }
-
-  .crt-flicker {
-    animation: opacity 0.1s infinite;
-  }
-
-  .text-glow {
-    text-shadow: 0 0 5px #ffb000, 0 0 10px #ffb000;
-  }
-
-  .border-glow {
-    box-shadow: 0 0 5px #ffb000, inset 0 0 5px #ffb000;
-  }
-
-  .btn-retro {
-    @apply px-8 py-3 text-xl font-bold uppercase transition-all duration-300 border-2 border-[#ffb000] text-[#ffb000] bg-transparent hover:bg-[#ffb000] hover:text-black hover:shadow-[0_0_20px_#ffb000];
-  }
-
-  .btn-retro-green {
-    @apply px-8 py-3 text-xl font-bold uppercase transition-all duration-300 border-2 border-[#00ff41] text-[#00ff41] bg-transparent hover:bg-[#00ff41] hover:text-black hover:shadow-[0_0_20px_#00ff41];
-  }
-
-  .glass-card {
-    @apply border border-[#ffb000]/30 bg-black/50 backdrop-blur-md;
-  }
-
   .btn-primary {
-    @apply px-6 py-3 font-bold uppercase tracking-widest transition-all duration-300 bg-[#ffb000] text-black hover:bg-[#ffb000]/80 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply rounded-xl bg-cyan-400 px-6 py-3 font-semibold text-slate-950 transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .btn-secondary {
-    @apply px-6 py-3 font-bold uppercase tracking-widest transition-all duration-300 border border-[#ffb000]/50 text-[#ffb000]/80 bg-transparent hover:bg-[#ffb000]/10 hover:border-[#ffb000] disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply rounded-xl border border-slate-700 bg-slate-900/70 px-6 py-3 font-semibold text-slate-100 transition hover:border-cyan-400/50 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .input-field {
-    @apply w-full bg-black border border-[#ffb000]/30 text-[#ffb000] px-4 py-2 focus:outline-none focus:border-[#ffb000] placeholder-[#ffb000]/30;
+    @apply w-full rounded-xl border border-slate-700 bg-slate-950/70 px-4 py-3 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/15;
   }
 }

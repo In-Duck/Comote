@@ -30,7 +30,10 @@ namespace Host
         {
             // 앱 고유 임시 폴더 (재실행 시 재활용)
             string extractDir = Path.Combine(
-                Path.GetTempPath(), "Kymote_ffmpeg");
+                Path.GetTempPath(),
+                "Comote_ffmpeg",
+                $"{Assembly.GetExecutingAssembly().GetName().Name}-" +
+                $"{Assembly.GetExecutingAssembly().GetName().Version}");
             Directory.CreateDirectory(extractDir);
 
             // 버전 마커 파일로 이미 추출 여부 확인

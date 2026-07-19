@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -21,9 +21,15 @@ namespace Host
         private OpusEncoder? _opusEncoder;
         private WasapiLoopbackCapture? _audioCapture;
         private ScreenCapture _capture;
-        private InputSimulator _inputSimulator;
+        private readonly IInputBackend _inputBackend;
         private byte[]? _lastRawFrame;
         private bool _isStreaming;
+        public bool IsSessionActive =>
+            _isStreaming ||
+            _peerConnection?.connectionState is
+                RTCPeerConnectionState.connecting or
+                RTCPeerConnectionState.connected or
+                RTCPeerConnectionState.disconnected;
         private string? _remoteSocketId;
         private uint _timestamp = 0;
         private int _frameCount = 0;
@@ -39,6 +45,7 @@ namespace Host
         private const byte MSG_PING            = 0x21;
         private const byte MSG_PONG            = 0x22;
         private const byte MSG_CLIPBOARD       = 0x23;
+        private const byte MSG_INPUT_ACK       = 0x14;
 
         // 파일 전송 프로토콜
         private const byte MSG_FILE_START = 0x30;
@@ -81,10 +88,21 @@ namespace Host
 
         public event Action<string, object>? OnSignalReady;
 
-        public WebRTCManager(ScreenCapture capture, string? password = null)
+        public InputBackendStatus InputBackendStatus =>
+            _inputBackend.GetStatus();
+
+        public WebRTCManager(
+            ScreenCapture capture,
+            string? password = null,
+            IInputBackend? inputBackend = null)
         {
             _capture = capture;
-            _inputSimulator = new InputSimulator(capture.Width, capture.Height);
+            _inputBackend = inputBackend ??
+                new SendInputBackend(capture.Width, capture.Height);
+            if (_inputBackend is SendInputBackend sendInput)
+                sendInput.UpdateScreenBounds(
+                    capture.Left, capture.Top,
+                    capture.Width, capture.Height);
             _password = password;
             _currentAdapterIndex = capture.AdapterIndex;
             _currentOutputIndex = capture.OutputIndex;
@@ -96,6 +114,7 @@ namespace Host
             if (_peerConnection != null)
             {
                 Console.WriteLine("[WebRTC] Cleaning up previous connection for reconnect...");
+                _inputBackend.ReleaseAllInputs();
                 _isStreaming = false;
                 _peerConnection.close();
                 _peerConnection.Dispose();
@@ -129,10 +148,10 @@ namespace Host
             try 
             {
                 _videoEncoder.SetCodec(codecId, encoderName, encoderOpts);
-                _videoEncoder.InitialiseEncoder(codecId, _capture.Width, _capture.Height, 30);
+                _videoEncoder.InitialiseEncoder(codecId, _capture.Width, _capture.Height, 20);
                 
                 // 비트레이트 설정 (H.265/AV1은 압축 효율이 좋으므로 H.264와 동일 비트레이트에서도 화질 우수)
-                _videoEncoder.SetBitrate(20_000_000, null, null, null); // 20Mbps (Start)
+                _videoEncoder.SetBitrate(6_000_000, null, null, null);
             }
             catch (Exception ex)
             {
@@ -143,7 +162,7 @@ namespace Host
                     { "crf", "18" }
                 };
                 _videoEncoder.SetCodec(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, "libx264", fallbackOpts);
-                _videoEncoder.InitialiseEncoder(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, _capture.Width, _capture.Height, 30);
+                _videoEncoder.InitialiseEncoder(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, _capture.Width, _capture.Height, 20);
             }
 
             // SDP에 전송 코덱 명시 (SIPSorcery의 VideoFormat은 H264, VP8, VP9 만 기본 지원하므로 커스텀 페이로드 필요할 수 있음)
@@ -206,6 +225,7 @@ namespace Host
                 else if (state == RTCPeerConnectionState.failed ||
                          state == RTCPeerConnectionState.closed)
                 {
+                    _inputBackend.ReleaseAllInputs();
                     // failed/closed는 복구 불가 → 즉시 정리
                     _isStreaming = false;
                     StopAudioCapture();
@@ -223,6 +243,7 @@ namespace Host
                         if (_peerConnection?.connectionState == RTCPeerConnectionState.disconnected)
                         {
                             Console.WriteLine("[WebRTC] Not recovered, closing connection");
+                            _inputBackend.ReleaseAllInputs();
                             _isStreaming = false;
                             StopAudioCapture();
                             _peerConnection?.close();
@@ -239,6 +260,11 @@ namespace Host
                 {
                     _viewerInputChannel = channel;
                     channel.onmessage += (dc, protocol, data) => HandleInputMessage(dc, data);
+                    channel.onclose += () =>
+                    {
+                        _inputBackend.ReleaseAllInputs();
+                        _viewerInputChannel = null;
+                    };
                     Console.WriteLine("[WebRTC] Input DataChannel ready");
                 }
                 else if (channel.label == "file")
@@ -317,8 +343,9 @@ namespace Host
                     HandleFileMessage(dc, data);
                     break;
                 default:
-                    // 일반 입력 메시지 (마우스/키보드)
-                    _inputSimulator.ProcessMessage(data);
+                    _inputBackend.ProcessMessage(data);
+                    if (dc.readyState == RTCDataChannelState.open)
+                        dc.send(new byte[] { MSG_INPUT_ACK, data[0] });
                     break;
             }
         }
@@ -537,7 +564,12 @@ namespace Host
                     _capture = newCapture;
                     _currentAdapterIndex = adapterIndex;
                     _currentOutputIndex = outputIndex;
-                    _inputSimulator.UpdateScreenSize(_capture.Width, _capture.Height); // InputSimulator도 업데이트
+                    if (_inputBackend is SendInputBackend sendInput)
+                        sendInput.UpdateScreenBounds(
+                            _capture.Left, _capture.Top,
+                            _capture.Width, _capture.Height);
+                    else
+                        _inputBackend.UpdateScreenSize(_capture.Width, _capture.Height);
                 }
 
                 // 기존 캡처 리소스 해제
@@ -568,18 +600,10 @@ namespace Host
             };
 
             // 1. NVIDIA NVENC
-            // HEVC
-            if (IsEncoderAvailable("hevc_nvenc")) return (FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_HEVC, "hevc_nvenc", commonOpts);
             // H264
             if (IsEncoderAvailable("h264_nvenc")) return (FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, "h264_nvenc", commonOpts);
 
             // 2. Intel QSV
-            // HEVC
-            if (IsEncoderAvailable("hevc_qsv")) 
-            {
-                var qsvOpts = new System.Collections.Generic.Dictionary<string, string> { { "profile", "main" }, { "global_quality", "25" } };
-                return (FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_HEVC, "hevc_qsv", qsvOpts);
-            }
             if (IsEncoderAvailable("h264_qsv"))
             {
                 var qsvOpts = new System.Collections.Generic.Dictionary<string, string> { { "profile", "baseline" }, { "preset", "veryfast" } };
@@ -587,7 +611,6 @@ namespace Host
             }
 
             // 3. AMD AMF
-            if (IsEncoderAvailable("hevc_amf")) return (FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_HEVC, "hevc_amf", new System.Collections.Generic.Dictionary<string, string> { { "usage", "lowlatency" } });
             if (IsEncoderAvailable("h264_amf")) return (FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, "h264_amf", new System.Collections.Generic.Dictionary<string, string> { { "usage", "lowlatency" } });
 
             // 4. Software Fallback
@@ -787,7 +810,7 @@ namespace Host
                                         { "bf", "0" }
                                     };
                                     _videoEncoder.SetCodec(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, "libx264", fallbackOpts);
-                                    _videoEncoder.InitialiseEncoder(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, _capture.Width, _capture.Height, 30);
+                                    _videoEncoder.InitialiseEncoder(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, _capture.Width, _capture.Height, 20);
                                     Console.WriteLine("[Video] Successfully switched to libx264!");
                                     encodeFailCount = 0;
                                 }
@@ -964,10 +987,12 @@ namespace Host
 
         public void Dispose()
         {
+            _inputBackend.ReleaseAllInputs();
             _isStreaming = false;
             _clipboardTimer?.Dispose();
             _videoEncoder?.Dispose();
             _peerConnection?.Close("disposed");
+            _inputBackend.Dispose();
         }
     }
 }

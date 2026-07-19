@@ -16,7 +16,7 @@ using System.Linq;
 
 namespace Viewer
 {
-    public class MainWindow : Window
+    public partial class MainWindow : Window
     {
         // === 공용 필드 ===
         private SignalingClient? _signaling;
@@ -44,6 +44,9 @@ namespace Viewer
         private List<HostInfo> _currentHosts = new();
         private Button _listTabBtn = null!;
         private Button _gridTabBtn = null!;
+        private Border? _selectionMarquee;
+        private Point _selectionMarqueeStart;
+        private bool _isDrawingSelectionMarquee;
 
         // === 리모트 뷰 (영상 + 입력) ===
         private Grid _remoteGrid = null!;
@@ -81,15 +84,24 @@ namespace Viewer
         // === 인증 토큰 & 사용자 ID ===
         private string _accessToken;
         private string _userId;
+        private readonly bool _isDemoMode;
+        private readonly bool _isOfflineMode;
+        private System.Windows.Threading.DispatcherTimer? _pollTimer;
         
         // === 영구 호스트 저장소 ===
         private HostRepository? _hostRepo;
         private Dictionary<string, HostInfo> _persistentHosts = new();
 
-        public MainWindow(string accessToken, string userId)
+        public MainWindow(
+            string accessToken,
+            string userId,
+            bool demoMode = false,
+            bool offlineMode = false)
         {
             _accessToken = accessToken;
             _userId = userId;
+            _isDemoMode = demoMode;
+            _isOfflineMode = offlineMode;
             Console.WriteLine("[DEBUG] MainWindow constructor started");
 
             Title = "KYMOTE Viewer";
@@ -106,7 +118,8 @@ namespace Viewer
             WindowChrome.SetWindowChrome(this, chrome);
             
             // Try to load background from resources, fallback to dark gray
-            try { Background = (Brush)FindResource("WindowBackgroundBrush"); }
+            // Try to load background from resources, fallback to dark gray
+            try { Background = (Brush)FindResource("BrushBg"); }
             catch { Background = new SolidColorBrush(Color.FromRgb(18, 18, 18)); }
 
             // 설정 로드
@@ -139,17 +152,33 @@ namespace Viewer
             _keyboardHook.IsCapturing = false; // 로비에서는 비활성화
             _keyboardHook.Start(); // 훅 설치 (필수)
 
+            PreviewKeyDown += (_, args) =>
+            {
+                if (_remoteGrid.Visibility == Visibility.Visible ||
+                    !Keyboard.Modifiers.HasFlag(ModifierKeys.Control) ||
+                    args.Key != Key.A) return;
+                SelectAllHosts();
+                args.Handled = true;
+            };
+
             // 마우스 이벤트
             RegisterMouseEvents();
  
             // [무인 업데이트] 시작 시 최신 버전 체크
-            _ = AutoUpdater.CheckAndApplyUpdate();
+            if (!_isDemoMode && !_isOfflineMode)
+            {
+                _ = AutoUpdater.CheckAndApplyUpdate();
+            }
             SourceInitialized += MainWindow_SourceInitialized;
             Loaded += MainWindow_Loaded;
             
             // 포커스 관리
             Activated += (s, e) => UpdateInputCaptureState();
-            Deactivated += (s, e) => UpdateInputCaptureState();
+            Deactivated += (s, e) =>
+            {
+                ReleaseRemoteInputs();
+                UpdateInputCaptureState();
+            };
             Closed += (s, e) => _keyboardHook.Dispose();
         }
 
@@ -166,8 +195,9 @@ namespace Viewer
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(28) });
 
             // 전체 배경
-            try { grid.Background = (Brush)FindResource("WindowBackgroundBrush"); }
-            catch { grid.Background = new SolidColorBrush(Color.FromRgb(30, 30, 30)); }
+            grid.Background =
+                TryFindResource("WindowBackgroundBrush") as Brush ??
+                new SolidColorBrush(Color.FromRgb(30, 30, 30));
 
             // --- 상단 메뉴바 ---
             var menuBar = new Border
@@ -267,6 +297,9 @@ namespace Viewer
             _gridTabBtn = CreateTabButton("> 썸네일 뷰", false);
             _gridTabBtn.Click += (s, e) => SwitchLobbyTab(false);
             tabPanel.Children.Add(_gridTabBtn);
+            var operationsButton = CreateTabButton("> 작업 패널", false);
+            operationsButton.Click += (_, _) => ToggleOperationsPanel();
+            tabPanel.Children.Add(operationsButton);
             tabBar.Child = tabPanel;
             Grid.SetRow(tabBar, 1);
             grid.Children.Add(tabBar);
@@ -275,10 +308,12 @@ namespace Viewer
             WindowChrome.SetIsHitTestVisibleInChrome(_listTabBtn, true);
             WindowChrome.SetIsHitTestVisibleInChrome(_gridTabBtn, true);
 
-            // --- 메인 콘텐츠 영역 (ContentControl) ---
+            // --- 메인 콘텐츠와 우측 작업 패널 ---
             _mainContent = new ContentControl();
-            Grid.SetRow(_mainContent, 2);
-            grid.Children.Add(_mainContent);
+            var workspace = new Grid();
+            Grid.SetRow(workspace, 2);
+            grid.Children.Add(workspace);
+            AttachOperationsPanel(workspace);
 
             // --- 리스트 탭 (DataGrid) ---
             _listTab = new Grid();
@@ -294,7 +329,7 @@ namespace Viewer
                 RowBackground = new SolidColorBrush(Color.FromRgb(10, 10, 10)),
                 AlternatingRowBackground = new SolidColorBrush(Color.FromRgb(15, 15, 15)),
                 HorizontalGridLinesBrush = new SolidColorBrush(Color.FromRgb(40, 30, 0)),
-                SelectionMode = DataGridSelectionMode.Single,
+                SelectionMode = DataGridSelectionMode.Extended,
                 FontSize = 14,
                 FontFamily = new FontFamily("Consolas")
             };
@@ -308,6 +343,7 @@ namespace Viewer
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "해상도", Binding = new Binding("Resolution"), Width = 120 });
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "가동시간", Binding = new Binding("Uptime"), Width = 120 });
             _hostDataGrid.MouseDoubleClick += HostDataGrid_DoubleClick;
+            _hostDataGrid.SelectionChanged += (_, _) => UpdateThumbnailSelectionVisuals();
 
             // 우클릭 시 해당 행 선택 + 빈 영역 메뉴 차단
             _hostDataGrid.PreviewMouseRightButtonDown += (s, e) =>
@@ -315,7 +351,11 @@ namespace Viewer
                 var row = FindVisualParent<DataGridRow>(e.OriginalSource as DependencyObject);
                 if (row != null)
                 {
-                    _hostDataGrid.SelectedItem = row.Item;
+                    if (!row.IsSelected)
+                    {
+                        _hostDataGrid.UnselectAll();
+                        row.IsSelected = true;
+                    }
                 }
                 else
                 {
@@ -375,10 +415,25 @@ namespace Viewer
                 Background = new SolidColorBrush(Color.FromRgb(5,5,5))
             };
             _thumbnailPanel = new WrapPanel { Margin = new Thickness(0) };
-            _gridTab.Content = _thumbnailPanel;
+            var thumbnailSurface = new Grid();
+            thumbnailSurface.Children.Add(_thumbnailPanel);
+            _selectionMarquee = new Border
+            {
+                Visibility = Visibility.Collapsed,
+                IsHitTestVisible = false,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(0, 122, 204)),
+                BorderThickness = new Thickness(1),
+                Background = new SolidColorBrush(Color.FromArgb(55, 0, 122, 204)),
+            };
+            thumbnailSurface.Children.Add(_selectionMarquee);
+            _thumbnailPanel.PreviewMouseLeftButtonDown += OnThumbnailSurfaceMouseDown;
+            _thumbnailPanel.PreviewMouseMove += OnThumbnailSurfaceMouseMove;
+            _thumbnailPanel.PreviewMouseLeftButtonUp += OnThumbnailSurfaceMouseUp;
+            _gridTab.Content = thumbnailSurface;
             
             // 썸네일 패널 ContextMenu
             _gridTab.ContextMenu = contextMenu; 
+            ConfigureFleetContextMenu();
 
             // 초기 뷰 설정
             _mainContent.Content = _listTab; // 리스트 뷰 기본
@@ -743,9 +798,9 @@ namespace Viewer
         // ==========================================================
         private void UpdateLobbyUI(List<HostInfo> hosts)
         {
-            // [Fix] 중복 호스트 제거 (HostName 기준 최신 항목만 유지)
+            // 장치 ID 기준으로만 중복 제거: 같은 표시 이름의 PC는 모두 유지
             var uniqueHosts = hosts
-                .GroupBy(h => h.Name) 
+                .GroupBy(h => h.Id) 
                 .Select(g => g.OrderByDescending(h => h.IsOnline).ThenByDescending(h => h.LastSeen).First()) 
                 .OrderByDescending(h => h.IsOnline) 
                 .ThenByDescending(h => h.LastSeen)  
@@ -771,9 +826,11 @@ namespace Viewer
 
             var displayList = new List<HostDisplayItem>();
             _thumbnailPanel.Children.Clear();
+            _liveThumbnailImages.Clear();
+            _thumbnailTiles.Clear();
 
             int index = 1;
-            foreach (var host in hosts)
+            foreach (var host in _currentHosts)
             {
                 if (host.IsOnline) onlineCount++;
 
@@ -788,16 +845,18 @@ namespace Viewer
                     Resolution = host.Resolution,
                     Uptime = host.Uptime,
                     HostId = host.Id,
+                    ThumbnailUrl = host.ThumbnailUrl,
                     Index = index
                 });
 
-                var card = CreateHostCard(host, index);
+                var card = CreateThumbnailTile(host, index);
                 _thumbnailPanel.Children.Add(card);
                 index++;
             }
 
+            UpdateThumbnailSelectionVisuals();
             _hostDataGrid.ItemsSource = displayList;
-            _hostCountText.Text = $"HOSTR: {onlineCount}/{hosts.Count}";
+            _hostCountText.Text = $"HOSTS: {onlineCount}/{_currentHosts.Count}";
             _statusBarText.Text = onlineCount > 0 ? "접속 가능" : "대기 중";
         }
 
@@ -820,32 +879,33 @@ namespace Viewer
 
 
             var grid = new Grid { Margin = new Thickness(16) };
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }); // Header
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // Content (Spacer)
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }); // CPU
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }); // Details
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }); // Footer
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }); // Header (Row 0)
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // Thumbnail (Row 1)
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }); // CPU (Row 2)
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }); // Details (Row 3)
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Auto) }); // Footer (Row 4)
 
-            // === 1. 헤더: 이름 & 상태 ===
-            // Mockup: "DESKTOP-ABC" (White, Bold) 아래에 "Online" (Green dot + Text)
+            // === 1. 헤더: 이름 & 상태 (Row 0) ===
             var headerStack = new StackPanel { Orientation = Orientation.Vertical };
-            
+            Grid.SetRow(headerStack, 0);
+            grid.Children.Add(headerStack);
+
             // 호스트 이름
             headerStack.Children.Add(new TextBlock
             {
-                Text = host.Name.ToUpper(), // 대문자로 스타일링
+                Text = host.Name.ToUpper(),
                 Foreground = new SolidColorBrush(Colors.White),
                 FontSize = 14,
                 FontWeight = FontWeights.Bold,
                 TextTrimming = TextTrimming.CharacterEllipsis
             });
 
-            // 상태 표시줄 (점 + 텍스트)
+            // 상태 표시줄
             var statusPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 0) };
             statusPanel.Children.Add(new Border
             {
                 Width = 8, Height = 8, CornerRadius = new CornerRadius(4),
-                Background = new SolidColorBrush(host.IsOnline ? Color.FromRgb(50, 205, 50) : Color.FromRgb(100, 100, 100)), // LimeGreen
+                Background = new SolidColorBrush(host.IsOnline ? Color.FromRgb(50, 205, 50) : Color.FromRgb(100, 100, 100)),
                 Margin = new Thickness(0, 1, 6, 0),
                 VerticalAlignment = VerticalAlignment.Center
             });
@@ -857,11 +917,45 @@ namespace Viewer
                 VerticalAlignment = VerticalAlignment.Center
             });
             headerStack.Children.Add(statusPanel);
-            
-            Grid.SetRow(headerStack, 0);
-            grid.Children.Add(headerStack);
 
-            // === 2. 본문: CPU Bar ===
+            // === 2. 썸네일 (Row 1) ===
+            var thumbnailBorder = new Border
+            {
+                Margin = new Thickness(0, 8, 0, 8),
+                Background = Brushes.Black,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(40, 40, 40)),
+                BorderThickness = new Thickness(1),
+                ClipToBounds = true
+            };
+            
+            var thumbnailImg = new Image
+            {
+                 Stretch = Stretch.UniformToFill,
+                 VerticalAlignment = VerticalAlignment.Center,
+                 HorizontalAlignment = HorizontalAlignment.Center
+            };
+            
+            if (!string.IsNullOrEmpty(host.ThumbnailUrl) && host.IsOnline)
+            {
+                try
+                {
+                    var uri = new Uri($"{host.ThumbnailUrl}?t={DateTime.UtcNow.Ticks}");
+                    var bitmap = new System.Windows.Media.Imaging.BitmapImage();
+                    bitmap.BeginInit();
+                    bitmap.UriSource = uri;
+                    bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                    bitmap.CreateOptions = System.Windows.Media.Imaging.BitmapCreateOptions.IgnoreImageCache;
+                    bitmap.EndInit();
+                    thumbnailImg.Source = bitmap;
+                }
+                catch { }
+            }
+            
+            thumbnailBorder.Child = thumbnailImg;
+            Grid.SetRow(thumbnailBorder, 1);
+            grid.Children.Add(thumbnailBorder);
+
+            // === 3. 본문: CPU Bar (Row 2) ===
             // Mockup: 중간에 위치
             var cpuPanel = new StackPanel { Margin = new Thickness(0, 16, 0, 8) };
             
@@ -960,6 +1054,13 @@ namespace Viewer
             Grid.SetRow(connectBtn, 4);
             grid.Children.Add(connectBtn);
 
+            card.PreviewMouseRightButtonDown += (_, args) =>
+            {
+                SelectHostFromCard(host.Id);
+                card.Focus();
+                args.Handled = false;
+            };
+
             card.Child = grid;
             return card;
         }
@@ -978,7 +1079,8 @@ namespace Viewer
             if (_keyboardHook == null) return;
             // 리모트 뷰가 보이고 + 창이 활성화 상태 + 패스워드 패널이 안 보일 때만 캡처
             bool isPasswordInput = _passwordPanel != null && _passwordPanel.Visibility == Visibility.Visible;
-            bool shouldCapture = (_remoteGrid.Visibility == Visibility.Visible) && IsActive && !isPasswordInput;
+            bool remoteWindowActive = _remoteWindow?.IsActive ?? IsActive;
+            bool shouldCapture = (_remoteGrid.Visibility == Visibility.Visible) && remoteWindowActive && !isPasswordInput;
             _keyboardHook.IsCapturing = shouldCapture;
         }
 
@@ -987,18 +1089,24 @@ namespace Viewer
         // ==========================================================
         private async void ConnectToHost(string hostId)
         {
-            // 이전 연결 정리 (호스트 전환 시)
-            if (_receiver != null)
+            if (_isDemoMode)
             {
-                _receiver.Dispose();
-                _receiver = null;
+                var demoHost = _currentHosts.FirstOrDefault(host => host.Id == hostId);
+                if (demoHost != null) OpenControlWindows(new[] { demoHost });
+                return;
             }
+
+            ReleaseRemoteInputs();
+            var previousReceiver = _receiver;
+            _receiver = null;
+            DisposeReceiverSafely(previousReceiver);
+            _isReconnecting = false;
+
 
             _connectedHostId = hostId;
 
-            // 리모트 뷰로 전환
-            _lobbyGrid.Visibility = Visibility.Collapsed;
-            _remoteGrid.Visibility = Visibility.Visible;
+            // 로비를 유지한 채 별도 원격 제어 창을 연다.
+            ShowRemoteControlWindow(hostId);
 
             _statusText.Text = "시스템 연결 시도 중...";
             _statusText.Foreground = new SolidColorBrush(Color.FromRgb(255, 176, 0)); // Amber
@@ -1011,7 +1119,7 @@ namespace Viewer
             // 바로 연결 시도 (비밀번호 없이)
             try
             {
-                InitializeReceiver();
+                InitializeReceiver(hostId);
                 await _receiver!.StartAsync(null);
                 Console.WriteLine($"[UI] Connecting to {hostId} (no password)");
             }
@@ -1039,7 +1147,7 @@ namespace Viewer
             var nextHost = _currentHosts[nextIndex];
 
             // 자기 자신이 아니면 이동
-            if (nextHost.Id != _connectedHostId)
+            if (nextHost.Id != _connectedHostId && nextHost.IsOnline)
             {
                 Console.WriteLine($"[UI] Navigating to host {nextIndex + 1}/{_currentHosts.Count}: {nextHost.Name}");
                 
@@ -1057,11 +1165,12 @@ namespace Viewer
 
             // 키보드 훅 비활성화 (나중에 상태 업데이트로 처리)
             // VideoReceiver 정리
-            if (_receiver != null)
-            {
-                _receiver.Dispose();
-                _receiver = null;
-            }
+            ReleaseRemoteInputs();
+            var previousReceiver = _receiver;
+            _receiver = null;
+            DisposeReceiverSafely(previousReceiver);
+            _isReconnecting = false;
+
 
             _connectedHostId = null;
             _enteredPassword = null;
@@ -1069,7 +1178,8 @@ namespace Viewer
             _statsDisplayTimer?.Dispose();
             _statsDisplayTimer = null;
 
-            // 로비로 전환
+            // 원격 창만 닫고 매니저 로비는 그대로 유지한다.
+            CloseRemoteControlWindow();
             _remoteGrid.Visibility = Visibility.Collapsed;
             _lobbyGrid.Visibility = Visibility.Visible;
             _passwordPanel!.Visibility = Visibility.Collapsed;
@@ -1195,10 +1305,8 @@ namespace Viewer
             _videoDisplay.MouseMove += (s, e) =>
             {
                 if (_receiver == null || _connectedHostId == null) return;
-                var pos = e.GetPosition(_videoDisplay);
-                double nx = pos.X / _videoDisplay.ActualWidth;
-                double ny = pos.Y / _videoDisplay.ActualHeight;
-                if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
+                if (!TryGetRemoteCoordinates(
+                        e, false, out var nx, out var ny)) return;
 
                 var data = new byte[9];
                 data[0] = MSG_MOUSE_MOVE;
@@ -1210,12 +1318,10 @@ namespace Viewer
             _videoDisplay.MouseDown += (s, e) =>
             {
                 if (_receiver == null || _connectedHostId == null) return;
+                if (!TryGetRemoteCoordinates(
+                        e, false, out var nx, out var ny) ||
+                    !TryGetMouseButton(e.ChangedButton, out var btn)) return;
                 _videoDisplay.CaptureMouse();
-                var pos = e.GetPosition(_videoDisplay);
-                float nx = (float)(pos.X / _videoDisplay.ActualWidth);
-                float ny = (float)(pos.Y / _videoDisplay.ActualHeight);
-                byte btn = e.ChangedButton == MouseButton.Left ? (byte)0 :
-                           e.ChangedButton == MouseButton.Right ? (byte)1 : (byte)2;
                 // 프로토콜: {type, button, float_x, float_y} = 10바이트
                 var data = new byte[10];
                 data[0] = MSG_MOUSE_DOWN;
@@ -1229,11 +1335,13 @@ namespace Viewer
             {
                 if (_receiver == null || _connectedHostId == null) return;
                 _videoDisplay.ReleaseMouseCapture();
-                var pos = e.GetPosition(_videoDisplay);
-                float nx = (float)(pos.X / _videoDisplay.ActualWidth);
-                float ny = (float)(pos.Y / _videoDisplay.ActualHeight);
-                byte btn = e.ChangedButton == MouseButton.Left ? (byte)0 :
-                           e.ChangedButton == MouseButton.Right ? (byte)1 : (byte)2;
+                if (!TryGetRemoteCoordinates(
+                        e, true, out var nx, out var ny) ||
+                    !TryGetMouseButton(e.ChangedButton, out var btn))
+                {
+                    ReleaseRemoteInputs();
+                    return;
+                }
                 var data = new byte[10];
                 data[0] = MSG_MOUSE_UP;
                 data[1] = btn;
@@ -1460,6 +1568,7 @@ namespace Viewer
                             existing.Hdd = h.Hdd ?? existing.Hdd;
                             existing.Uptime = h.Uptime ?? existing.Uptime;
                             existing.LastSeen = h.LastSeen;
+                            existing.ThumbnailUrl = h.ThumbnailUrl;
                         }
                         else
                         {
@@ -1474,7 +1583,8 @@ namespace Viewer
                                 Ram = h.Ram ?? "N/A",
                                 Hdd = h.Hdd ?? "N/A",
                                 Uptime = h.Uptime ?? "N/A",
-                                LastSeen = h.LastSeen
+                                LastSeen = h.LastSeen,
+                                ThumbnailUrl = h.ThumbnailUrl
                             };
                         }
                     }
@@ -1520,14 +1630,31 @@ namespace Viewer
         // ==========================================================
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
+            if (_isDemoMode)
+            {
+                LoadDemoFleet();
+                return;
+            }
+
+            if (_isHubMode)
+            {
+                await StartHubModeAsync();
+                return;
+            }
+
+            if (_isLanMode)
+            {
+                await StartLanModeAsync();
+                return;
+            }
+
             Console.WriteLine("[DEBUG] MainWindow_Loaded fired");
 
             try
             {
                 // Signaling Client 초기화
                 _signaling = new SignalingClient(
-                    _settings.PusherAppId, 
-                    _settings.PusherAppKey, 
+                    _settings.PusherAppKey,
                     _settings.PusherCluster,
                     _settings.WebAuthUrl,
                     _accessToken);
@@ -1535,7 +1662,7 @@ namespace Viewer
                 // Repository 초기화
                 if (!string.IsNullOrEmpty(_settings.SupabaseUrl) && !string.IsNullOrEmpty(_settings.SupabaseAnonKey))
                 {
-                    _hostRepo = new HostRepository(_settings.SupabaseUrl, _settings.SupabaseAnonKey);
+                    _hostRepo = new HostRepository(_settings.SupabaseUrl, _settings.SupabaseAnonKey, _settings.WebAuthUrl);
                     await _hostRepo.InitializeAsync(_accessToken, _userId);
                 }
 
@@ -1560,12 +1687,11 @@ namespace Viewer
                     // 최초 로드
                     await PollHostsFromSupabaseAsync();
 
-                    // 10초마다 폴링 타이머
-                    var pollTimer = new Timer(async _ =>
-                    {
-                        try { await PollHostsFromSupabaseAsync(); }
-                        catch (Exception ex) { Console.WriteLine($"[Poll] Error: {ex.Message}"); }
-                    }, null, 10000, 10000);
+                    // 10초마다 폴링 타이머 (DispatcherTimer 사용으로 스레드 안정성 확보)
+                    _pollTimer = new System.Windows.Threading.DispatcherTimer();
+                    _pollTimer.Interval = TimeSpan.FromSeconds(10);
+                    _pollTimer.Tick += async (s, ev) => await PollHostsFromSupabaseAsync();
+                    _pollTimer.Start();
                 }
             }
             catch (Exception ex)
@@ -1578,27 +1704,42 @@ namespace Viewer
         // ==========================================================
         // VideoReceiver 초기화
         // ==========================================================
-        private void InitializeReceiver()
+        private void InitializeReceiver(string hostId)
         {
-            _receiver = new VideoReceiver();
+            var receiver = new VideoReceiver();
+            _receiver = receiver;
 
             // 시그널 전송
-            _receiver.OnSignalReady += async (signal) =>
+            receiver.OnSignalReady += async (signal) =>
             {
-                if (_signaling != null && _connectedHostId != null)
+                if (!ReferenceEquals(_receiver, receiver)) return;
+                if (_isHubMode &&
+                    _hubServer != null &&
+                    _connectedHostId == hostId)
+                {
+                    await _hubServer.SendSignalAsync(
+                        hostId,
+                        signal);
+                }
+                else if (_isLanMode && _lanSignal != null)
+                {
+                    await _lanSignal.SendSignalAsync(signal);
+                }
+                else if (_signaling != null && _connectedHostId != null)
                 {
                     await _signaling.SendSignalAsync(_connectedHostId, signal);
                 }
             };
 
             // 비디오 프레임 수신
-            _receiver.OnFrameReady += () =>
+            receiver.OnFrameReady += () =>
             {
                 Dispatcher.Invoke(() =>
                 {
-                    if (_receiver?.VideoBitmap != null)
+                    if (ReferenceEquals(_receiver, receiver) &&
+                        receiver.VideoBitmap != null)
                     {
-                        _videoDisplay.Source = _receiver.VideoBitmap;
+                        _videoDisplay.Source = receiver.VideoBitmap;
                         _statusText.Visibility = Visibility.Collapsed;
                         _statsOverlay.Visibility = Visibility.Visible;
                     }
@@ -1606,17 +1747,18 @@ namespace Viewer
             };
 
             // 연결 상태 변경
-            _receiver.OnConnectionStateChanged += (state) =>
+            receiver.OnConnectionStateChanged += (state) =>
             {
                 if (state == RTCPeerConnectionState.failed ||
                     state == RTCPeerConnectionState.disconnected)
                 {
-                    _ = ReconnectAsync();
+                    if (ReferenceEquals(_receiver, receiver))
+                        _ = ReconnectAsync(receiver, hostId);
                 }
             };
 
             // 비밀번호 거절
-            _receiver.OnRejected += (reason) =>
+            receiver.OnRejected += (reason) =>
             {
                 Dispatcher.Invoke(() =>
                 {
@@ -1625,7 +1767,7 @@ namespace Viewer
             };
 
             // 클립보드 수신
-            _receiver.OnClipboardReceived += (text) =>
+            receiver.OnClipboardReceived += (text) =>
             {
                 Dispatcher.Invoke(() =>
                 {
@@ -1643,7 +1785,13 @@ namespace Viewer
                     if (_receiver != null && _statsOverlay.Visibility == Visibility.Visible)
                     {
                         string rtt = _receiver.RttMs >= 0 ? $"{_receiver.RttMs}ms" : "N/A";
-                        _statsOverlay.Text = $"FPS: {_receiver.CurrentFps} | RTT: {rtt}";
+                        string inputState = !_receiver.InputChannelReady
+                            ? "연결 중"
+                            : _receiver.LastInputAcknowledgedAt != DateTime.MinValue
+                              && DateTime.UtcNow - _receiver.LastInputAcknowledgedAt < TimeSpan.FromSeconds(5)
+                                ? "수신 확인"
+                                : "준비";
+                        _statsOverlay.Text = $"FPS: {_receiver.CurrentFps} | RTT: {rtt} | 입력: {inputState}";
                     }
                 });
             }, null, 1000, 1000);
@@ -1652,9 +1800,13 @@ namespace Viewer
         // ==========================================================
         // 자동 재연결
         // ==========================================================
-        private async Task ReconnectAsync()
+        private async Task ReconnectAsync(
+            VideoReceiver receiver,
+            string hostId)
         {
-            if (_isReconnecting || _connectedHostId == null) return;
+            if (_isReconnecting ||
+                !ReferenceEquals(_receiver, receiver) ||
+                _connectedHostId != hostId) return;
             _isReconnecting = true;
 
             Console.WriteLine("[UI] Connection lost, reconnecting in 3s...");
@@ -1667,12 +1819,13 @@ namespace Viewer
 
             await Task.Delay(3000);
 
-            if (_receiver != null && _connectedHostId != null)
+            if (ReferenceEquals(_receiver, receiver) &&
+                _connectedHostId == hostId)
             {
                 try
                 {
-                    _receiver.Reset();
-                    await _receiver.StartAsync(_enteredPassword);
+                    receiver.Reset();
+                    await receiver.StartAsync(_enteredPassword);
                     Console.WriteLine("[UI] Reconnect offer sent");
                 }
                 catch (Exception ex)
@@ -1709,6 +1862,7 @@ namespace Viewer
         public string Resolution { get; set; } = "";
         public string Uptime { get; set; } = "";
         public string HostId { get; set; } = "";
+        public string? ThumbnailUrl { get; set; }
         public int Index { get; set; }
     }
 }

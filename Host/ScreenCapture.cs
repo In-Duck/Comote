@@ -4,10 +4,22 @@ using System.Runtime.InteropServices;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Drawing.Drawing2D;
+using System.IO;
 
 namespace Host
 {
-    public record MonitorInfo(int AdapterIndex, int OutputIndex, string Name, int Width, int Height, bool IsPrimary);
+    public record MonitorInfo(
+        int AdapterIndex,
+        int OutputIndex,
+        string Name,
+        int Left,
+        int Top,
+        int Width,
+        int Height,
+        bool IsPrimary);
 
     public class ScreenCapture : IDisposable
     {
@@ -18,13 +30,18 @@ namespace Host
         private int _width;
         private int _height;
         private int _adapterIndex;
+        private int _left;
+        private int _top;
         private int _outputIndex;
         private byte[]? _frameBuffer;
+        private readonly object _captureSync = new();
 
         private IDXGIResource? _desktopResource;
         private OutduplFrameInfo _duplicateFrameInformation;
 
         public int Width => _width;
+        public int Left => _left;
+        public int Top => _top;
         public int Height => _height;
         public int AdapterIndex => _adapterIndex;
         public int OutputIndex => _outputIndex;
@@ -49,7 +66,7 @@ namespace Host
                         int h = bounds.Bottom - bounds.Top;
                         bool isPrimary = bounds.Left == 0 && bounds.Top == 0;
                         string name = desc.DeviceName?.Replace("\0", "").Trim() ?? $"Monitor {monitors.Count + 1}";
-                        monitors.Add(new MonitorInfo((int)ai, (int)oi, name, w, h, isPrimary));
+                        monitors.Add(new MonitorInfo((int)ai, (int)oi, name, bounds.Left, bounds.Top, w, h, isPrimary));
                         output.Dispose();
                     }
                     adapter.Dispose();
@@ -86,6 +103,8 @@ namespace Host
                 _width = bounds.Right - bounds.Left;
                 _height = bounds.Bottom - bounds.Top;
                 output.Dispose();
+                _left = bounds.Left;
+                _top = bounds.Top;
 
                 var desc = new Texture2DDescription
                 {
@@ -115,6 +134,14 @@ namespace Host
         }
 
         public byte[]? Capture()
+        {
+            lock (_captureSync)
+            {
+                return CaptureCore();
+            }
+        }
+
+        private byte[]? CaptureCore()
         {
             try
             {
@@ -164,6 +191,63 @@ namespace Host
                 }
                 return null;
             }
+        }
+
+        public byte[]? CaptureThumbnail(int targetWidth = 320, int quality = 75)
+        {
+            lock (_captureSync)
+            {
+                return CaptureThumbnailCore(targetWidth, quality);
+            }
+        }
+
+        private byte[]? CaptureThumbnailCore(int targetWidth, int quality)
+        {
+            var raw = Capture();
+            if (raw == null) return null;
+
+            try
+            {
+                // BGRA 32bpp to Bitmap
+                using var bitmap = new Bitmap(_width, _height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                var data = bitmap.LockBits(new Rectangle(0, 0, _width, _height), ImageLockMode.WriteOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                Marshal.Copy(raw, 0, data.Scan0, raw.Length);
+                bitmap.UnlockBits(data);
+
+                // Resize
+                int targetHeight = (int)((double)_height / _width * targetWidth);
+                using var thumbnail = new Bitmap(targetWidth, targetHeight);
+                using (var g = Graphics.FromImage(thumbnail))
+                {
+                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(bitmap, 0, 0, targetWidth, targetHeight);
+                }
+
+                // Save as JPEG to stream
+                using var ms = new MemoryStream();
+                var encoder = GetEncoder(ImageFormat.Jpeg);
+                if (encoder == null) return null;
+
+                var parameters = new EncoderParameters(1);
+                parameters.Param[0] = new EncoderParameter(Encoder.Quality, (long)quality);
+                thumbnail.Save(ms, encoder, parameters);
+                return ms.ToArray();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Capture] Thumbnail failed: {ex.Message}");
+                return null;
+            }
+        }
+
+        private ImageCodecInfo? GetEncoder(ImageFormat format)
+        {
+            ImageCodecInfo[] codecs = ImageCodecInfo.GetImageDecoders();
+            foreach (ImageCodecInfo codec in codecs)
+            {
+                if (codec.FormatID == format.Guid) return codec;
+            }
+            return null;
         }
 
         private void Cleanup()

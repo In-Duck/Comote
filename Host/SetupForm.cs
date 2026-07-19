@@ -99,7 +99,7 @@ namespace Host
             // 비밀번호
             var pwdLabel = new Label
             {
-                Text = "접속 비밀번호 (공란 시 비밀번호 없음)",
+                Text = "직접 연결 암호 (최소 8자, 12자 이상 권장)",
                 Location = new Point(20, 125),
                 AutoSize = true,
                 ForeColor = Color.Gray
@@ -174,8 +174,21 @@ namespace Host
             startBtn.MouseEnter += (s, e) => { startBtn.ForeColor = Color.Black; };
             startBtn.MouseLeave += (s, e) => { startBtn.ForeColor = Color.FromArgb(0, 255, 65); };
 
-            startBtn.Click += (s, e) => { DialogResult = DialogResult.OK; Close(); };
+            startBtn.Click += (s, e) =>
+            {
+                if (_passwordBox.Text.Length < 8)
+                {
+                    MessageBox.Show(
+                        "직접 연결 암호는 최소 8자 이상이어야 합니다.",
+                        "Comote Direct Host");
+                    _passwordBox.Focus();
+                    return;
+                }
+
+                DialogResult = DialogResult.OK;
+                Close();
             Controls.Add(startBtn);
+            };
 
             AcceptButton = startBtn;
         }

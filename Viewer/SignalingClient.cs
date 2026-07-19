@@ -18,7 +18,6 @@ namespace Viewer
         private Pusher _pusher;
         private string _viewerId;
         private string _appKey;
-        private string _appId;
         private string _cluster;
         private string _webAuthUrl;
         private string _accessToken;
@@ -27,14 +26,13 @@ namespace Viewer
 
         public string ViewerId => _viewerId;
 
-        public SignalingClient(string appId, string appKey, string cluster, string webAuthUrl, string accessToken)
+        public SignalingClient(string appKey, string cluster, string webAuthUrl, string accessToken)
         {
-            _appId = appId;
             _appKey = appKey;
             _cluster = cluster;
             _webAuthUrl = webAuthUrl;
             _accessToken = accessToken;
-            _viewerId = Guid.NewGuid().ToString().Substring(0, 8);
+            _viewerId = Guid.NewGuid().ToString("N");
             
             _pusher = new Pusher(appKey, new PusherOptions
             {
@@ -116,5 +114,7 @@ namespace Viewer
         public string Uptime { get; set; } = "N/A";
         public bool IsOnline { get; set; } = false;
         public DateTime LastSeen { get; set; } = DateTime.MinValue;
+        public string? ThumbnailUrl { get; set; }
+        public byte[]? ThumbnailBytes { get; set; }
     }
 }

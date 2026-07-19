@@ -18,7 +18,11 @@
 /out/
 
 # production
+/dist
+/.wrangler
 /build
+!/build/
+!/build/sites-vite-plugin.ts
 
 # misc
 .DS_Store
@@ -30,8 +34,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files
 .env*
+!.env.example
 
 # vercel
 .vercel

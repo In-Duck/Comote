@@ -1,8 +1,8 @@
 {
-    "version": "1.2.2",
-    "host_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.2.2/ComoteHost_Setup.exe",
-    "viewer_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.2.2/ComoteViewer_Setup.exe",
-    "host_hash": "5F803B062C83DE69DD93582163F19B4712DC498681C03CEF3394AB79953166BF",
-    "viewer_hash": "D16E64677DB58F3E0126F85C42CE45F2C466DFB1CD5DF723F14E4D6CF50AFC3D",
-    "release_notes": "- [Critical] Heartbeat ‘resolution’ 컬럼 스키마 불일치긴급 수정 (v1.2.2)\n- [Web] KYMOTE 도메인 정식 적용"
+    "version": "1.3.0",
+    "host_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.3.0/ComoteHost_Setup.exe",
+    "viewer_setup_url": "https://github.com/In-Duck/Comote/releases/download/v1.3.0/ComoteViewer_Setup.exe",
+    "host_hash": "22E63BC339E4275655D101DFD726FBBC8BB41947270DBFD8E43DA31FE760E0DE",
+    "viewer_hash": "30E097265646A3F026505930E4AC816E67EFD63B64C2C39F4E7D73B187298640",
+    "release_notes": "v1.3.0 Feature Update (Final):\n- [Viewer] 실행 시 발생하던 Crash(WindowBackgroundBrush) 해결\n- 상세 호스트 정보 표시 (CPU, RAM, HDD, IP, Uptime, Resolution)\n- 호스트 화면 썸네일 미리보기 기능 추가\n- 오프라인 상태 감지 최적화 (60초 타임아웃)\n- 뷰어 폴링 안정성 개선 (DispatcherTimer 전환)"
 }

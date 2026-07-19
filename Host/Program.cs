@@ -1,288 +1,300 @@
+﻿using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using SIPSorceryMedia.FFmpeg;
-using System.Diagnostics;
 
 namespace Host
 {
-    class Program
+    internal static partial class Program
     {
-        [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int nStdHandle);
-        [DllImport("kernel32.dll")] static extern bool GetConsoleMode(IntPtr h, out uint m);
-        [DllImport("kernel32.dll")] static extern bool SetConsoleMode(IntPtr h, uint m);
+        private const string ServiceName = "KymoteHost";
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetStdHandle(int nStdHandle);
+
+        [DllImport("kernel32.dll")]
+        private static extern bool GetConsoleMode(IntPtr handle, out uint mode);
+
+        [DllImport("kernel32.dll")]
+        private static extern bool SetConsoleMode(IntPtr handle, uint mode);
 
         [STAThread]
-        static async Task Main(string[] args)
+        private static async Task Main(string[] args)
         {
-            bool forceNoGui = false;
-            if (args.Length > 0)
+            if (args.Length > 0 && args[0].Equals("--install", StringComparison.OrdinalIgnoreCase))
             {
-                if (args[0] == "--install")
-                {
-                    InstallService();
-                    return;
-                }
-                if (args[0] == "--uninstall")
-                {
-                    UninstallService();
-                    return;
-                }
-                if (args[0] == "--nogui")
-                {
-                    forceNoGui = true;
-                }
-            }
-
-            bool isService = !(Environment.UserInteractive) || forceNoGui;
-            
-            // [무인 업데이트] 시작 시 업데이트 체크
-            await AutoUpdater.CheckAndApplyUpdate(isService);
-            
-            // [Style] Mono Vintage Console Styling
-            if (!isService)
-            {
-                try
-                {
-                    Console.Title = "KYMOTE Host";
-                    Console.BackgroundColor = ConsoleColor.Black;
-                    Console.ForegroundColor = ConsoleColor.DarkYellow;
-                    Console.Clear();
-                    Console.WriteLine("=================================================");
-                    Console.WriteLine("    KYMOTE - Premium Remote Control (v1.2.1)     ");
-                    Console.WriteLine("=================================================");
-                    Console.WriteLine("");
-                }
-                catch { } // Ignore if console is not available or locked
-            }
-            
-            var handle = GetStdHandle(-10);
-            if (GetConsoleMode(handle, out uint mode))
-            {
-                // Enable Quick Edit Mode (0x0040) and Extended Flags (0x0080)
-                mode |= 0x0040u;
-                mode |= 0x0080u;
-                SetConsoleMode(handle, mode);
-            }
-
-            // [설정 로드]
-            var appSettings = AppSettings.Load();
-
-            string accessToken = null;
-            string userEmail = null;
-            string userId = null;
-
-            if (isService)
-            {
-                Console.WriteLine("[Service] 헤드리스 모드로 실행 중. 자동 로그인을 시도합니다...");
-                // Load credentials from file
-                bool loginSuccess = false;
-
-                if (File.Exists("login.dat"))
-                {
-                    try
-                    {
-                        var lines = File.ReadAllLines("login.dat");
-                        // [Security Fix] Check version header
-                        if (lines.Length >= 3 && lines[0] == "KYMOTE_SEC_V1") 
-                        {
-                            string decEmail = System.Text.Encoding.UTF8.GetString(System.Security.Cryptography.ProtectedData.Unprotect(Convert.FromBase64String(lines[1]), null, System.Security.Cryptography.DataProtectionScope.CurrentUser));
-                            string decPassword = System.Text.Encoding.UTF8.GetString(System.Security.Cryptography.ProtectedData.Unprotect(Convert.FromBase64String(lines[2]), null, System.Security.Cryptography.DataProtectionScope.CurrentUser));
-
-                            if (!string.IsNullOrEmpty(decEmail))
-                            {
-                                var loginResult = await AttemptAutoLogin(appSettings, decEmail, decPassword);
-                                if (!string.IsNullOrEmpty(loginResult.token))
-                                {
-                                    accessToken = loginResult.token;
-                                    userId = loginResult.userId;
-                                    userEmail = decEmail;
-                                    loginSuccess = true;
-                                }
-                            }
-                        }
-                        else
-                        {
-                            Console.WriteLine("[Service] login.dat 버전이 호환되지 않거나 손상되었습니다. 파일을 삭제합니다.");
-                            File.Delete("login.dat");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[Service] login.dat 로드 오류: {ex.Message}");
-                        try { File.Delete("login.dat"); } catch { }
-                    }
-                }
-                
-                if (!loginSuccess)
-                {
-                    Console.WriteLine("[Service] 자동 로그인 실패. GUI 모드로 실행하여 로그인 정보를 저장해주세요.");
-                    return;
-                }
-            }
-            else
-            {
-                Application.EnableVisualStyles();
-                Application.SetCompatibleTextRenderingDefault(false);
-                var loginForm = new LoginForm(appSettings);
-                var result = loginForm.ShowDialog();
-                if (result != DialogResult.OK)
-                {
-                    return;
-                }
-                accessToken = loginForm.AccessToken;
-                userEmail = loginForm.UserEmail;
-                userId = loginForm.UserId;
-            }
-
-            Console.WriteLine($"[Auth] 로그인 성공: {userEmail}");
-
-            Console.WriteLine("KYMOTE Host Service v1.2.2 starting...");
-
-            string? hostName = null;
-            string? password = null;
-            int adapterIndex = 0;
-            int outputIndex = 0;
-
-            if (!isService)
-            {
-                // GUI 모드: SetupForm 표시
-                using (var setupForm = new SetupForm())
-                {
-                    if (setupForm.ShowDialog() != DialogResult.OK)
-                    {
-                        Console.WriteLine("설정이 취소되었습니다. 종료합니다.");
-                        return;
-                    }
-                    hostName = setupForm.HostName;
-                    password = setupForm.Password;
-                    adapterIndex = setupForm.SelectedAdapterIndex;
-                    outputIndex = setupForm.SelectedOutputIndex;
-                }
-            }
-            else
-            {
-                // 서비스 모드: appsettings.json 기본값 사용
-                var serviceSettings = AppSettings.Load();
-                hostName = serviceSettings.DefaultHostName ?? Environment.MachineName;
-                password = serviceSettings.DefaultPassword;
-                adapterIndex = 0;
-                outputIndex = 0;
-                Console.WriteLine("[Service] 비대화형(Non-interactive) 모드로 실행 중.");
-            }
-
-            Console.OutputEncoding = System.Text.Encoding.UTF8;
-            Console.WriteLine("KYMOTE 호스트 초기화...");
-
-            string ffmpegPath = FFmpegExtractor.ExtractFFmpeg();
-            FFmpegInit.Initialise(FfmpegLogLevelEnum.AV_LOG_WARNING, ffmpegPath);
-
-            // 설정 로드 (이미 로드됨)
-            // var appSettings = AppSettings.Load(); // Duplicate removed
-            string appKey = appSettings.Pusher.AppKey;
-            
-            if (string.IsNullOrEmpty(appKey))
-            {
-                Console.WriteLine("오류: Pusher AppKey가 누락되었습니다.");
+                InstallService();
                 return;
             }
 
-            string machineHash = BitConverter.ToString(
-                System.Security.Cryptography.MD5.HashData(
-                    System.Text.Encoding.UTF8.GetBytes(Environment.MachineName)))
-                .Replace("-", "").Substring(0, 8).ToLower();
-            string hostId = "host_" + machineHash; // Use stable machine hash instead of random GUID
-            if (!string.IsNullOrEmpty(appSettings.HostId))
+            if (args.Length > 0 && args[0].Equals("--uninstall", StringComparison.OrdinalIgnoreCase))
             {
-                hostId = appSettings.HostId;
+                UninstallService();
+                return;
+            }
+
+            var listenDirect = Array.Exists(
+                args,
+                argument => argument.Equals(
+                    "--listen-direct",
+                    StringComparison.OrdinalIgnoreCase));
+            if (listenDirect)
+            {
+                await RunDirectHostAsync(args);
+                return;
+            }
+
+            var managerHubMode = Array.Exists(
+                args,
+                argument => argument.Equals(
+                    "--manager-hub",
+                    StringComparison.OrdinalIgnoreCase));
+            if (managerHubMode)
+            {
+                await RunManagerClientAsync(args);
+                return;
+            }
+
+            var forceNoGui = Array.Exists(
+                args,
+                argument => argument.Equals("--nogui", StringComparison.OrdinalIgnoreCase));
+            var isService = !Environment.UserInteractive || forceNoGui;
+
+            await AutoUpdater.CheckAndApplyUpdate(isService);
+            ConfigureConsole(isService);
+
+            var appSettings = AppSettings.Load();
+            var configurationErrors = appSettings.GetConfigurationErrors();
+            if (configurationErrors.Count > 0)
+            {
+                Console.WriteLine(
+                    "[Settings] Missing or invalid values: " +
+                    string.Join(", ", configurationErrors));
+                if (!isService)
+                {
+                    MessageBox.Show(
+                        "서버 설정이 필요합니다.\n" +
+                        string.Join("\n", configurationErrors) +
+                        $"\n\n설정 파일: {AppSettings.SettingsFilePath}",
+                        "Comote Host 설정",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+                return;
+            }
+
+            var auth = isService
+                ? await AuthenticateServiceAsync(appSettings)
+                : AuthenticateInteractive(appSettings);
+            if (auth == null) return;
+
+            var (accessToken, userId, userEmail) = auth.Value;
+            Console.WriteLine($"[Auth] Authenticated: {userEmail}");
+
+            string hostName;
+            string? password;
+            int adapterIndex;
+            int outputIndex;
+
+            if (isService)
+            {
+                hostName = appSettings.DefaultHostName ?? Environment.MachineName;
+                password = appSettings.DefaultPassword;
+                adapterIndex = 0;
+                outputIndex = 0;
             }
             else
             {
-                // Try to save, but if it fails, we still use the stable machineHash
-                appSettings.HostId = hostId;
-                appSettings.Save();
+                using var setupForm = new SetupForm();
+                if (setupForm.ShowDialog() != DialogResult.OK) return;
+                hostName = setupForm.HostName;
+                password = setupForm.Password;
+                adapterIndex = setupForm.SelectedAdapterIndex;
+                outputIndex = setupForm.SelectedOutputIndex;
             }
 
-            Console.WriteLine($"Host ID 식별: {hostId}");
+            Console.OutputEncoding = Encoding.UTF8;
+            var ffmpegPath = FFmpegExtractor.ExtractFFmpeg();
+            FFmpegInit.Initialise(FfmpegLogLevelEnum.AV_LOG_WARNING, ffmpegPath);
+
+            var hostId = ResolveHostId(appSettings);
+            Console.WriteLine($"[Host] ID: {hostId}");
 
             var capture = new ScreenCapture(adapterIndex, outputIndex);
-            string resolution = $"{capture.Width}x{capture.Height}";
-            
-            // Signaling Client Start
-            var signaling = new SignalingClient(appSettings.Pusher.AppId, appKey, appSettings.Pusher.Cluster, appSettings.WebAuthUrl, accessToken, hostId, hostName, resolution,
-                appSettings.SupabaseUrl, appSettings.SupabaseAnonKey, userId);
-
+            var resolution = $"{capture.Width}x{capture.Height}";
+            var signaling = new SignalingClient(
+                appSettings.Pusher.AppKey,
+                appSettings.Pusher.Cluster,
+                appSettings.WebAuthUrl,
+                accessToken,
+                hostId,
+                hostName,
+                resolution,
+                appSettings.SupabaseUrl,
+                appSettings.SupabaseAnonKey,
+                userId);
             var webRtc = new WebRTCManager(capture, password);
 
-            signaling.OnSignalReceived += async (from, signal) => await webRtc.HandleSignalAsync(from, signal);
-            webRtc.OnSignalReady += async (to, signal) => await signaling.SendSignalAsync(to, signal);
-            
-            try 
+            signaling.OnSignalReceived +=
+                async (from, signal) => await webRtc.HandleSignalAsync(from, signal);
+            webRtc.OnSignalReady +=
+                async (to, signal) => await signaling.SendSignalAsync(to, signal);
+
+            await signaling.ConnectAsync();
+            signaling.StartThumbnailReporting(capture);
+
+            await Task.Delay(Timeout.InfiniteTimeSpan);
+        }
+
+        private static (string AccessToken, string UserId, string UserEmail)?
+            AuthenticateInteractive(AppSettings settings)
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            using var loginForm = new LoginForm(settings);
+            if (loginForm.ShowDialog() != DialogResult.OK) return null;
+
+            if (!string.IsNullOrWhiteSpace(loginForm.RefreshToken))
             {
-                await signaling.ConnectAsync();
+                ServiceCredentialStore.Save(loginForm.RefreshToken);
+            }
+
+            return (
+                loginForm.AccessToken,
+                loginForm.UserId,
+                loginForm.UserEmail);
+        }
+
+        private static async Task<(string AccessToken, string UserId, string UserEmail)?>
+            AuthenticateServiceAsync(AppSettings settings)
+        {
+            if (!ServiceCredentialStore.TryLoad(out var refreshToken))
+            {
+                Console.WriteLine(
+                    "[ServiceAuth] No device refresh token. " +
+                    "Run Host as administrator and sign in once.");
+                return null;
+            }
+
+            try
+            {
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+                var url =
+                    $"{settings.SupabaseUrl.TrimEnd('/')}/auth/v1/token?grant_type=refresh_token";
+                using var content = new StringContent(
+                    JsonConvert.SerializeObject(new { refresh_token = refreshToken }),
+                    Encoding.UTF8,
+                    "application/json");
+                client.DefaultRequestHeaders.Add("apikey", settings.SupabaseAnonKey);
+
+                using var response = await client.PostAsync(url, content);
+                var responseBody = await response.Content.ReadAsStringAsync();
+                if (!response.IsSuccessStatusCode)
+                {
+                    Console.WriteLine($"[ServiceAuth] Refresh failed: {response.StatusCode}");
+                    return null;
+                }
+
+                var json = JObject.Parse(responseBody);
+                var accessToken = json.Value<string>("access_token");
+                var nextRefreshToken = json.Value<string>("refresh_token");
+                var userId = json["user"]?.Value<string>("id");
+                var email = json["user"]?.Value<string>("email") ?? "service";
+
+                if (
+                    string.IsNullOrWhiteSpace(accessToken) ||
+                    string.IsNullOrWhiteSpace(userId))
+                {
+                    return null;
+                }
+
+                if (!string.IsNullOrWhiteSpace(nextRefreshToken))
+                    ServiceCredentialStore.Save(nextRefreshToken);
+
+                return (accessToken, userId, email);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Main] 시그널링 서버 연결 실패: {ex}");
-                // 서비스 모드일 경우 여기서 종료되면 안 될 수도 있음 (재시도 로직 필요)
+                Console.WriteLine($"[ServiceAuth] Refresh error: {ex.Message}");
+                return null;
             }
-
-            await Task.Delay(-1);
         }
 
-        static void InstallService()
+        private static string ResolveHostId(AppSettings settings)
         {
-            string exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName ?? "";
-            if (string.IsNullOrEmpty(exePath)) return;
+            if (!string.IsNullOrWhiteSpace(settings.HostId))
+                return settings.HostId;
 
-            // sc.exe의 binPath 인자 형식: binPath= "C:\path\to\Host.exe"
-            string cmd = $"create KymoteHost binPath= \"{exePath}\" start= auto DisplayName= \"KYMOTE Host Service\"";
-            System.Diagnostics.Process.Start("sc.exe", cmd)?.WaitForExit();
-            System.Diagnostics.Process.Start("sc.exe", "description KymoteHost \"KYMOTE Remote Control Host Service\"")?.WaitForExit();
-            System.Diagnostics.Process.Start("sc.exe", "start KymoteHost")?.WaitForExit();
-            Console.WriteLine("서비스가 설치 및 시작되었습니다.");
+            settings.HostId = DeviceIdentityStore.GetOrCreate();
+            settings.Save();
+            return settings.HostId;
         }
 
-        static void UninstallService()
+        private static void ConfigureConsole(bool isService)
         {
-            System.Diagnostics.Process.Start("sc.exe", "stop KymoteHost")?.WaitForExit();
-            System.Diagnostics.Process.Start("sc.exe", "delete KymoteHost")?.WaitForExit();
-            Console.WriteLine("서비스가 중지 및 삭제되었습니다.");
-        }
-        private static async Task<(string token, string userId)> AttemptAutoLogin(AppSettings settings, string email, string password)
-        {
-            using (var client = new System.Net.Http.HttpClient())
+            if (!isService)
             {
                 try
                 {
-                    var url = $"{settings.SupabaseUrl}/auth/v1/token?grant_type=password";
-                    var body = new { email = email, password = password };
-                    var content = new System.Net.Http.StringContent(Newtonsoft.Json.JsonConvert.SerializeObject(body), System.Text.Encoding.UTF8, "application/json");
-                    client.DefaultRequestHeaders.Add("apikey", settings.SupabaseAnonKey);
-
-                    var response = await client.PostAsync(url, content);
-                    if (response.IsSuccessStatusCode)
-                    {
-                        var responseString = await response.Content.ReadAsStringAsync();
-                        dynamic json = Newtonsoft.Json.JsonConvert.DeserializeObject(responseString);
-                        string token = json.access_token;
-                        string uid = json.user?.id ?? "";
-                        return (token, uid);
-                    }
-                    else
-                    {
-                        Console.WriteLine($"[AutoLogin] Failed. Status: {response.StatusCode}");
-                        string errorBody = await response.Content.ReadAsStringAsync();
-                        Console.WriteLine($"[AutoLogin] Error details: {errorBody}");
-                    }
+                    Console.Title = "Comote Host";
+                    Console.BackgroundColor = ConsoleColor.Black;
+                    Console.ForegroundColor = ConsoleColor.DarkYellow;
+                    Console.Clear();
+                    Console.WriteLine("==============================================");
+                    Console.WriteLine("          COMOTE HOST v1.3.0");
+                    Console.WriteLine("==============================================");
                 }
-                catch (Exception ex)
+                catch
                 {
-                    Console.WriteLine($"[AutoLogin] Exception: {ex.Message}");
+                    // A console is optional for GUI mode.
                 }
             }
-            return (null, null);
+
+            var handle = GetStdHandle(-10);
+            if (GetConsoleMode(handle, out var mode))
+            {
+                SetConsoleMode(handle, mode | 0x0040u | 0x0080u);
+            }
+        }
+
+        private static void InstallService()
+        {
+            var executablePath =
+                Process.GetCurrentProcess().MainModule?.FileName ?? "";
+            if (string.IsNullOrWhiteSpace(executablePath)) return;
+
+            RunServiceControl(
+                $"create {ServiceName} binPath= \"\\\"{executablePath}\\\" --nogui\" " +
+                "start= auto DisplayName= \"Comote Host Service\"");
+            RunServiceControl(
+                $"description {ServiceName} \"Comote Remote Control Host Service\"");
+            RunServiceControl($"start {ServiceName}");
+        }
+
+        private static void UninstallService()
+        {
+            RunServiceControl($"stop {ServiceName}");
+            RunServiceControl($"delete {ServiceName}");
+        }
+
+        private static void RunServiceControl(string arguments)
+        {
+            using var process = Process.Start(
+                new ProcessStartInfo
+                {
+                    FileName = "sc.exe",
+                    Arguments = arguments,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                });
+            process?.WaitForExit();
         }
     }
 }

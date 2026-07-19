@@ -1,5 +1,5 @@
-
 using System;
+using System.Collections.Generic;
 using System.IO;
 using Newtonsoft.Json;
 
@@ -7,77 +7,135 @@ namespace Host
 {
     public class AppSettings
     {
-        public PusherConfig Pusher { get; set; } = new PusherConfig();
+        private const string SettingsFileName = "hostsettings.json";
+
+        public PusherConfig Pusher { get; set; } = new();
         public string? DefaultHostName { get; set; }
         public string? DefaultPassword { get; set; }
         public string? HostId { get; set; }
+        public string SupabaseUrl { get; set; } = "";
+        public string SupabaseAnonKey { get; set; } = "";
+        public string WebAuthUrl { get; set; } = "https://kymote.vercel.app/api/pusher/auth";
+
+        public static string DataDirectory =>
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Comote");
+
+        public static string SettingsFilePath => Path.Combine(DataDirectory, SettingsFileName);
 
         public class PusherConfig
         {
-            public string AppId { get; set; } = "2114862";
-            public string AppKey { get; set; } = "50ef3c55ccd8c468f604";
-            public string Secret { get; set; } = "18c2f6cbcfe14071733b";
+            public string AppKey { get; set; } = "";
             public string Cluster { get; set; } = "ap3";
         }
 
-        // Supabase Settings
-        public string SupabaseUrl { get; set; } = "https://nlodelehewbbniayzjuv.supabase.co";
-        public string SupabaseAnonKey { get; set; } = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5sb2RlbGVoZXdiYm5pYXl6anV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzExMzc1MjksImV4cCI6MjA4NjcxMzUyOX0.-r_qNDErJPWLma1i3wjXZmvzXAZUGtHHK-L3YMcZYb4";
-        public string WebAuthUrl { get; set; } = "https://kymote.vercel.app/api/pusher/auth";
-
         public static AppSettings Load()
         {
-            AppSettings? settings = null;
+            var settings = LoadEmbeddedDefaults() ?? new AppSettings();
 
-            // 1. 임베디드 리소스 우선 로드 (단일 파일 배포용 - API Key 등 기본값)
-            try
-            {
-                var assembly = System.Reflection.Assembly.GetExecutingAssembly();
-                using (var stream = assembly.GetManifestResourceStream("Host.appsettings.json"))
-                {
-                    if (stream != null)
-                    {
-                        using (var reader = new StreamReader(stream))
-                        {
-                            settings = JsonConvert.DeserializeObject<AppSettings>(reader.ReadToEnd());
-                        }
-                    }
-                }
-            }
-            catch { }
-
-            // 2. 파일 시스템에서 런타임 값(HostId 등) 병합
-            // 임베디드 리소스에 HostId가 없으므로 파일에서 반드시 읽어야 함
-            string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "appsettings.json");
-            if (File.Exists(path))
+            if (File.Exists(SettingsFilePath))
             {
                 try
                 {
-                    var fileSettings = JsonConvert.DeserializeObject<AppSettings>(File.ReadAllText(path));
+                    var fileSettings = JsonConvert.DeserializeObject<AppSettings>(
+                        File.ReadAllText(SettingsFilePath));
                     if (fileSettings != null)
                     {
-                        if (settings == null)
-                            return fileSettings;
-                        // 파일의 HostId를 임베디드 설정에 병합
-                        if (!string.IsNullOrEmpty(fileSettings.HostId))
-                            settings.HostId = fileSettings.HostId;
+                        Merge(settings, fileSettings);
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Settings] Failed to read {SettingsFilePath}: {ex.Message}");
+                }
             }
 
-            return settings ?? new AppSettings();
+            ApplyEnvironmentOverrides(settings);
+            return settings;
         }
 
         public void Save()
         {
             try
             {
-                string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "appsettings.json");
-                string json = JsonConvert.SerializeObject(this, Formatting.Indented);
-                File.WriteAllText(path, json);
+                Directory.CreateDirectory(DataDirectory);
+                var json = JsonConvert.SerializeObject(this, Formatting.Indented);
+                File.WriteAllText(SettingsFilePath, json);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Settings] Failed to save {SettingsFilePath}: {ex.Message}");
+            }
+        }
+
+        public IReadOnlyList<string> GetConfigurationErrors()
+        {
+            var errors = new List<string>();
+
+            if (!Uri.TryCreate(SupabaseUrl, UriKind.Absolute, out _))
+                errors.Add("SupabaseUrl");
+            if (string.IsNullOrWhiteSpace(SupabaseAnonKey))
+                errors.Add("SupabaseAnonKey");
+            if (string.IsNullOrWhiteSpace(Pusher.AppKey))
+                errors.Add("Pusher.AppKey");
+            if (string.IsNullOrWhiteSpace(Pusher.Cluster))
+                errors.Add("Pusher.Cluster");
+            if (!Uri.TryCreate(WebAuthUrl, UriKind.Absolute, out _))
+                errors.Add("WebAuthUrl");
+
+            return errors;
+        }
+
+        private static AppSettings? LoadEmbeddedDefaults()
+        {
+            try
+            {
+                var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+                using var stream = assembly.GetManifestResourceStream("Host.appsettings.json");
+                if (stream == null) return null;
+                using var reader = new StreamReader(stream);
+                return JsonConvert.DeserializeObject<AppSettings>(reader.ReadToEnd());
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Settings] Failed to read embedded defaults: {ex.Message}");
+                return null;
+            }
+        }
+
+        private static void Merge(AppSettings target, AppSettings source)
+        {
+            if (!string.IsNullOrWhiteSpace(source.Pusher.AppKey))
+                target.Pusher.AppKey = source.Pusher.AppKey;
+            if (!string.IsNullOrWhiteSpace(source.Pusher.Cluster))
+                target.Pusher.Cluster = source.Pusher.Cluster;
+            if (!string.IsNullOrWhiteSpace(source.SupabaseUrl))
+                target.SupabaseUrl = source.SupabaseUrl;
+            if (!string.IsNullOrWhiteSpace(source.SupabaseAnonKey))
+                target.SupabaseAnonKey = source.SupabaseAnonKey;
+            if (!string.IsNullOrWhiteSpace(source.WebAuthUrl))
+                target.WebAuthUrl = source.WebAuthUrl;
+            if (!string.IsNullOrWhiteSpace(source.DefaultHostName))
+                target.DefaultHostName = source.DefaultHostName;
+            if (source.DefaultPassword != null)
+                target.DefaultPassword = source.DefaultPassword;
+            if (!string.IsNullOrWhiteSpace(source.HostId))
+                target.HostId = source.HostId;
+        }
+
+        private static void ApplyEnvironmentOverrides(AppSettings settings)
+        {
+            SetIfPresent("COMOTE_PUSHER_APP_KEY", value => settings.Pusher.AppKey = value);
+            SetIfPresent("COMOTE_PUSHER_CLUSTER", value => settings.Pusher.Cluster = value);
+            SetIfPresent("COMOTE_SUPABASE_URL", value => settings.SupabaseUrl = value.TrimEnd('/'));
+            SetIfPresent("COMOTE_SUPABASE_ANON_KEY", value => settings.SupabaseAnonKey = value);
+            SetIfPresent("COMOTE_WEB_AUTH_URL", value => settings.WebAuthUrl = value);
+        }
+
+        private static void SetIfPresent(string name, Action<string> setter)
+        {
+            var value = Environment.GetEnvironmentVariable(name);
+            if (!string.IsNullOrWhiteSpace(value))
+                setter(value.Trim());
         }
     }
 }

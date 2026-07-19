@@ -21,7 +21,6 @@ namespace Host
         private static readonly HttpClient _httpClient = new HttpClient();
 
         private Pusher _pusher;
-        private string _appId;
         private string _appKey;
         private string _cluster;
         private string _hostId;
@@ -36,15 +35,15 @@ namespace Host
         private string _supabaseUrl;
         private string _supabaseKey;
         private string _userId;
-        private System.Threading.Timer? _heartbeatTimer;
+        private readonly CancellationTokenSource _lifetimeCts = new();
+        private ScreenCapture? _capture;
 
         public event Action<string, object> OnSignalReceived;
 
-        public SignalingClient(string appId, string appKey, string cluster, string webAuthUrl, string accessToken,
+        public SignalingClient(string appKey, string cluster, string webAuthUrl, string accessToken,
             string hostId, string? hostName = null, string? resolution = null,
             string? supabaseUrl = null, string? supabaseKey = null, string? userId = null)
         {
-            _appId = appId;
             _appKey = appKey;
             _cluster = cluster;
             _webAuthUrl = webAuthUrl;
@@ -112,8 +111,25 @@ namespace Host
             if (!string.IsNullOrEmpty(_supabaseUrl) && !string.IsNullOrEmpty(_userId))
             {
                 // 최초 즉시 실행 + 이후 30초 간격
-                _heartbeatTimer = new System.Threading.Timer(async _ => await SendHeartbeatAsync(), null, 0, 30000);
+                _ = RunHeartbeatLoopAsync(_lifetimeCts.Token);
                 Console.WriteLine("[Signaling] Supabase heartbeat started (30s interval)");
+            }
+        }
+
+        private async Task RunHeartbeatLoopAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                await SendHeartbeatAsync();
+                using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+                while (await timer.WaitForNextTickAsync(cancellationToken))
+                {
+                    await SendHeartbeatAsync();
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Normal shutdown.
             }
         }
 
@@ -131,11 +147,13 @@ namespace Host
                     host_id = _hostId,
                     user_id = _userId,
                     host_name = _hostName,
-                    // resolution = (string?)((dynamic)info).resolution ?? "N/A",
-                    // cpu = (int?)((dynamic)info).cpu ?? 0,
-                    // ram = (string?)((dynamic)info).ram ?? "N/A",
-                    // hdd = (string?)((dynamic)info).hdd ?? "N/A",
-                    // uptime = (string?)((dynamic)info).uptime ?? "N/A",
+                    resolution = (string?)((dynamic)info).resolution ?? "N/A",
+                    cpu = (int?)((dynamic)info).cpu ?? 0,
+                    ram = (string?)((dynamic)info).ram ?? "N/A",
+                    hdd = (string?)((dynamic)info).hdd ?? "N/A",
+                    uptime = (string?)((dynamic)info).uptime ?? "N/A",
+                    ip = (string?)((dynamic)info).ip ?? "unknown",
+                    mac_address = (string?)((dynamic)info).mac_address ?? "",
                     last_seen = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
                 };
 
@@ -163,6 +181,88 @@ namespace Host
             {
                 Console.WriteLine($"[Heartbeat] Error: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// 썸네일을 캡처하여 Supabase Storage에 업로드하고 DB URL을 갱신합니다.
+        /// </summary>
+        public void StartThumbnailReporting(ScreenCapture capture)
+        {
+            _capture = capture;
+            if (!string.IsNullOrEmpty(_supabaseUrl) && !string.IsNullOrEmpty(_userId))
+            {
+                // 60초 간격으로 썸네일 업로드
+                _ = RunThumbnailLoopAsync(_lifetimeCts.Token);
+                Console.WriteLine("[Signaling] Thumbnail reporting started (60s interval)");
+            }
+        }
+
+        private async Task RunThumbnailLoopAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+                await SendThumbnailAsync();
+
+                using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+                while (await timer.WaitForNextTickAsync(cancellationToken))
+                {
+                    await SendThumbnailAsync();
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Normal shutdown.
+            }
+        }
+
+        private async Task SendThumbnailAsync()
+        {
+            if (_capture == null) return;
+            try
+            {
+                var thumbnail = _capture.CaptureThumbnail();
+                if (thumbnail == null) return;
+
+                var baseUrl = _supabaseUrl.TrimEnd('/');
+                var objectPath = $"{_userId}/{_hostId}.jpg";
+                var uploadUrl = $"{baseUrl}/storage/v1/object/thumbnails/{objectPath}";
+
+                var request = new HttpRequestMessage(HttpMethod.Post, uploadUrl);
+                request.Headers.Add("apikey", _supabaseKey);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
+                request.Headers.Add("x-upsert", "true"); // 덮어쓰기 허용
+
+                request.Content = new ByteArrayContent(thumbnail);
+                request.Content.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
+
+                var response = await _httpClient.SendAsync(request);
+                if (response.IsSuccessStatusCode)
+                {
+                    await UpdateThumbnailPathInDbAsync(objectPath);
+                    Console.WriteLine("[Thumbnail] Uploaded successfully");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Thumbnail] Error: {ex.Message}");
+            }
+        }
+
+        private async Task UpdateThumbnailPathInDbAsync(string path)
+        {
+            try
+            {
+                var dto = new { thumbnail_path = path, thumbnail_url = (string?)null };
+                var baseUrl = _supabaseUrl.TrimEnd('/');
+                var request = new HttpRequestMessage(HttpMethod.Patch, $"{baseUrl}/rest/v1/hosts?host_id=eq.{_hostId}&user_id=eq.{_userId}");
+                request.Headers.Add("apikey", _supabaseKey);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
+                request.Content = new StringContent(JsonConvert.SerializeObject(dto), Encoding.UTF8, "application/json");
+
+                await _httpClient.SendAsync(request);
+            }
+            catch { }
         }
 
         [System.Runtime.InteropServices.DllImport("kernel32.dll")]

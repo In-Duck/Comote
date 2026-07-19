@@ -16,6 +16,7 @@ Distribution/**
 !Distribution/version.json
 !Distribution/**/*.iss
 !Distribution/**/*.bat
+!Distribution/**/*.ps1
 !Distribution/GUIDE.md
 
 # Explicitly ignore all EXEs and ZIPs to prevent large file errors
@@ -25,3 +26,6 @@ web/public/downloads/
 publish/
 bin/
 obj/
+
+artifacts/
+.site-deploy-source/

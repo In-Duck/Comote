@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -40,12 +40,15 @@ namespace Viewer
 
         /// <summary>DataChannel ping/pong으로 측정된 RTT (ms)</summary>
         public int RttMs { get; private set; } = -1;
+        public bool InputChannelReady => _inputChannel?.readyState == RTCDataChannelState.open;
+        public DateTime LastInputAcknowledgedAt { get; private set; } = DateTime.MinValue;
 
         // --- 프로토콜 상수 ---
         private const byte MSG_STATS     = 0x20;
         private const byte MSG_PING      = 0x21;
         private const byte MSG_PONG      = 0x22;
         private const byte MSG_CLIPBOARD = 0x23;
+        private const byte MSG_INPUT_ACK = 0x14;
 
         // --- 파일 전송 프로토콜 ---
         private const byte MSG_FILE_START = 0x30;
@@ -505,6 +508,9 @@ namespace Viewer
                 if (data == null || data.Length < 1) return;
                 switch (data[0])
                 {
+                    case MSG_INPUT_ACK:
+                        LastInputAcknowledgedAt = DateTime.UtcNow;
+                        break;
                     case MSG_PONG:
                         HandlePong();
                         break;
@@ -554,12 +560,15 @@ namespace Viewer
         /// <summary>
         /// 바이너리 입력 데이터를 DataChannel로 전송합니다.
         /// </summary>
-        public void SendInput(byte[] data)
+        public bool SendInput(byte[] data)
         {
-            if (_inputChannel != null && _inputChannel.readyState == RTCDataChannelState.open)
+            if (_inputChannel == null || _inputChannel.readyState != RTCDataChannelState.open)
             {
-                _inputChannel.send(data);
+                Console.WriteLine("[Input] Send skipped: input DataChannel is not open.");
+                return false;
             }
+            _inputChannel.send(data);
+            return true;
         }
 
         /// <summary>

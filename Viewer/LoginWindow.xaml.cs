@@ -1,92 +1,98 @@
-
 using System;
-using System.IO;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace Viewer
 {
     public partial class LoginWindow : Window
     {
-        public string AccessToken { get; private set; }
-        public string UserEmail { get; private set; }
-        public string UserId { get; private set; }
-        
-        private AppSettings _settings;
+        public string AccessToken { get; private set; } = "";
+        public string UserEmail { get; private set; } = "";
+        public string UserId { get; private set; } = "";
+
+        private readonly AppSettings _settings;
 
         public LoginWindow()
         {
             InitializeComponent();
-            try { Icon = new System.Windows.Media.Imaging.BitmapImage(new Uri("pack://application:,,,/Kymote.ico")); } catch { }
+            try
+            {
+                Icon = new System.Windows.Media.Imaging.BitmapImage(
+                    new Uri("pack://application:,,,/Kymote.ico"));
+            }
+            catch
+            {
+                // The window remains usable without an icon.
+            }
+
             _settings = AppSettings.Load();
             LoadSavedCredentials();
+
+            var configurationErrors = _settings.GetConfigurationErrors();
+            if (configurationErrors.Count > 0)
+            {
+                btnLogin.IsEnabled = false;
+                lblStatus.Text =
+                    "서버 설정이 필요합니다: " +
+                    string.Join(", ", configurationErrors);
+                lblStatus.Foreground = System.Windows.Media.Brushes.Red;
+            }
         }
 
         private void LoadSavedCredentials()
         {
-            if (File.Exists("login.dat"))
+            if (UserCredentialStore.TryLoad(out var email, out var password))
             {
-                try {
-                    var lines = File.ReadAllLines("login.dat");
-                    if (lines.Length >= 2)
-                    {
-                        txtEmail.Text = lines[0];
-                        txtPassword.Password = lines[1];
-                        chkSave.IsChecked = true;
-                    }
-                } catch { }
+                txtEmail.Text = email;
+                txtPassword.Password = password;
+                chkSave.IsChecked = true;
             }
         }
 
         private async void btnLogin_Click(object sender, RoutedEventArgs e)
         {
             btnLogin.IsEnabled = false;
-            lblStatus.Text = "Logging in...";
+            lblStatus.Text = "로그인 중...";
             lblStatus.Foreground = System.Windows.Media.Brushes.LightBlue;
 
-            string email = txtEmail.Text;
-            string password = txtPassword.Password;
-
+            var email = txtEmail.Text.Trim();
+            var password = txtPassword.Password;
             if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
             {
-                lblStatus.Text = "Please enter email and password.";
+                lblStatus.Text = "이메일과 비밀번호를 입력해 주세요.";
                 btnLogin.IsEnabled = true;
                 return;
             }
 
             try
             {
-                var (token, userId) = await SignInWithEmailPassword(email, password);
-                if (token != null)
+                var result = await SignInWithEmailPassword(email, password);
+                if (result == null)
                 {
-                    AccessToken = token;
-                    UserEmail = email;
-                    UserId = userId;
-
-                    if (chkSave.IsChecked == true)
-                    {
-                        File.WriteAllLines("login.dat", new[] { email, password });
-                    }
-                    else
-                    {
-                        if (File.Exists("login.dat")) File.Delete("login.dat");
-                    }
-
-                    this.DialogResult = true;
-                    this.Close();
-                }
-                else
-                {
-                    lblStatus.Text = "Login failed. Check credentials.";
+                    lblStatus.Text = "로그인에 실패했습니다. 계정 정보를 확인해 주세요.";
                     lblStatus.Foreground = System.Windows.Media.Brushes.Red;
+                    return;
                 }
+
+                AccessToken = result.Value.Token;
+                UserId = result.Value.UserId;
+                UserEmail = email;
+
+                if (chkSave.IsChecked == true)
+                    UserCredentialStore.Save(email, password);
+                else
+                    UserCredentialStore.Delete();
+
+                DialogResult = true;
+                Close();
             }
             catch (Exception ex)
             {
-                lblStatus.Text = "Error: " + ex.Message;
+                lblStatus.Text = "로그인 오류: " + ex.Message;
                 lblStatus.Foreground = System.Windows.Media.Brushes.Red;
             }
             finally
@@ -95,36 +101,33 @@ namespace Viewer
             }
         }
 
-        private async Task<(string?, string?)> SignInWithEmailPassword(string email, string password)
+        private async Task<(string Token, string UserId)?> SignInWithEmailPassword(
+            string email,
+            string password)
         {
-            using (var client = new HttpClient())
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            var url = $"{_settings.SupabaseUrl.TrimEnd('/')}/auth/v1/token?grant_type=password";
+            var body = new { email, password };
+            using var content = new StringContent(
+                JsonConvert.SerializeObject(body),
+                Encoding.UTF8,
+                "application/json");
+            client.DefaultRequestHeaders.Add("apikey", _settings.SupabaseAnonKey);
+
+            using var response = await client.PostAsync(url, content);
+            var responseString = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
             {
-                var url = $"{_settings.SupabaseUrl}/auth/v1/token?grant_type=password";
-                var body = new
-                {
-                    email = email,
-                    password = password
-                };
-                
-                var content = new StringContent(JsonConvert.SerializeObject(body), Encoding.UTF8, "application/json");
-                client.DefaultRequestHeaders.Add("apikey", _settings.SupabaseAnonKey);
-
-                var response = await client.PostAsync(url, content);
-                var responseString = await response.Content.ReadAsStringAsync();
-
-                if (response.IsSuccessStatusCode)
-                {
-                    dynamic json = JsonConvert.DeserializeObject(responseString);
-                    string token = json.access_token;
-                    string userId = json.user.id;
-                    return (token, userId);
-                }
-                else
-                {
-                    Console.WriteLine("Login Error: " + responseString);
-                    return (null, null);
-                }
+                Console.WriteLine($"[Login] Supabase returned {response.StatusCode}");
+                return null;
             }
+
+            var json = JObject.Parse(responseString);
+            var token = json.Value<string>("access_token");
+            var userId = json["user"]?.Value<string>("id");
+            return !string.IsNullOrWhiteSpace(token) && !string.IsNullOrWhiteSpace(userId)
+                ? (token, userId)
+                : null;
         }
     }
 }

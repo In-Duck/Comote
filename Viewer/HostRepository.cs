@@ -1,29 +1,27 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
-using System.Linq;
 
 namespace Viewer
 {
-    // DB DTO (Data Transfer Object)
     public class HostDto
     {
         [JsonProperty("host_id")]
-        public string HostId { get; set; }
+        public string HostId { get; set; } = "";
 
         [JsonProperty("host_name")]
-        public string HostName { get; set; }
+        public string HostName { get; set; } = "";
 
         [JsonProperty("user_id")]
-        public string UserId { get; set; }
+        public string UserId { get; set; } = "";
 
         [JsonProperty("last_seen")]
         public DateTime LastSeen { get; set; }
 
-        // 시스템 정보 컬럼 (Host heartbeat에서 업데이트)
         [JsonProperty("ip")]
         public string Ip { get; set; } = "unknown";
 
@@ -31,7 +29,7 @@ namespace Viewer
         public string Resolution { get; set; } = "N/A";
 
         [JsonProperty("cpu")]
-        public int Cpu { get; set; } = 0;
+        public int Cpu { get; set; }
 
         [JsonProperty("ram")]
         public string Ram { get; set; } = "N/A";
@@ -44,27 +42,34 @@ namespace Viewer
 
         [JsonProperty("mac_address")]
         public string MacAddress { get; set; } = "";
+
+        [JsonProperty("thumbnail_path")]
+        public string? ThumbnailPath { get; set; }
+
+        [JsonIgnore]
+        public string? ThumbnailUrl { get; set; }
     }
 
-    public class HostRepository
+    public class HostRepository : IDisposable
     {
-        private HttpClient _client;
-        private string _baseUrl;
-        private string _key;
-        private string _accessToken;
-        private string _userId;
+        private readonly HttpClient _client;
+        private readonly string _baseUrl;
+        private readonly string _key;
+        private readonly string _thumbnailApiUrl;
+        private string _accessToken = "";
+        private string _userId = "";
 
-        public HostRepository(string url, string key)
+        public HostRepository(string url, string key, string webAuthUrl)
         {
-            _baseUrl = url;
+            _baseUrl = url.TrimEnd('/');
             _key = key;
-            _client = new HttpClient();
-            _client.Timeout = TimeSpan.FromSeconds(10); // [Stability] Prevent infinite hanging
+            _thumbnailApiUrl = webAuthUrl.Replace(
+                "/api/pusher/auth",
+                "/api/hosts/thumbnails",
+                StringComparison.OrdinalIgnoreCase);
+            _client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
         }
 
-        /// <summary>
-        /// 인증 토큰과 사용자 ID를 설정합니다.
-        /// </summary>
         public Task InitializeAsync(string accessToken, string userId)
         {
             _accessToken = accessToken;
@@ -72,41 +77,31 @@ namespace Viewer
             return Task.CompletedTask;
         }
 
-        private void SetHeaders(HttpRequestMessage request)
-        {
-            request.Headers.Add("apikey", _key);
-            request.Headers.Add("Authorization", $"Bearer {_accessToken}");
-        }
-
-        /// <summary>
-        /// 현재 사용자의 모든 호스트를 조회합니다.
-        /// last_seen 기준 60초 이내면 IsOnline으로 판단합니다.
-        /// </summary>
         public async Task<List<HostDto>> GetHostsAsync()
         {
             try
             {
-                // 현재 사용자의 호스트만 필터링 (RLS 외 추가 안전장치)
-                var url = $"{_baseUrl}/rest/v1/hosts?select=*&user_id=eq.{Uri.EscapeDataString(_userId)}";
-                var request = new HttpRequestMessage(HttpMethod.Get, url);
-                SetHeaders(request);
+                var url =
+                    $"{_baseUrl}/rest/v1/hosts?select=*&user_id=eq.{Uri.EscapeDataString(_userId)}";
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                SetSupabaseHeaders(request);
 
-                var response = await _client.SendAsync(request);
+                using var response = await _client.SendAsync(request);
                 var content = await response.Content.ReadAsStringAsync();
-
-                if (response.IsSuccessStatusCode)
+                if (!response.IsSuccessStatusCode)
                 {
-                    return JsonConvert.DeserializeObject<List<HostDto>>(content) ?? new List<HostDto>();
-                }
-                else
-                {
-                    Console.WriteLine($"[HostRepository] GetHosts Failed: {content}");
+                    Console.WriteLine($"[HostRepository] GetHosts failed: {content}");
                     return new List<HostDto>();
                 }
+
+                var hosts = JsonConvert.DeserializeObject<List<HostDto>>(content)
+                    ?? new List<HostDto>();
+                await ApplySignedThumbnailUrlsAsync(hosts);
+                return hosts;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[HostRepository] GetHosts Error: {ex.Message}");
+                Console.WriteLine($"[HostRepository] GetHosts error: {ex.Message}");
                 return new List<HostDto>();
             }
         }
@@ -120,51 +115,100 @@ namespace Viewer
                     HostId = hostId,
                     HostName = hostName,
                     UserId = userId,
-                    LastSeen = DateTime.UtcNow
+                    LastSeen = DateTime.UtcNow,
                 };
 
-                // on_conflict: user_id, host_id 조합으로 UPSERT 동작
-                var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}/rest/v1/hosts?on_conflict=user_id,host_id");
-                SetHeaders(request);
-                request.Headers.Add("Prefer", "resolution=merge-duplicates"); // This enables UPSERT
-                
-                string json = JsonConvert.SerializeObject(dto);
-                request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+                using var request = new HttpRequestMessage(
+                    HttpMethod.Post,
+                    $"{_baseUrl}/rest/v1/hosts?on_conflict=user_id,host_id");
+                SetSupabaseHeaders(request);
+                request.Headers.Add("Prefer", "resolution=merge-duplicates");
+                request.Content = new StringContent(
+                    JsonConvert.SerializeObject(dto),
+                    Encoding.UTF8,
+                    "application/json");
 
-                var response = await _client.SendAsync(request);
-                
+                using var response = await _client.SendAsync(request);
                 if (!response.IsSuccessStatusCode)
                 {
                     var error = await response.Content.ReadAsStringAsync();
-                    Console.WriteLine($"[HostRepository] Upsert Failed: {error}");
+                    Console.WriteLine($"[HostRepository] Upsert failed: {error}");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[HostRepository] UpsertHost Error: {ex.Message}");
+                Console.WriteLine($"[HostRepository] Upsert error: {ex.Message}");
             }
         }
+
         public async Task DeleteHostAsync(string hostId)
         {
             try
             {
-                // user_id와 host_id가 모두 일치하는 항목 삭제 (보안 강화)
-                var url = $"{_baseUrl}/rest/v1/hosts?host_id=eq.{Uri.EscapeDataString(hostId)}&user_id=eq.{Uri.EscapeDataString(_userId)}";
-                var request = new HttpRequestMessage(HttpMethod.Delete, url);
-                SetHeaders(request);
+                var url =
+                    $"{_baseUrl}/rest/v1/hosts?host_id=eq.{Uri.EscapeDataString(hostId)}" +
+                    $"&user_id=eq.{Uri.EscapeDataString(_userId)}";
+                using var request = new HttpRequestMessage(HttpMethod.Delete, url);
+                SetSupabaseHeaders(request);
 
-                var response = await _client.SendAsync(request);
-                
+                using var response = await _client.SendAsync(request);
                 if (!response.IsSuccessStatusCode)
                 {
                     var error = await response.Content.ReadAsStringAsync();
-                    Console.WriteLine($"[HostRepository] Delete Failed: {error}");
+                    Console.WriteLine($"[HostRepository] Delete failed: {error}");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[HostRepository] DeleteHost Error: {ex.Message}");
+                Console.WriteLine($"[HostRepository] Delete error: {ex.Message}");
             }
+        }
+
+        private async Task ApplySignedThumbnailUrlsAsync(List<HostDto> hosts)
+        {
+            if (hosts.Count == 0 || string.IsNullOrWhiteSpace(_thumbnailApiUrl))
+                return;
+
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, _thumbnailApiUrl);
+                request.Headers.Authorization =
+                    new AuthenticationHeaderValue("Bearer", _accessToken);
+                using var response = await _client.SendAsync(request);
+                if (!response.IsSuccessStatusCode) return;
+
+                var json = await response.Content.ReadAsStringAsync();
+                var result = JsonConvert.DeserializeObject<ThumbnailUrlResponse>(json);
+                if (result?.Urls == null) return;
+
+                foreach (var host in hosts)
+                {
+                    if (result.Urls.TryGetValue(host.HostId, out var url))
+                        host.ThumbnailUrl = url;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[HostRepository] Thumbnail signing error: {ex.Message}");
+            }
+        }
+
+        private void SetSupabaseHeaders(HttpRequestMessage request)
+        {
+            request.Headers.Add("apikey", _key);
+            request.Headers.Authorization =
+                new AuthenticationHeaderValue("Bearer", _accessToken);
+        }
+
+        public void Dispose()
+        {
+            _client.Dispose();
+        }
+
+        private sealed class ThumbnailUrlResponse
+        {
+            [JsonProperty("urls")]
+            public Dictionary<string, string> Urls { get; set; } = new();
         }
     }
 }
