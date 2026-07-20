@@ -1121,6 +1121,7 @@ namespace Viewer
             {
                 InitializeReceiver(hostId);
                 await _receiver!.StartAsync(null);
+                _ = WatchConnectionAsync(_receiver, hostId);
                 Console.WriteLine($"[UI] Connecting to {hostId} (no password)");
             }
             catch (Exception ex)
@@ -1800,6 +1801,29 @@ namespace Viewer
         // ==========================================================
         // 자동 재연결
         // ==========================================================
+        private async Task WatchConnectionAsync(
+            VideoReceiver receiver,
+            string hostId)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(20));
+
+            if (!ReferenceEquals(_receiver, receiver) ||
+                _connectedHostId != hostId ||
+                receiver.ConnectionState == RTCPeerConnectionState.connected)
+            {
+                return;
+            }
+
+            Dispatcher.Invoke(() =>
+            {
+                _statusText.Text = "직접 연결이 지연되어 우회 연결을 재시도합니다...";
+                _statusText.Foreground = new SolidColorBrush(
+                    Color.FromRgb(251, 191, 36));
+                _statusText.Visibility = Visibility.Visible;
+            });
+
+            await ReconnectAsync(receiver, hostId);
+        }
         private async Task ReconnectAsync(
             VideoReceiver receiver,
             string hostId)
@@ -1826,6 +1850,7 @@ namespace Viewer
                 {
                     receiver.Reset();
                     await receiver.StartAsync(_enteredPassword);
+                    _ = WatchConnectionAsync(receiver, hostId);
                     Console.WriteLine("[UI] Reconnect offer sent");
                 }
                 catch (Exception ex)
