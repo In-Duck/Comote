@@ -383,8 +383,7 @@ namespace Host
             {
                 return HidP_GetCaps(preparsedData, out var caps) >= 0 &&
                     caps.UsagePage == 0xFF00 &&
-                    caps.Usage == 0x0001 &&
-                    caps.OutputReportByteLength >= ControlReportSize;
+                    caps.Usage == 0x0001;
             }
             finally
             {

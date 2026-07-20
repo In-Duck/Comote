@@ -91,8 +91,9 @@ namespace Host
             if (FakerInputBackend.IsDriverAvailable()) return true;
             MessageBox.Show(
                 owner,
-                "드라이버가 아직 감지되지 않습니다. 설치를 완료한 뒤 " +
-                "Comote Client를 다시 실행해 주세요.",
+                "설치는 완료됐지만 가상 HID 장치가 아직 준비되지 않았습니다.\n\n" +
+                "Comote Client를 종료한 뒤 Client 컴퓨터를 한 번 재부팅하고 " +
+                "다시 실행해 주세요. 드라이버를 반복해서 설치할 필요는 없습니다.",
                 "Comote 가상 HID 설치",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);

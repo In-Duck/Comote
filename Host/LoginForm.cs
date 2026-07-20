@@ -184,7 +184,7 @@ namespace Host
 
             var footer = new Label
             {
-                Text = "Comote Remote Fleet · Preview 12",
+                Text = "Comote Remote Fleet · Preview 13",
                 Location = new Point(0, 487),
                 Size = new Size(ClientSize.Width, 18),
                 TextAlign = ContentAlignment.MiddleCenter,

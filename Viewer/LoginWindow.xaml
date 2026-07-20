@@ -69,7 +69,7 @@
                             Click="btnLogin_Click"/>
                 </StackPanel>
             </Border>
-            <TextBlock Grid.Row="4" Text="Comote Remote Fleet · Preview 12"
+            <TextBlock Grid.Row="4" Text="Comote Remote Fleet · Preview 13"
                        Foreground="#64748B" FontSize="11" HorizontalAlignment="Center"/>
         </Grid>
     </Grid>
