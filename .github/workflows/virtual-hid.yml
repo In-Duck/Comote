@@ -20,11 +20,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/cache@v4
+        with:
+          path: packages
+          key: wdk-10.0.28000.1839-x64
+
       - uses: nuget/setup-nuget@v2
 
       - uses: microsoft/setup-msbuild@v2
         with:
           vs-prerelease: true
+          msbuild-architecture: x64
 
       - name: Restore WDK packages
         shell: pwsh
