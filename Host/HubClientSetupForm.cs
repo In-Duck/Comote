@@ -11,6 +11,7 @@ namespace Host
         private readonly TextBox _passwordBox;
         private readonly TextBox _updateManifestBox;
         private readonly ComboBox _monitorBox;
+        private readonly ComboBox _inputBox;
         private readonly List<MonitorInfo> _monitors;
 
         public string ManagerAddress => _managerBox.Text.Trim();
@@ -18,6 +19,10 @@ namespace Host
         public string ClientName => _nameBox.Text.Trim();
         public string AccessPassword => _passwordBox.Text;
         public string UpdateManifestUrl => _updateManifestBox.Text.Trim();
+        public InputBackendMode SelectedInputBackendMode =>
+            _inputBox.SelectedIndex == 0
+                ? InputBackendMode.VirtualHid
+                : InputBackendMode.SendInput;
         public int AdapterIndex =>
             _monitors.Count > 0
                 ? _monitors[_monitorBox.SelectedIndex].AdapterIndex
@@ -31,7 +36,7 @@ namespace Host
         {
             Text = "Comote Client → Manager Hub";
             Width = 470;
-            Height = 640;
+            Height = 710;
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -105,16 +110,33 @@ namespace Host
             if (_monitorBox.Items.Count > 0)
                 _monitorBox.SelectedIndex = primary;
 
+            Controls.Add(AddLabel("원격 입력 방식", 442));
+            _inputBox = new ComboBox
+            {
+                Left = 24,
+                Top = 466,
+                Width = 400,
+                Height = 30,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+            };
+            _inputBox.Items.Add("가상 HID (권장 · 드라이버 필요)");
+            _inputBox.Items.Add("Windows SendInput (호환 모드)");
+            _inputBox.SelectedIndex =
+                savedSettings?.InputBackendMode == InputBackendMode.SendInput
+                    ? 1
+                    : 0;
+            Controls.Add(_inputBox);
+
             _updateManifestBox = AddTextBox(
                 "Update manifest HTTPS URL (optional)",
                 savedSettings?.UpdateManifestUrl ?? "",
-                442);
+                510);
 
             var start = new Button
             {
                 Text = "Manager에 연결",
                 Left = 24,
-                Top = 538,
+                Top = 606,
                 Width = 400,
                 Height = 44,
                 BackColor = Color.FromArgb(0, 122, 204),
@@ -170,6 +192,10 @@ namespace Host
                 MessageBox.Show("Manager 등록 암호는 최소 8자 이상이어야 합니다.");
                 return;
             }
+            if (SelectedInputBackendMode == InputBackendMode.VirtualHid &&
+                !InputBackendFactory.EnsureVirtualHidReady(this))
+                return;
+
             DialogResult = DialogResult.OK;
             Close();
         }

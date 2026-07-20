@@ -103,10 +103,9 @@ namespace Host
             _capture = capture;
             _inputBackend = inputBackend ??
                 new SendInputBackend(capture.Width, capture.Height);
-            if (_inputBackend is SendInputBackend sendInput)
-                sendInput.UpdateScreenBounds(
-                    capture.Left, capture.Top,
-                    capture.Width, capture.Height);
+            _inputBackend.UpdateScreenBounds(
+                capture.Left, capture.Top,
+                capture.Width, capture.Height);
             _password = password;
             _currentAdapterIndex = capture.AdapterIndex;
             _currentOutputIndex = capture.OutputIndex;
@@ -582,12 +581,9 @@ namespace Host
                     _capture = newCapture;
                     _currentAdapterIndex = adapterIndex;
                     _currentOutputIndex = outputIndex;
-                    if (_inputBackend is SendInputBackend sendInput)
-                        sendInput.UpdateScreenBounds(
-                            _capture.Left, _capture.Top,
-                            _capture.Width, _capture.Height);
-                    else
-                        _inputBackend.UpdateScreenSize(_capture.Width, _capture.Height);
+                    _inputBackend.UpdateScreenBounds(
+                        _capture.Left, _capture.Top,
+                        _capture.Width, _capture.Height);
                 }
 
                 // 기존 캡처 리소스 해제

@@ -102,6 +102,7 @@ namespace Host
             string? password;
             int adapterIndex;
             int outputIndex;
+            InputBackendMode inputBackendMode;
 
             if (isService)
             {
@@ -109,15 +110,20 @@ namespace Host
                 password = appSettings.DefaultPassword;
                 adapterIndex = 0;
                 outputIndex = 0;
+                inputBackendMode = appSettings.InputBackendMode;
             }
             else
             {
-                using var setupForm = new SetupForm();
+                using var setupForm = new SetupForm(
+                    appSettings.InputBackendMode);
                 if (setupForm.ShowDialog() != DialogResult.OK) return;
                 hostName = setupForm.HostName;
                 password = setupForm.Password;
                 adapterIndex = setupForm.SelectedAdapterIndex;
                 outputIndex = setupForm.SelectedOutputIndex;
+                inputBackendMode = setupForm.SelectedInputBackendMode;
+                appSettings.InputBackendMode = inputBackendMode;
+                appSettings.Save();
             }
 
             Console.OutputEncoding = Encoding.UTF8;
@@ -140,7 +146,10 @@ namespace Host
                 appSettings.SupabaseUrl,
                 appSettings.SupabaseAnonKey,
                 userId);
-            var webRtc = new WebRTCManager(capture, password);
+            var inputBackend = InputBackendFactory.Create(
+                inputBackendMode, capture);
+            var webRtc = new WebRTCManager(
+                capture, password, inputBackend);
 
             signaling.OnSignalReceived +=
                 async (from, signal) => await webRtc.HandleSignalAsync(from, signal);

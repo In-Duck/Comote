@@ -38,6 +38,8 @@ namespace Host
                 savedSettings?.ClientName ?? Environment.MachineName;
             var adapterIndex = savedSettings?.AdapterIndex ?? 0;
             var outputIndex = savedSettings?.OutputIndex ?? 0;
+            var inputBackendMode = savedSettings?.InputBackendMode ??
+                InputBackendMode.VirtualHid;
 
             if (!int.TryParse(portText, out var port) ||
                 port is < 1024 or > 65535)
@@ -62,6 +64,7 @@ namespace Host
                 clientName = setup.ClientName;
                 adapterIndex = setup.AdapterIndex;
                 outputIndex = setup.OutputIndex;
+                inputBackendMode = setup.SelectedInputBackendMode;
             }
 
             if (password.Length < 8)
@@ -79,6 +82,7 @@ namespace Host
                     ClientName = clientName,
                     AdapterIndex = adapterIndex,
                     OutputIndex = outputIndex,
+                    InputBackendMode = inputBackendMode,
                     UpdateManifestUrl = updateManifest ?? "",
                 },
                 password);
@@ -99,13 +103,21 @@ namespace Host
             Console.WriteLine($"Manager: {manager}:{port}");
             Console.WriteLine("Client 측 포트포워딩: 필요 없음");
 
+            if (inputBackendMode == InputBackendMode.VirtualHid &&
+                !FakerInputBackend.IsDriverAvailable() &&
+                !InputBackendFactory.EnsureVirtualHidReady(null))
+                return;
+
             var ffmpegPath = FFmpegExtractor.ExtractFFmpeg();
             FFmpegInit.Initialise(
                 FfmpegLogLevelEnum.AV_LOG_WARNING,
                 ffmpegPath);
             using var capture =
                 new ScreenCapture(adapterIndex, outputIndex);
-            using var webRtc = new WebRTCManager(capture);
+            using var inputBackend = InputBackendFactory.Create(
+                inputBackendMode, capture);
+            using var webRtc = new WebRTCManager(
+                capture, inputBackend: inputBackend);
             using var hub = new ManagerHubClient(
                 manager,
                 port,

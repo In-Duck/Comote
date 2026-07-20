@@ -27,6 +27,7 @@ namespace Host
             var password = GetLanArgumentValue(args, "--password");
             var adapterIndex = 0;
             var outputIndex = 0;
+            var inputBackendMode = InputBackendMode.VirtualHid;
             if (string.IsNullOrWhiteSpace(password))
             {
                 if (!Environment.UserInteractive)
@@ -43,6 +44,7 @@ namespace Host
                 password = setup.Password;
                 adapterIndex = setup.SelectedAdapterIndex;
                 outputIndex = setup.SelectedOutputIndex;
+                inputBackendMode = setup.SelectedInputBackendMode;
             }
 
             if (string.IsNullOrWhiteSpace(password) ||
@@ -81,7 +83,17 @@ namespace Host
 
             using var capture =
                 new ScreenCapture(adapterIndex, outputIndex);
-            using var webRtc = new WebRTCManager(capture);
+            if (inputBackendMode == InputBackendMode.VirtualHid &&
+                !FakerInputBackend.IsDriverAvailable())
+            {
+                if (!Environment.UserInteractive ||
+                    !InputBackendFactory.EnsureVirtualHidReady(null))
+                    return;
+            }
+            using var inputBackend = InputBackendFactory.Create(
+                inputBackendMode, capture);
+            using var webRtc = new WebRTCManager(
+                capture, inputBackend: inputBackend);
             using var server = new LanSignalServer(port, password);
             using var cancellation = new CancellationTokenSource();
 

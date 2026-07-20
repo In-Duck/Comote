@@ -1,0 +1,102 @@
+using System.Diagnostics;
+using System.Windows.Forms;
+
+namespace Host
+{
+    internal static class InputBackendFactory
+    {
+        public const string VirtualHidInstallerFileName =
+            "FakerInput_Setup_0.1.1_x64.msi";
+        public const string VirtualHidInstallerUrl =
+            "https://github.com/Ryochan7/FakerInput/releases/download/" +
+            "v0.1.1/FakerInput_Setup_0.1.1_x64.msi";
+
+        public static IInputBackend Create(
+            InputBackendMode mode,
+            ScreenCapture capture)
+        {
+            IInputBackend backend = mode switch
+            {
+                InputBackendMode.VirtualHid => new FakerInputBackend(
+                    capture.Left,
+                    capture.Top,
+                    capture.Width,
+                    capture.Height),
+                _ => new SendInputBackend(capture.Width, capture.Height),
+            };
+            backend.UpdateScreenBounds(
+                capture.Left,
+                capture.Top,
+                capture.Width,
+                capture.Height);
+            return backend;
+        }
+
+        public static bool EnsureVirtualHidReady(IWin32Window? owner)
+        {
+            if (FakerInputBackend.IsDriverAvailable()) return true;
+
+            var answer = MessageBox.Show(
+                owner,
+                "가상 HID 입력에는 FakerInput 드라이버가 필요합니다.\n\n" +
+                "지금 관리자 권한으로 설치하시겠습니까? 설치가 끝나면 " +
+                "이 창으로 돌아와 다시 시작을 누르세요.",
+                "Comote 가상 HID 설치",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Information);
+            if (answer != DialogResult.Yes) return false;
+
+            try
+            {
+                var localInstaller = Path.Combine(
+                    AppContext.BaseDirectory,
+                    VirtualHidInstallerFileName);
+                if (File.Exists(localInstaller))
+                {
+                    using var process = Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "msiexec.exe",
+                        Arguments = $"/i \"{localInstaller}\"",
+                        UseShellExecute = true,
+                        Verb = "runas",
+                    });
+                    process?.WaitForExit();
+                }
+                else
+                {
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = VirtualHidInstallerUrl,
+                        UseShellExecute = true,
+                    });
+                    MessageBox.Show(
+                        owner,
+                        "설치 파일 다운로드를 열었습니다. 설치를 완료한 뒤 " +
+                        "Comote Client를 다시 실행해 주세요.",
+                        "Comote 가상 HID 설치");
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    owner,
+                    "가상 HID 설치를 시작하지 못했습니다.\n" + ex.Message,
+                    "Comote 가상 HID 설치",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return false;
+            }
+
+            if (FakerInputBackend.IsDriverAvailable()) return true;
+            MessageBox.Show(
+                owner,
+                "드라이버가 아직 감지되지 않습니다. 설치를 완료한 뒤 " +
+                "Comote Client를 다시 실행해 주세요.",
+                "Comote 가상 HID 설치",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            return false;
+        }
+    }
+}

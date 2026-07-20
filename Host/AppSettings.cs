@@ -13,6 +13,8 @@ namespace Host
         public string? DefaultHostName { get; set; }
         public string? DefaultPassword { get; set; }
         public string? HostId { get; set; }
+        public InputBackendMode InputBackendMode { get; set; } =
+            InputBackendMode.VirtualHid;
         public string SupabaseUrl { get; set; } = "";
         public string SupabaseAnonKey { get; set; } = "";
         public string WebAuthUrl { get; set; } = "https://kymote.vercel.app/api/pusher/auth";
@@ -120,6 +122,8 @@ namespace Host
                 target.DefaultPassword = source.DefaultPassword;
             if (!string.IsNullOrWhiteSpace(source.HostId))
                 target.HostId = source.HostId;
+            if (Enum.IsDefined(source.InputBackendMode))
+                target.InputBackendMode = source.InputBackendMode;
         }
 
         private static void ApplyEnvironmentOverrides(AppSettings settings)
