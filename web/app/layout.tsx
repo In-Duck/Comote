@@ -1,22 +1,11 @@
-
 import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Comote | 다중 PC 원격 관제",
-  description: "여러 대의 Windows PC를 하나의 계정에서 관제하고 원격 제어하세요.",
+  title: "Comote | Windows Fleet Control",
+  description: "여러 Windows PC의 화면, 원격 작업과 업데이트를 한곳에서 관리하세요.",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
-  return (
-    <html lang="ko">
-      <body className="bg-[#07111f] text-slate-100 antialiased selection:bg-cyan-300 selection:text-[#07111f]">
-        {children}
-      </body>
-    </html>
-  );
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  return <html lang="ko"><body>{children}</body></html>;
 }
