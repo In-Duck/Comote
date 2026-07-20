@@ -39,7 +39,7 @@ namespace Host
             var adapterIndex = savedSettings?.AdapterIndex ?? 0;
             var outputIndex = savedSettings?.OutputIndex ?? 0;
             var inputBackendMode = savedSettings?.InputBackendMode ??
-                InputBackendMode.VirtualHid;
+                InputBackendMode.SendInput;
 
             if (!int.TryParse(portText, out var port) ||
                 port is < 1024 or > 65535)
@@ -104,7 +104,7 @@ namespace Host
             Console.WriteLine("Client 측 포트포워딩: 필요 없음");
 
             if (inputBackendMode == InputBackendMode.VirtualHid &&
-                !FakerInputBackend.IsDriverAvailable() &&
+                !ComoteVirtualHidBackend.IsDriverAvailable() &&
                 !InputBackendFactory.EnsureVirtualHidReady(null))
                 return;
 

@@ -31,3 +31,4 @@ obj/
 artifacts/
 .site-deploy-source/
 
+packages/

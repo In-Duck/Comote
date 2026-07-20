@@ -1,0 +1,69 @@
+name: Build Comote Virtual HID
+
+on:
+  push:
+    branches:
+      - agent/complete-comote-prototype
+    paths:
+      - "Driver/**"
+      - "Directory.Build.props"
+      - "packages.config"
+      - ".github/workflows/virtual-hid.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025-vs2026
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: nuget/setup-nuget@v2
+
+      - uses: microsoft/setup-msbuild@v2
+        with:
+          vs-prerelease: true
+
+      - name: Restore WDK packages
+        shell: pwsh
+        run: nuget restore packages.config -PackagesDirectory packages
+
+      - name: Build x64 driver
+        shell: pwsh
+        run: >-
+          msbuild Driver/ComoteVirtualHid.sln
+          /m
+          /t:Build
+          /p:Configuration=Release
+          /p:Platform=x64
+          /p:SignMode=Off
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish installer
+        shell: pwsh
+        run: >-
+          dotnet publish Driver/Installer/ComoteVirtualHidInstaller.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -o artifacts/ComoteVirtualHid
+
+      - name: Collect driver package
+        shell: pwsh
+        run: |
+          $output = "artifacts/ComoteVirtualHid"
+          Get-ChildItem Driver/ComoteVirtualHid -Recurse `
+            -Include ComoteVirtualHid.sys,ComoteVirtualHid.inf,ComoteVirtualHid.cat | `
+            Copy-Item -Destination $output -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ComoteVirtualHid-unsigned-developer-build
+          path: artifacts/ComoteVirtualHid
+          if-no-files-found: error

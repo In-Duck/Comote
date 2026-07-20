@@ -14,7 +14,7 @@ namespace Host
         public string? DefaultPassword { get; set; }
         public string? HostId { get; set; }
         public InputBackendMode InputBackendMode { get; set; } =
-            InputBackendMode.VirtualHid;
+            InputBackendMode.SendInput;
         public string SupabaseUrl { get; set; } = "";
         public string SupabaseAnonKey { get; set; } = "";
         public string WebAuthUrl { get; set; } = "https://kymote.vercel.app/api/pusher/auth";

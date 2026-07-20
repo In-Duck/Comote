@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64"
 )
@@ -35,33 +35,43 @@ dotnet publish (Join-Path $root "Host\Host.csproj") `
     -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false `
     -o $clientOut
 
-$fakerInputUrl =
-    "https://github.com/Ryochan7/FakerInput/releases/download/" +
-    "v0.1.1/FakerInput_Setup_0.1.1_x64.msi"
-$downloadTemp = if ($env:RUNNER_TEMP) {
-    $env:RUNNER_TEMP
-} else {
-    [System.IO.Path]::GetTempPath()
-}
-$fakerInputPath = Join-Path $downloadTemp `
-    "FakerInput_Setup_0.1.1_x64.msi"
-$expectedFakerInputSha256 =
-    "4C0AEFB7340051A91D606776243298B5CD1143EF5508BBAE6800C474F9ED0840"
-Invoke-WebRequest -Uri $fakerInputUrl -OutFile $fakerInputPath
-$actualFakerInputSha256 =
-    (Get-FileHash -Algorithm SHA256 -LiteralPath $fakerInputPath).Hash
-if ($actualFakerInputSha256 -ne $expectedFakerInputSha256) {
-    throw "FakerInput installer SHA-256 mismatch."
-}
-$fakerSignature = Get-AuthenticodeSignature -LiteralPath $fakerInputPath
-if ($fakerSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-    throw "FakerInput installer signature is not valid: $($fakerSignature.Status)"
-}
-Copy-Item -LiteralPath $fakerInputPath -Destination $clientOut
-Copy-Item -LiteralPath `
-    (Join-Path $root "ThirdParty\FakerInput-LICENSE.txt") `
-    -Destination (Join-Path $clientOut "FakerInput-LICENSE.txt")
+$driverPackage = $env:COMOTE_VIRTUAL_HID_PACKAGE_DIR
+if (-not [string]::IsNullOrWhiteSpace($driverPackage)) {
+    $driverFiles = @(
+        "ComoteVirtualHid.inf",
+        "ComoteVirtualHid.sys",
+        "ComoteVirtualHid.cat"
+    )
+    foreach ($file in $driverFiles) {
+        $source = Join-Path $driverPackage $file
+        if (-not (Test-Path -LiteralPath $source)) {
+            throw "Comote Virtual HID package file is missing: $source"
+        }
+    }
 
+    $catalogPath = Join-Path $driverPackage "ComoteVirtualHid.cat"
+    $catalogSignature = Get-AuthenticodeSignature -LiteralPath $catalogPath
+    if ($catalogSignature.Status -ne
+        [System.Management.Automation.SignatureStatus]::Valid) {
+        throw "Comote Virtual HID catalog is not production-signed: " +
+            $catalogSignature.Status
+    }
+
+    dotnet publish `
+        (Join-Path $root "Driver\Installer\ComoteVirtualHidInstaller.csproj") `
+        -c $Configuration -r $Runtime --self-contained true `
+        -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false `
+        -o $clientOut
+
+    foreach ($file in $driverFiles) {
+        Copy-Item -LiteralPath (Join-Path $driverPackage $file) `
+            -Destination $clientOut
+    }
+} else {
+    Write-Warning (
+        "COMOTE_VIRTUAL_HID_PACKAGE_DIR is not set. " +
+        "Mode 2 installer is excluded; mode 1 remains fully usable.")
+}
 Rename-Item -LiteralPath (Join-Path $managerOut "Viewer.exe") `
     -NewName "ComoteManager.exe"
 Rename-Item -LiteralPath (Join-Path $clientOut "Host.exe") `

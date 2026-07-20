@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - agent/complete-comote-prototype
 
 permissions:
   contents: write

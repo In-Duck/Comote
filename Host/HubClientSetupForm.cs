@@ -21,8 +21,8 @@ namespace Host
         public string UpdateManifestUrl => _updateManifestBox.Text.Trim();
         public InputBackendMode SelectedInputBackendMode =>
             _inputBox.SelectedIndex == 0
-                ? InputBackendMode.VirtualHid
-                : InputBackendMode.SendInput;
+                ? InputBackendMode.SendInput
+                : InputBackendMode.VirtualHid;
         public int AdapterIndex =>
             _monitors.Count > 0
                 ? _monitors[_monitorBox.SelectedIndex].AdapterIndex
@@ -119,10 +119,10 @@ namespace Host
                 Height = 30,
                 DropDownStyle = ComboBoxStyle.DropDownList,
             };
-            _inputBox.Items.Add("가상 HID (권장 · 드라이버 필요)");
-            _inputBox.Items.Add("Windows SendInput (호환 모드)");
+            _inputBox.Items.Add("입력 모드 1 · Windows SendInput");
+            _inputBox.Items.Add("입력 모드 2 · Comote Virtual HID");
             _inputBox.SelectedIndex =
-                savedSettings?.InputBackendMode == InputBackendMode.SendInput
+                savedSettings?.InputBackendMode == InputBackendMode.VirtualHid
                     ? 1
                     : 0;
             Controls.Add(_inputBox);

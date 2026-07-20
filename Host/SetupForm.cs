@@ -27,8 +27,8 @@ namespace Host
         public string? Password => string.IsNullOrWhiteSpace(_passwordBox.Text) ? null : _passwordBox.Text;
         public InputBackendMode SelectedInputBackendMode =>
             _inputCombo.SelectedIndex == 0
-                ? InputBackendMode.VirtualHid
-                : InputBackendMode.SendInput;
+                ? InputBackendMode.SendInput
+                : InputBackendMode.VirtualHid;
 
         /// <summary>선택된 모니터의 어댑터 인덱스</summary>
         public int SelectedAdapterIndex => _monitors.Count > 0 ? _monitors[_monitorCombo.SelectedIndex].AdapterIndex : 0;
@@ -36,7 +36,7 @@ namespace Host
         public int SelectedOutputIndex => _monitors.Count > 0 ? _monitors[_monitorCombo.SelectedIndex].OutputIndex : 0;
 
         public SetupForm(
-            InputBackendMode inputBackendMode = InputBackendMode.VirtualHid)
+            InputBackendMode inputBackendMode = InputBackendMode.SendInput)
         {
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             Text = "Comote Client 설정";
@@ -181,20 +181,20 @@ namespace Host
                 Font = new Font("Segoe UI", 10),
                 FlatStyle = FlatStyle.Flat
             };
-            _inputCombo.Items.Add("가상 HID (권장 · 드라이버 필요)");
-            _inputCombo.Items.Add("Windows SendInput (호환 모드)");
+            _inputCombo.Items.Add("입력 모드 1 · Windows SendInput");
+            _inputCombo.Items.Add("입력 모드 2 · Comote Virtual HID");
             _inputCombo.SelectedIndex =
-                inputBackendMode == InputBackendMode.SendInput ? 1 : 0;
+                inputBackendMode == InputBackendMode.VirtualHid ? 1 : 0;
             Controls.Add(_inputCombo);
 
             var inputHint = new Label
             {
-                Text = FakerInputBackend.IsDriverAvailable()
+                Text = ComoteVirtualHidBackend.IsDriverAvailable()
                     ? "가상 HID 드라이버 준비됨"
                     : "가상 HID 선택 시 설치 안내가 표시됩니다.",
                 Location = new Point(20, 314),
                 AutoSize = true,
-                ForeColor = FakerInputBackend.IsDriverAvailable()
+                ForeColor = ComoteVirtualHidBackend.IsDriverAvailable()
                     ? Color.FromArgb(34, 197, 94)
                     : Color.FromArgb(251, 191, 36)
             };

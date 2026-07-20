@@ -6,10 +6,7 @@ namespace Host
     internal static class InputBackendFactory
     {
         public const string VirtualHidInstallerFileName =
-            "FakerInput_Setup_0.1.1_x64.msi";
-        public const string VirtualHidInstallerUrl =
-            "https://github.com/Ryochan7/FakerInput/releases/download/" +
-            "v0.1.1/FakerInput_Setup_0.1.1_x64.msi";
+            "ComoteVirtualHidInstaller.exe";
 
         public static IInputBackend Create(
             InputBackendMode mode,
@@ -17,7 +14,7 @@ namespace Host
         {
             IInputBackend backend = mode switch
             {
-                InputBackendMode.VirtualHid => new FakerInputBackend(
+                InputBackendMode.VirtualHid => new ComoteVirtualHidBackend(
                     capture.Left,
                     capture.Top,
                     capture.Width,
@@ -34,11 +31,11 @@ namespace Host
 
         public static bool EnsureVirtualHidReady(IWin32Window? owner)
         {
-            if (FakerInputBackend.IsDriverAvailable()) return true;
+            if (ComoteVirtualHidBackend.IsDriverAvailable()) return true;
 
             var answer = MessageBox.Show(
                 owner,
-                "가상 HID 입력에는 FakerInput 드라이버가 필요합니다.\n\n" +
+                "입력 모드 2에는 Comote 자체 Virtual HID 드라이버가 필요합니다.\n\n" +
                 "지금 관리자 권한으로 설치하시겠습니까? 설치가 끝나면 " +
                 "이 창으로 돌아와 다시 시작을 누르세요.",
                 "Comote 가상 HID 설치",
@@ -55,27 +52,17 @@ namespace Host
                 {
                     using var process = Process.Start(new ProcessStartInfo
                     {
-                        FileName = "msiexec.exe",
-                        Arguments = $"/i \"{localInstaller}\"",
+                        FileName = localInstaller,
+                        Arguments = "install",
                         UseShellExecute = true,
                         Verb = "runas",
                     });
                     process?.WaitForExit();
                 }
                 else
-                {
-                    Process.Start(new ProcessStartInfo
-                    {
-                        FileName = VirtualHidInstallerUrl,
-                        UseShellExecute = true,
-                    });
-                    MessageBox.Show(
-                        owner,
-                        "설치 파일 다운로드를 열었습니다. 설치를 완료한 뒤 " +
-                        "Comote Client를 다시 실행해 주세요.",
-                        "Comote 가상 HID 설치");
-                    return false;
-                }
+                    throw new FileNotFoundException(
+                        "Comote Virtual HID 설치 파일이 Client 패키지에 없습니다.",
+                        localInstaller);
             }
             catch (Exception ex)
             {
@@ -88,7 +75,7 @@ namespace Host
                 return false;
             }
 
-            if (FakerInputBackend.IsDriverAvailable()) return true;
+            if (ComoteVirtualHidBackend.IsDriverAvailable()) return true;
             MessageBox.Show(
                 owner,
                 "설치는 완료됐지만 가상 HID 장치가 아직 준비되지 않았습니다.\n\n" +
