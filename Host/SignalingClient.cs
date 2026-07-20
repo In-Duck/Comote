@@ -36,6 +36,8 @@ namespace Host
         private string _supabaseKey;
         private string _userId;
         private readonly CancellationTokenSource _lifetimeCts = new();
+        private int _heartbeatStarted;
+        private int _signalingReconnectStarted;
         private ScreenCapture? _capture;
 
         public event Action<string, object> OnSignalReceived;
@@ -66,9 +68,25 @@ namespace Host
 
         public async Task ConnectAsync()
         {
+            StartHeartbeat();
+
+            try
+            {
+                await ConnectSignalingAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[Signaling] Initial connection failed: {ex.Message}. " +
+                    "Host registration remains active; signaling will retry.");
+                StartSignalingReconnectLoop();
+            }
+        }
+
+        private async Task ConnectSignalingAsync()
+        {
             Console.WriteLine("[Signaling] Connecting to Pusher...");
 
-            // Pusher 초기화 (Private 채널 전용, Presence 채널 미사용)
             _pusher = new Pusher(_appKey, new PusherOptions
             {
                 Cluster = _cluster,
@@ -91,7 +109,6 @@ namespace Host
 
             await _pusher.ConnectAsync();
 
-            // Private 채널만 구독 (시그널링 전용)
             Console.WriteLine($"[Signaling] Subscribing to private-control-{_hostId}...");
             var privateChannel = await _pusher.SubscribeAsync($"private-control-{_hostId}");
             privateChannel.Bind("pusher:subscription_succeeded", (PusherEvent eventData) => {
@@ -106,16 +123,62 @@ namespace Host
                     OnSignalReceived?.Invoke(from, signal);
                 } catch(Exception ex) { Console.WriteLine("[Signaling] Signal parse error: " + ex.Message); }
             });
-
-            // Supabase heartbeat 시작 (30초마다 시스템 정보 + last_seen 업데이트)
-            if (!string.IsNullOrEmpty(_supabaseUrl) && !string.IsNullOrEmpty(_userId))
-            {
-                // 최초 즉시 실행 + 이후 30초 간격
-                _ = RunHeartbeatLoopAsync(_lifetimeCts.Token);
-                Console.WriteLine("[Signaling] Supabase heartbeat started (30s interval)");
-            }
         }
 
+        private void StartHeartbeat()
+        {
+            if (string.IsNullOrWhiteSpace(_supabaseUrl) ||
+                string.IsNullOrWhiteSpace(_supabaseKey) ||
+                string.IsNullOrWhiteSpace(_userId))
+            {
+                Console.WriteLine(
+                    "[Heartbeat] Supabase configuration is incomplete; " +
+                    "this PC cannot appear in Manager.");
+                return;
+            }
+
+            if (Interlocked.Exchange(ref _heartbeatStarted, 1) != 0) return;
+
+            _ = RunHeartbeatLoopAsync(_lifetimeCts.Token);
+            Console.WriteLine("[Heartbeat] Host registration started (30s interval)");
+        }
+
+        private void StartSignalingReconnectLoop()
+        {
+            if (Interlocked.Exchange(ref _signalingReconnectStarted, 1) != 0) return;
+            _ = RunSignalingReconnectLoopAsync(_lifetimeCts.Token);
+        }
+
+        private async Task RunSignalingReconnectLoopAsync(
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
+                    try
+                    {
+                        await ConnectSignalingAsync();
+                        Console.WriteLine("[Signaling] Reconnected successfully");
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Signaling] Retry failed: {ex.Message}");
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested)
+            {
+                // Normal shutdown.
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _signalingReconnectStarted, 0);
+            }
+        }
         private async Task RunHeartbeatLoopAsync(CancellationToken cancellationToken)
         {
             try

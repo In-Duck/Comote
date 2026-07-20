@@ -40,10 +40,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v1.6.0-preview.10" `
-            artifacts/ComoteManager-1.6.0-preview.10-win-x64.zip `
-            artifacts/ComoteClient-1.6.0-preview.10-win-x64.zip `
-            artifacts/Comote-1.6.0-preview.10-win-x64.zip `
-            --target "${{ github.sha }}" `
-            --title "Comote 1.6.0 Preview 10" `
-            --notes "Testable Manager and Client preview packages for local and LAN prototype validation."
+          $assets = @(
+            "artifacts/ComoteManager-1.6.0-preview.10-win-x64.zip",
+            "artifacts/ComoteClient-1.6.0-preview.10-win-x64.zip",
+            "artifacts/Comote-1.6.0-preview.10-win-x64.zip"
+          )
+
+          if (gh release view "v1.6.0-preview.10" 2>$null) {
+            gh release upload "v1.6.0-preview.10" $assets --clobber
+          } else {
+            gh release create "v1.6.0-preview.10" $assets `
+              --target "${{ github.sha }}" `
+              --title "Comote 1.6.0 Preview 10" `
+              --notes "Testable Manager and Client preview packages for local and LAN prototype validation."
+          }
