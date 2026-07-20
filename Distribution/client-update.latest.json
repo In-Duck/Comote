@@ -1,0 +1,7 @@
+{
+  "version": "1.6.0.6",
+  "client_package_url": "https://github.com/In-Duck/Comote/releases/download/v1.6.0.6/Comote-1.6.0.6-win-x64.zip",
+  "client_package_sha256": "REPLACE_WITH_64_CHARACTER_SHA256",
+  "minimum_version": "1.6.0.0",
+  "release_notes": "Remote client auto update backend"
+}
