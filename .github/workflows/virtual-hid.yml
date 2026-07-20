@@ -32,13 +32,19 @@ jobs:
 
       - name: Build x64 driver
         shell: pwsh
-        run: >-
-          msbuild Driver/ComoteVirtualHid.sln
-          /m
-          /t:Build
-          /p:Configuration=Release
-          /p:Platform=x64
-          /p:SignMode=Off
+        run: |
+          $wdkBin = (Resolve-Path `
+            "packages/Microsoft.Windows.WDK.x64.10.0.28000.1839/c/bin/10.0.28000.0").Path
+          $env:PATH = "$wdkBin\x64;$wdkBin\x86;$env:PATH"
+          msbuild Driver/ComoteVirtualHid.sln `
+            /m `
+            /t:Build `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /p:SignMode=Off `
+            "/p:WDKBinRoot=$wdkBin" `
+            "/p:InfToolPath=$wdkBin\x64" `
+            "/p:Inf2CatToolPath=$wdkBin\x86"
 
       - uses: actions/setup-dotnet@v4
         with:
