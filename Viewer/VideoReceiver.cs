@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -22,6 +23,8 @@ namespace Viewer
         private RTCPeerConnection? _peerConnection;
         private RTCDataChannel? _inputChannel;
         private RTCDataChannel? _fileChannel; // File Transfer ONLY
+        private readonly ConcurrentQueue<RTCIceCandidateInit> _pendingIceCandidates = new();
+        private bool _remoteDescriptionSet;
         private FFmpegVideoEncoder? _decoder;
         private OpusDecoder? _opusDecoder;
         private IWavePlayer? _waveOut;
@@ -60,6 +63,7 @@ namespace Viewer
         public event Action<object>? OnSignalReady;
         public event Action? OnFrameReady;
         public event Action<RTCPeerConnectionState>? OnConnectionStateChanged;
+        public event Action<bool>? OnInputReadyChanged;
         public event Action<string>? OnRejected;
         public event Action<string>? OnClipboardReceived;
         public event Action<int>? OnFileProgress;     // 0~100%
@@ -78,6 +82,8 @@ namespace Viewer
         /// </summary>
         private void InitializePeerConnection()
         {
+            _remoteDescriptionSet = false;
+            _pendingIceCandidates.Clear();
             var config = new RTCConfiguration
             {
                 iceServers = new List<RTCIceServer>
@@ -419,6 +425,12 @@ namespace Viewer
                         sdp = sdpStr
                     });
                     Console.WriteLine($"[VideoReceiver] Remote SDP set ({type}): {result}");
+                    if (result == SetDescriptionResultEnum.OK)
+                    {
+                        _remoteDescriptionSet = true;
+                        while (_pendingIceCandidates.TryDequeue(out var pending))
+                            _peerConnection.addIceCandidate(pending);
+                    }
 
                     if (type == RTCSdpType.offer)
                     {
@@ -435,16 +447,23 @@ namespace Viewer
                 }
                 else if (jobj.ContainsKey("ice"))
                 {
-                    var candidate = jobj["ice"]!["candidate"]!.ToString();
-                    var sdpMid = jobj["ice"]!["sdpMid"]?.ToString();
-                    var sdpMLineIndex = (ushort)(jobj["ice"]!["sdpMLineIndex"] ?? 0);
+                    var iceCandidate = new RTCIceCandidateInit
+                    {
+                        candidate = jobj["ice"]!["candidate"]!.ToString(),
+                        sdpMid = jobj["ice"]!["sdpMid"]?.ToString(),
+                        sdpMLineIndex = (ushort)(jobj["ice"]!["sdpMLineIndex"] ?? 0)
+                    };
 
-                    _peerConnection.addIceCandidate(new RTCIceCandidateInit {
-                        candidate = candidate,
-                        sdpMid = sdpMid,
-                        sdpMLineIndex = sdpMLineIndex
-                    });
-                    Console.WriteLine("[VideoReceiver] ICE candidate added");
+                    if (!_remoteDescriptionSet)
+                    {
+                        _pendingIceCandidates.Enqueue(iceCandidate);
+                        Console.WriteLine("[VideoReceiver] ICE candidate queued");
+                    }
+                    else
+                    {
+                        _peerConnection.addIceCandidate(iceCandidate);
+                        Console.WriteLine("[VideoReceiver] ICE candidate added");
+                    }
                 }
             }
             catch (Exception ex)
@@ -461,6 +480,7 @@ namespace Viewer
             Console.WriteLine("[VideoReceiver] Resetting for reconnect...");
             StopStatsReporting();
             _inputChannel = null;
+            OnInputReadyChanged?.Invoke(false);
             _peerConnection?.Close("reset");
             _peerConnection?.Dispose();
             _peerConnection = null;
@@ -482,6 +502,7 @@ namespace Viewer
             _inputChannel.onopen += () => 
             {
                 Console.WriteLine("[VideoReceiver] Input DataChannel opened");
+                OnInputReadyChanged?.Invoke(true);
                 try 
                 {
                     var settings = AppSettings.Load();
@@ -514,6 +535,7 @@ namespace Viewer
             _inputChannel.onclose += () =>
             {
                 Console.WriteLine("[VideoReceiver] Input DataChannel closed");
+                OnInputReadyChanged?.Invoke(false);
             };
             // Host에서 보낸 데이터 수신 (Pong, Clipboard 등)
             _inputChannel.onmessage += (dc, protocol, data) =>
@@ -686,45 +708,5 @@ namespace Viewer
             _waveOut?.Dispose();
         }
 
-        public async Task HandleSignalAsync(string from, object signal)
-        {
-            if (_peerConnection == null) return;
-            try
-            {
-                var json = JObject.FromObject(signal);
-
-                if (json.ContainsKey("sdp"))
-                {
-                    var sdpObj = json["sdp"];
-                    var typeStr = sdpObj["type"].ToString();
-                    var sdpStr = sdpObj["sdp"].ToString();
-                    var type = typeStr == "offer" ? RTCSdpType.offer : RTCSdpType.answer;
-
-                    _peerConnection.setRemoteDescription(new RTCSessionDescriptionInit { type = type, sdp = sdpStr });
-
-                    if (type == RTCSdpType.offer)
-                    {
-                        var answer = _peerConnection.createAnswer(null);
-                        _peerConnection.setLocalDescription(answer);
-                        OnSignalReady?.Invoke(new { sdp = new { type = "answer", sdp = answer.sdp } });
-                    }
-                }
-                else if (json.ContainsKey("ice"))
-                {
-                    var iceObj = json["ice"];
-                    var candidate = new RTCIceCandidateInit
-                    {
-                        candidate = iceObj["candidate"]?.ToString() ?? "",
-                        sdpMid = iceObj["sdpMid"]?.ToString() ?? "",
-                        sdpMLineIndex = (ushort)(iceObj["sdpMLineIndex"]?.Value<int>() ?? 0)
-                    };
-                    _peerConnection.addIceCandidate(candidate);
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[VideoReceiver] HandleSignal Error: {ex.Message}");
-            }
-        }
     }
 }

@@ -217,6 +217,8 @@ namespace Host
                     uptime = (string?)((dynamic)info).uptime ?? "N/A",
                     ip = (string?)((dynamic)info).ip ?? "unknown",
                     mac_address = (string?)((dynamic)info).mac_address ?? "",
+                    agent_version = typeof(SignalingClient).Assembly
+                        .GetName().Version?.ToString() ?? "unknown",
                     last_seen = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
                 };
 

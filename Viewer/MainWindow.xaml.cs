@@ -1080,7 +1080,14 @@ namespace Viewer
             // 리모트 뷰가 보이고 + 창이 활성화 상태 + 패스워드 패널이 안 보일 때만 캡처
             bool isPasswordInput = _passwordPanel != null && _passwordPanel.Visibility == Visibility.Visible;
             bool remoteWindowActive = _remoteWindow?.IsActive ?? IsActive;
-            bool shouldCapture = (_remoteGrid.Visibility == Visibility.Visible) && remoteWindowActive && !isPasswordInput;
+            bool remoteInputReady = _receiver?.ConnectionState ==
+                RTCPeerConnectionState.connected &&
+                _receiver.InputChannelReady;
+            bool shouldCapture =
+                (_remoteGrid.Visibility == Visibility.Visible) &&
+                remoteWindowActive &&
+                !isPasswordInput &&
+                remoteInputReady;
             _keyboardHook.IsCapturing = shouldCapture;
         }
 
@@ -1673,7 +1680,7 @@ namespace Viewer
                     Console.WriteLine($"[Signaling] Signal from {from}: {signal}");
                     if (_receiver != null)
                     {
-                        await _receiver.HandleSignalAsync(from, signal);
+                        await _receiver.HandleSignalAsync(signal);
                     }
                 };
 
@@ -1750,6 +1757,7 @@ namespace Viewer
             // 연결 상태 변경
             receiver.OnConnectionStateChanged += (state) =>
             {
+                Dispatcher.Invoke(() => UpdateInputCaptureState());
                 if (state == RTCPeerConnectionState.failed ||
                     state == RTCPeerConnectionState.disconnected)
                 {
@@ -1757,6 +1765,8 @@ namespace Viewer
                         _ = ReconnectAsync(receiver, hostId);
                 }
             };
+            receiver.OnInputReadyChanged += _ =>
+                Dispatcher.Invoke(() => UpdateInputCaptureState());
 
             // 비밀번호 거절
             receiver.OnRejected += (reason) =>

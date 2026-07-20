@@ -1,5 +1,7 @@
 ﻿using System;
 using System.Text;
+using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 using SIPSorcery.Net;
@@ -17,6 +19,8 @@ namespace Host
     public class WebRTCManager : IDisposable
     {
         private RTCPeerConnection? _peerConnection;
+        private readonly ConcurrentQueue<RTCIceCandidateInit> _pendingIceCandidates = new();
+        private bool _remoteDescriptionSet;
         private FFmpegVideoEncoder? _videoEncoder;
         private OpusEncoder? _opusEncoder;
         private WasapiLoopbackCapture? _audioCapture;
@@ -123,6 +127,7 @@ namespace Host
             }
 
             _remoteSocketId = remoteSocketId;
+            _remoteDescriptionSet = false;
 
             var config = new RTCConfiguration
             {
@@ -901,6 +906,10 @@ namespace Host
                         return;
                     }
 
+                    _remoteDescriptionSet = true;
+                    while (_pendingIceCandidates.TryDequeue(out var pending))
+                        _peerConnection.addIceCandidate(pending);
+
                     Console.WriteLine($"[WebRTC] Remote description set ({type})");
 
                     if (type == RTCSdpType.offer)
@@ -918,24 +927,23 @@ namespace Host
                 }
                 else if (jobj.ContainsKey("ice"))
                 {
-                    // ICE candidate는 기존 연결에 추가만 (연결 재초기화 안 함)
-                    if (_peerConnection == null)
+                    var iceCandidate = new RTCIceCandidateInit
                     {
-                        Console.WriteLine("[WebRTC] ICE candidate received but no PeerConnection, ignoring.");
-                        return;
+                        candidate = jobj["ice"]!["candidate"]!.ToString(),
+                        sdpMid = jobj["ice"]!["sdpMid"]?.ToString(),
+                        sdpMLineIndex = (ushort)(jobj["ice"]!["sdpMLineIndex"] ?? 0)
+                    };
+
+                    if (_peerConnection == null || !_remoteDescriptionSet)
+                    {
+                        _pendingIceCandidates.Enqueue(iceCandidate);
+                        Console.WriteLine("[WebRTC] ICE candidate queued until offer");
                     }
-
-                    var candidate = jobj["ice"]!["candidate"]!.ToString();
-                    var sdpMid = jobj["ice"]!["sdpMid"]?.ToString();
-                    var sdpMLineIndex = (ushort)(jobj["ice"]!["sdpMLineIndex"] ?? 0);
-
-                    _peerConnection.addIceCandidate(new RTCIceCandidateInit
+                    else
                     {
-                        candidate = candidate,
-                        sdpMid = sdpMid,
-                        sdpMLineIndex = sdpMLineIndex
-                    });
-                    Console.WriteLine($"[WebRTC] ICE candidate added");
+                        _peerConnection.addIceCandidate(iceCandidate);
+                        Console.WriteLine("[WebRTC] ICE candidate added");
+                    }
                 }
             }
             catch (Exception ex)

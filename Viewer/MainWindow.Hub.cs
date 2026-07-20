@@ -72,7 +72,7 @@ namespace Viewer
             _hubServer.SignalReceived += async (clientId, signal) =>
             {
                 if (_connectedHostId == clientId && _receiver != null)
-                    await _receiver.HandleSignalAsync(clientId, signal);
+                    await _receiver.HandleSignalAsync(signal);
             };
 
             _hubServer.ThumbnailReceived += (clientId, jpeg) =>
