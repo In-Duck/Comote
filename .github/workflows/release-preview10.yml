@@ -1,9 +1,10 @@
-﻿name: Release Preview 10
+name: Release Preview 10
 
 on:
   push:
     branches:
       - main
+      - agent/complete-comote-prototype
 
 permissions:
   contents: write
