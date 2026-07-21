@@ -54,5 +54,6 @@ jobs:
             gh release create "v1.6.0-preview.14" $assets `
               --target "${{ github.sha }}" `
               --title "Comote 1.6.0 Preview 14" `
+              --prerelease `
               --notes "Account-first release candidate: Client and Manager discover devices through the same account without VPN address or port entry. Includes the official signed FakerInput v0.1.1 installer with pinned SHA-256 verification, SendInput fallback, configurable TURN, bounded verified file transfer, and hardened input cleanup. Virtual input compatibility with every game or anti-cheat is not guaranteed."
           }
