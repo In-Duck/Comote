@@ -41,9 +41,9 @@ if ($LASTEXITCODE -ne 0) {
 $outputDir = Join-Path $root "artifacts\installers"
 $installers = @(
     Join-Path $outputDir `
-        "ComoteClient_Setup_1.6.0-preview.21_Offline.exe"
+        "ComoteClient_Setup_1.6.0-preview.22_Offline.exe"
     Join-Path $outputDir `
-        "ComoteManager_Setup_1.6.0-preview.21_Offline.exe"
+        "ComoteManager_Setup_1.6.0-preview.22_Offline.exe"
 )
 
 foreach ($installer in $installers) {
@@ -55,7 +55,7 @@ foreach ($installer in $installers) {
 $manifest = $installers | ForEach-Object {
     $file = Get-Item -LiteralPath $_
     [ordered]@{
-        version = "1.6.0-preview.21"
+        version = "1.6.0-preview.22"
         file = $file.Name
         bytes = $file.Length
         sha256 = (Get-FileHash `

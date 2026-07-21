@@ -45,6 +45,7 @@ namespace Viewer
         private Grid _listTab = null!;
         private ScrollViewer _gridTab = null!;
         private TextBlock _statusBarText = null!;
+        private ProgressBar _updateProgressBar = null!;
         private TextBlock _hostCountText = null!;
         private List<HostInfo> _currentHosts = new();
         private Button _listTabBtn = null!;
@@ -484,6 +485,18 @@ namespace Viewer
                 VerticalAlignment = VerticalAlignment.Center
             };
             statusPanel.Children.Add(_hostCountText);
+            _updateProgressBar = new ProgressBar
+            {
+                Minimum = 0,
+                Maximum = 100,
+                Value = 0,
+                Width = 180,
+                Height = 8,
+                Margin = new Thickness(14, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                Visibility = Visibility.Collapsed,
+            };
+            statusPanel.Children.Add(_updateProgressBar);
             statusBar.Child = statusPanel;
             Grid.SetRow(statusBar, 3);
             grid.Children.Add(statusBar);
@@ -1753,12 +1766,51 @@ namespace Viewer
                 {
                     Console.WriteLine($"[Signaling] Signal from {from}: {signal}");
                     var token = JToken.FromObject(signal);
+                    if (token.Value<string>("type") == "comote-command-progress" &&
+                        token.Value<string>("action") == "update")
+                    {
+                        var percent = token.Value<int?>("percent");
+                        var status = token.Value<string>("status") ?? "업데이트 중…";
+                        Dispatcher.Invoke(() =>
+                        {
+                            var name = _persistentHosts.TryGetValue(from, out var host)
+                                ? host.Name
+                                : from;
+                            _statusBarText.Text = $"{name} · {status}";
+                            _updateProgressBar.Visibility = Visibility.Visible;
+                            _updateProgressBar.IsIndeterminate = percent == null;
+                            if (percent != null)
+                                _updateProgressBar.Value = Math.Clamp(percent.Value, 0, 100);
+                        });
+                        return;
+                    }
                     if (token.Value<string>("type") == "comote-command-result" &&
                         token.Value<string>("action") == "update")
                     {
-                        _statusBarText.Text = token.Value<bool>("ok")
-                            ? $"Client 업데이트 시작 · {from}"
-                            : $"Client 업데이트 실패 · {from} · {token.Value<string>("message")}";
+                        var ok = token.Value<bool>("ok");
+                        Dispatcher.Invoke(() =>
+                        {
+                            var name = _persistentHosts.TryGetValue(from, out var host)
+                                ? host.Name
+                                : from;
+                            _statusBarText.Text = ok
+                                ? $"Client 업데이트 완료 · {name} · 재시작 중"
+                                : $"Client 업데이트 실패 · {name} · {token.Value<string>("message")}";
+                            _updateProgressBar.IsIndeterminate = false;
+                            _updateProgressBar.Value = ok ? 100 : 0;
+                            _updateProgressBar.Visibility = ok
+                                ? Visibility.Visible
+                                : Visibility.Collapsed;
+                        });
+                        if (ok)
+                        {
+                            _ = Task.Run(async () =>
+                            {
+                                await Task.Delay(2500);
+                                Dispatcher.Invoke(() =>
+                                    _updateProgressBar.Visibility = Visibility.Collapsed);
+                            });
+                        }
                         return;
                     }
                     if (_receiverPool.TryGetValue(from, out var receiver))

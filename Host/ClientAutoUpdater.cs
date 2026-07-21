@@ -30,6 +30,8 @@ namespace Host
         string Sha256,
         string ReleaseNotes);
 
+    internal sealed record ClientUpdateProgress(int? Percent, string Status);
+
     internal static class ClientAutoUpdater
     {
         private const long MaximumPackageBytes = 750L * 1024 * 1024;
@@ -73,6 +75,7 @@ namespace Host
         public static async Task<bool> TryStageUpdateAsync(
             string manifestUrl,
             string[] restartArguments,
+            IProgress<ClientUpdateProgress>? progress = null,
             CancellationToken cancellationToken = default)
         {
             try
@@ -83,7 +86,7 @@ namespace Host
                     Console.WriteLine($"[Updater] Client is current ({CurrentVersion}).");
                     return false;
                 }
-                return await StageUpdateAsync(update, restartArguments, cancellationToken);
+                return await StageUpdateAsync(update, restartArguments, progress, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -100,6 +103,7 @@ namespace Host
         public static async Task<bool> StageUpdateAsync(
             ClientUpdateInfo update,
             string[] restartArguments,
+            IProgress<ClientUpdateProgress>? progress = null,
             CancellationToken cancellationToken = default)
         {
             string? stageDirectory = null;
@@ -112,11 +116,14 @@ namespace Host
                 var extractedDirectory = Path.Combine(stageDirectory, "files");
 
                 Console.WriteLine($"[Updater] Downloading {update.Version} from {update.PackageUri.Host}.");
-                await DownloadFileAsync(update.PackageUri, archivePath, cancellationToken);
+                progress?.Report(new ClientUpdateProgress(2, "다운로드 연결 중…"));
+                await DownloadFileAsync(update.PackageUri, archivePath, progress, cancellationToken);
+                progress?.Report(new ClientUpdateProgress(82, "파일 무결성 확인 중…"));
                 var actualHash = await ComputeSha256Async(archivePath, cancellationToken);
                 if (!actualHash.Equals(update.Sha256, StringComparison.OrdinalIgnoreCase))
                     throw new InvalidDataException("다운로드한 파일의 SHA-256 값이 일치하지 않습니다.");
 
+                progress?.Report(new ClientUpdateProgress(90, "업데이트 파일 확인 중…"));
                 ExtractValidatedArchive(archivePath, extractedDirectory);
                 var replacements = Directory.GetFiles(
                     extractedDirectory, "ComoteClient.exe", SearchOption.AllDirectories);
@@ -124,6 +131,7 @@ namespace Host
                 if (replacements.Length != 1 || string.IsNullOrWhiteSpace(executablePath))
                     throw new InvalidDataException("패키지에서 ComoteClient.exe 하나를 찾지 못했습니다.");
 
+                progress?.Report(new ClientUpdateProgress(96, "설치 준비 중…"));
                 var replacement = replacements[0];
                 var replacementVersionText = FileVersionInfo.GetVersionInfo(replacement).FileVersion;
                 if (!Version.TryParse(replacementVersionText, out var replacementVersion) ||
@@ -139,6 +147,7 @@ namespace Host
                         stageDirectory, packageRoot, installDirectory,
                         executablePath, restartArguments);
 
+                progress?.Report(new ClientUpdateProgress(100, "업데이트 준비 완료 · 다시 시작합니다…"));
                 Console.WriteLine($"[Updater] Update {update.Version} verified and staged.");
                 stageDirectory = null;
                 return true;
@@ -263,11 +272,15 @@ namespace Host
             uri.Scheme == Uri.UriSchemeHttps;
 
         private static async Task DownloadFileAsync(
-            Uri uri, string destination, CancellationToken cancellationToken)
+            Uri uri,
+            string destination,
+            IProgress<ClientUpdateProgress>? progress,
+            CancellationToken cancellationToken)
         {
             using var response = await Http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             response.EnsureSuccessStatusCode();
-            if (response.Content.Headers.ContentLength is long size && size > MaximumPackageBytes)
+            var expectedBytes = response.Content.Headers.ContentLength;
+            if (expectedBytes is long size && size > MaximumPackageBytes)
                 throw new InvalidDataException("업데이트 패키지가 허용 크기를 초과했습니다.");
             await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
             await using var target = new FileStream(
@@ -282,6 +295,14 @@ namespace Host
                 if (total > MaximumPackageBytes)
                     throw new InvalidDataException("업데이트 패키지가 허용 크기를 초과했습니다.");
                 await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                var percent = expectedBytes is > 0
+                    ? 5 + (int)Math.Min(75, total * 75 / expectedBytes.Value)
+                    : (int?)null;
+                var downloadedMb = total / 1024d / 1024d;
+                var status = expectedBytes is > 0
+                    ? $"다운로드 중 · {downloadedMb:0.0} / {expectedBytes.Value / 1024d / 1024d:0.0} MB"
+                    : $"다운로드 중 · {downloadedMb:0.0} MB";
+                progress?.Report(new ClientUpdateProgress(percent, status));
             }
         }
 

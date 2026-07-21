@@ -191,11 +191,22 @@ namespace Host
                 if (token.Value<string>("type") == "comote-command" &&
                     token.Value<string>("action") == "update")
                 {
+                    var updateProgress = new Progress<ClientUpdateProgress>(progress =>
+                    {
+                        _ = signaling.SendSignalAsync(from, new
+                        {
+                            type = "comote-command-progress",
+                            action = "update",
+                            percent = progress.Percent,
+                            status = progress.Status,
+                            version = ClientAutoUpdater.CurrentVersion.ToString(),
+                        });
+                    });
                     var result = await RemoteTaskExecutor.ExecuteAsync(new JObject
                     {
                         ["action"] = "update",
                         ["value"] = ProductUpdateSettings.ClientManifestUrl,
-                    });
+                    }, updateProgress);
                     Console.WriteLine($"[Updater] Remote request: {result.Value<string>("message")}");
                     await signaling.SendSignalAsync(from, new
                     {

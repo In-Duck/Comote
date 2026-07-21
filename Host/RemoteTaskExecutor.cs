@@ -13,7 +13,9 @@ namespace Host
             Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
         };
 
-        public static async Task<JObject> ExecuteAsync(JObject command)
+        public static async Task<JObject> ExecuteAsync(
+            JObject command,
+            IProgress<ClientUpdateProgress>? updateProgress = null)
         {
             var action = command.Value<string>("action") ?? "";
             var value = command.Value<string>("value")?.Trim() ?? "";
@@ -23,7 +25,7 @@ namespace Host
                 {
                     "run" => Run(command.Value<string>("folder") ?? "desktop", value),
                     "terminate" => Terminate(value),
-                    "update" => await UpdateAsync(value),
+                    "update" => await UpdateAsync(value, updateProgress),
                     _ => Result(false, "지원하지 않는 작업입니다."),
                 };
             }
@@ -90,7 +92,9 @@ namespace Host
                 : $"{processes.Length}개 프로세스 종료 요청");
         }
 
-        private static async Task<JObject> UpdateAsync(string manifestUrl)
+        private static async Task<JObject> UpdateAsync(
+            string manifestUrl,
+            IProgress<ClientUpdateProgress>? progress)
         {
             if (string.IsNullOrWhiteSpace(manifestUrl))
                 manifestUrl = ProductUpdateSettings.ClientManifestUrl;
@@ -100,7 +104,8 @@ namespace Host
                 return Result(false, "공식 Comote 업데이트 주소만 사용할 수 있습니다.");
 
             var restartArguments = Environment.GetCommandLineArgs().Skip(1).ToArray();
-            var staged = await ClientAutoUpdater.TryStageUpdateAsync(manifestUrl, restartArguments);
+            var staged = await ClientAutoUpdater.TryStageUpdateAsync(
+                manifestUrl, restartArguments, progress);
             if (!staged)
                 return Result(false, "새 버전이 없거나 업데이트 준비에 실패했습니다.");
 

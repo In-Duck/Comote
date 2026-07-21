@@ -5,9 +5,9 @@
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
     <StartupObject>Viewer.Program</StartupObject>
-    <AssemblyVersion>1.6.0.21</AssemblyVersion>
-    <FileVersion>1.6.0.21</FileVersion>
-    <Version>1.6.0-preview.21</Version>
+    <AssemblyVersion>1.6.0.22</AssemblyVersion>
+    <FileVersion>1.6.0.22</FileVersion>
+    <Version>1.6.0-preview.22</Version>
     <ApplicationIcon>Kymote.ico</ApplicationIcon>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>

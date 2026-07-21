@@ -160,11 +160,17 @@ namespace Host
                 _updateItem.Text = "업데이트 다운로드 중…";
             }
 
+            using var progressDialog = new UpdateProgressDialog(_availableUpdate.Version);
+            progressDialog.Show();
+            progressDialog.Activate();
+            var progress = new Progress<ClientUpdateProgress>(progressDialog.Report);
             var staged = await ClientAutoUpdater.StageUpdateAsync(
                 _availableUpdate,
-                Environment.GetCommandLineArgs().Skip(1).ToArray());
+                Environment.GetCommandLineArgs().Skip(1).ToArray(),
+                progress);
             if (!staged)
             {
+                progressDialog.Close();
                 MessageBox.Show(
                     "업데이트를 설치하지 못했습니다. 네트워크 연결을 확인한 뒤 다시 시도해주세요.",
                     "Comote 업데이트",
