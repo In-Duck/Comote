@@ -92,6 +92,15 @@ namespace Viewer
                 _receiver.InputChannelReady;
         }
 
+        private void DisposeAllReceivers()
+        {
+            foreach (var entry in _receiverPool.ToArray())
+            {
+                if (_receiverPool.TryRemove(entry.Key, out var receiver))
+                    DisposeReceiverSafely(receiver);
+            }
+            _receiver = null;
+        }
         private static void DisposeReceiverSafely(VideoReceiver? receiver)
         {
             if (receiver == null) return;

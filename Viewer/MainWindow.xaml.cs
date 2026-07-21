@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -21,6 +22,8 @@ namespace Viewer
         // === 공용 필드 ===
         private SignalingClient? _signaling;
         private VideoReceiver? _receiver;
+        private readonly ConcurrentDictionary<string, VideoReceiver> _receiverPool = new(StringComparer.OrdinalIgnoreCase);
+        private const int MaxWarmConnections = 4;
         private string? _connectedHostId;
         private KeyboardHook? _keyboardHook;
         private Timer? _statsDisplayTimer;
@@ -181,7 +184,11 @@ namespace Viewer
                 ReleaseRemoteInputs();
                 UpdateInputCaptureState();
             };
-            Closed += (s, e) => _keyboardHook?.Dispose();
+            Closed += (_, _) =>
+            {
+                _keyboardHook?.Dispose();
+                DisposeAllReceivers();
+            };
         }
 
         // ==========================================================
@@ -1098,32 +1105,58 @@ namespace Viewer
             }
 
             ReleaseRemoteInputs();
-            var previousReceiver = _receiver;
-            _receiver = null;
-            DisposeReceiverSafely(previousReceiver);
+            _receiver?.SetPresentationActive(false);
             _isReconnecting = false;
-
-
             _connectedHostId = hostId;
 
-            // 로비를 유지한 채 별도 원격 제어 창을 연다.
             ShowRemoteControlWindow(hostId);
-
-            _statusText.Text = "Client \uC751\uB2F5\uC744 \uD655\uC778\uD558\uB294 \uC911...";
-            _statusText.Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)); // Amber
+            _statusText.Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248));
             _statusText.Visibility = Visibility.Visible;
             _statsOverlay.Visibility = Visibility.Collapsed;
 
-            // 키보드 훅 활성화 (상태 업데이트)
-            UpdateInputCaptureState();
-
-            // 바로 연결 시도 (비밀번호 없이)
             try
             {
-                InitializeReceiver(hostId);
-                await _receiver!.StartAsync(null);
-                _ = WatchConnectionAsync(_receiver, hostId);
-                Console.WriteLine($"[UI] Connecting to {hostId} (no password)");
+                if (!_receiverPool.TryGetValue(hostId, out var receiver))
+                {
+                    receiver = InitializeReceiver(hostId, presentationActive: true);
+                    await receiver.StartAsync(null);
+                    _ = WatchConnectionAsync(receiver, hostId);
+                    _statusText.Text = "Client 응답을 확인하는 중...";
+                    Console.WriteLine($"[UI] Connecting to {hostId} (new session)");
+                }
+                else
+                {
+                    _receiver = receiver;
+                    receiver.SetPresentationActive(true);
+                    if (receiver.VideoBitmap != null)
+                        _videoDisplay.Source = receiver.VideoBitmap;
+
+                    if (receiver.ConnectionState == RTCPeerConnectionState.connected)
+                    {
+                        _statusText.Visibility = receiver.VideoBitmap == null
+                            ? Visibility.Visible
+                            : Visibility.Collapsed;
+                        if (receiver.VideoBitmap == null)
+                            _statusText.Text = "연결 준비 완료 · 첫 화면을 불러오는 중...";
+                        else
+                            _statsOverlay.Visibility = Visibility.Visible;
+                        Console.WriteLine($"[UI] Switched immediately to warm session {hostId}");
+                    }
+                    else if (receiver.ConnectionState == RTCPeerConnectionState.connecting)
+                    {
+                        _statusText.Text = "미리 준비한 연결을 마치는 중...";
+                        _ = WatchConnectionAsync(receiver, hostId);
+                    }
+                    else
+                    {
+                        receiver.Reset();
+                        await receiver.StartAsync(null);
+                        _statusText.Text = "Client 응답을 확인하는 중...";
+                        _ = WatchConnectionAsync(receiver, hostId);
+                    }
+                }
+
+                UpdateInputCaptureState();
             }
             catch (Exception ex)
             {
@@ -1168,11 +1201,9 @@ namespace Viewer
             // 키보드 훅 비활성화 (나중에 상태 업데이트로 처리)
             // VideoReceiver 정리
             ReleaseRemoteInputs();
-            var previousReceiver = _receiver;
+            _receiver?.SetPresentationActive(false);
             _receiver = null;
-            DisposeReceiverSafely(previousReceiver);
             _isReconnecting = false;
-
 
             _connectedHostId = null;
             _enteredPassword = null;
@@ -1601,6 +1632,12 @@ namespace Viewer
                     }
 
                     UpdateLobbyUI(_persistentHosts.Values.ToList());
+                    _ = WarmOnlineHostsAsync(
+                        _persistentHosts.Values
+                            .Where(host => host.IsOnline)
+                            .OrderByDescending(host => host.LastSeen)
+                            .Select(host => host.Id)
+                            .ToList());
                 });
             }
             catch (Exception ex)
@@ -1691,7 +1728,12 @@ namespace Viewer
                 _signaling.OnSignalReceived += async (from, signal) =>
                 {
                     Console.WriteLine($"[Signaling] Signal from {from}: {signal}");
-                    if (_receiver != null)
+                    if (_receiverPool.TryGetValue(from, out var receiver))
+                    {
+                        await receiver.HandleSignalAsync(signal);
+                    }
+                    else if (_receiver != null &&
+                             string.Equals(_connectedHostId, from, StringComparison.OrdinalIgnoreCase))
                     {
                         await _receiver.HandleSignalAsync(signal);
                     }
@@ -1724,18 +1766,75 @@ namespace Viewer
             }
         }
 
+        private async Task WarmOnlineHostsAsync(IEnumerable<string> hostIds)
+        {
+            if (_signaling == null || _isHubMode || _isLanMode) return;
+
+            foreach (var hostId in hostIds
+                         .Where(id => !string.IsNullOrWhiteSpace(id))
+                         .Distinct(StringComparer.OrdinalIgnoreCase)
+                         .Take(MaxWarmConnections))
+            {
+                if (_receiverPool.ContainsKey(hostId)) continue;
+
+                VideoReceiver? receiver = null;
+                try
+                {
+                    receiver = InitializeReceiver(hostId, presentationActive: false);
+                    await receiver.StartAsync(null);
+                    Console.WriteLine($"[UI] Warm connection requested for {hostId}");
+                }
+                catch (Exception ex)
+                {
+                    _receiverPool.TryRemove(hostId, out _);
+                    DisposeReceiverSafely(receiver);
+                    Console.WriteLine(
+                        $"[UI] Warm connection failed for {hostId}: {ex.Message}");
+                }
+            }
+        }
+        private async Task RetryWarmConnectionAsync(
+            string hostId,
+            VideoReceiver receiver)
+        {
+            foreach (var delay in new[] { TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(7) })
+            {
+                await Task.Delay(delay);
+                if (!_receiverPool.TryGetValue(hostId, out var pooled) ||
+                    !ReferenceEquals(pooled, receiver) ||
+                    receiver.ConnectionState == RTCPeerConnectionState.connected ||
+                    ReferenceEquals(_receiver, receiver))
+                    return;
+
+                try
+                {
+                    receiver.Reset();
+                    await receiver.StartAsync(null);
+                    Console.WriteLine($"[UI] Warm connection retry sent for {hostId}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(
+                        $"[UI] Warm connection retry failed for {hostId}: {ex.Message}");
+                }
+            }
+        }
         // ==========================================================
         // VideoReceiver 초기화
         // ==========================================================
-        private void InitializeReceiver(string hostId)
+        private VideoReceiver InitializeReceiver(
+            string hostId,
+            bool presentationActive = true)
         {
             var receiver = new VideoReceiver();
-            _receiver = receiver;
+            _receiverPool[hostId] = receiver;
+            if (presentationActive)
+                _receiver = receiver;
+            receiver.SetPresentationActive(presentationActive);
 
             // 시그널 전송
             receiver.OnSignalReady += async (signal) =>
             {
-                if (!ReferenceEquals(_receiver, receiver)) return;
                 if (_isHubMode &&
                     _hubServer != null &&
                     _connectedHostId == hostId)
@@ -1748,9 +1847,9 @@ namespace Viewer
                 {
                     await _lanSignal.SendSignalAsync(signal);
                 }
-                else if (_signaling != null && _connectedHostId != null)
+                else if (_signaling != null)
                 {
-                    await _signaling.SendSignalAsync(_connectedHostId, signal);
+                    await _signaling.SendSignalAsync(hostId, signal);
                 }
             };
 
@@ -1805,6 +1904,7 @@ namespace Viewer
             {
                 Dispatcher.Invoke(() =>
                 {
+                    if (!ReferenceEquals(_receiver, receiver)) return;
                     ShowPasswordPanel("비밀번호가 틀립니다. 다시 입력해 주세요.");
                 });
             };
@@ -1814,6 +1914,7 @@ namespace Viewer
             {
                 Dispatcher.Invoke(() =>
                 {
+                    if (!ReferenceEquals(_receiver, receiver)) return;
                     try { Clipboard.SetText(text); }
                     catch { }
                 });
@@ -1838,6 +1939,7 @@ namespace Viewer
                     }
                 });
             }, null, 1000, 1000);
+            return receiver;
         }
 
         // ==========================================================

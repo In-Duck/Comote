@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -120,6 +120,17 @@ namespace Host
                 appSettings.Save();
             }
 
+            var resolvedInputBackendMode =
+                InputBackendFactory.ResolveConfiguredMode(
+                    inputBackendMode,
+                    null,
+                    allowInstall: !isService);
+            if (resolvedInputBackendMode != inputBackendMode)
+            {
+                inputBackendMode = resolvedInputBackendMode;
+                appSettings.InputBackendMode = inputBackendMode;
+                appSettings.Save();
+            }
             Console.WriteLine(
                 "[Host] Cloud account mode enabled; no VPN address or connection password is required.");
 
@@ -157,7 +168,7 @@ namespace Host
             signaling.StartThumbnailReporting(capture);
             using var tray = isService
                 ? null
-                : CloudClientTrayIcon.Start(hostName, inputBackendMode);
+                : CloudClientTrayIcon.Start(hostName, inputBackend.Mode);
 
             await Task.Delay(Timeout.InfiniteTimeSpan);
         }

@@ -38,6 +38,7 @@ namespace Viewer
         private readonly Stopwatch _fpsStopwatch = new();
         private readonly Stopwatch _pingStopwatch = new();
         private Timer? _statsTimer;
+        private volatile bool _presentationActive;
 
         /// <summary>최근 1초간 디코딩된 FPS</summary>
         public int CurrentFps { get; private set; }
@@ -224,7 +225,7 @@ namespace Viewer
             int _audioFrameCount = 0;
             _peerConnection.OnRtpPacketReceived += (rep, media, rtpPacket) =>
             {
-                if (media == SDPMediaTypesEnum.audio)
+                if (media == SDPMediaTypesEnum.audio && _presentationActive)
                 {
                     try
                     {
@@ -488,22 +489,7 @@ namespace Viewer
             {
                 Console.WriteLine("[VideoReceiver] Input DataChannel opened");
                 OnInputReadyChanged?.Invoke(true);
-                try
-                {
-                    var settings = AppSettings.Load();
-                    int qLevel = 2;
-                    switch(settings.Quality) {
-                        case "최상": qLevel = 3; break;
-                        case "상": qLevel = 2; break;
-                        case "중": qLevel = 1; break;
-                        case "하": qLevel = 0; break;
-                    }
-                    SendSettings(settings.GetTargetFps(), qLevel);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[VideoReceiver] Failed to send initial settings: {ex.Message}");
-                }
+                ApplyPresentationSettings();
             };
 
             // DataChannel 생성 (파일 전송용)
@@ -613,6 +599,53 @@ namespace Viewer
             }
         }
 
+        public void SetPresentationActive(bool active)
+        {
+            _presentationActive = active;
+            try
+            {
+                if (active)
+                    _waveOut?.Play();
+                else
+                {
+                    _waveOut?.Pause();
+                    _waveProvider?.ClearBuffer();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Audio] Presentation state warning: {ex.Message}");
+            }
+
+            ApplyPresentationSettings();
+        }
+
+        private void ApplyPresentationSettings()
+        {
+            if (!InputChannelReady) return;
+            if (!_presentationActive)
+            {
+                SendSettings(2, 0);
+                return;
+            }
+
+            try
+            {
+                var settings = AppSettings.Load();
+                var qualityLevel = settings.Quality switch
+                {
+                    "최상" => 3,
+                    "중" => 1,
+                    "하" => 0,
+                    _ => 2,
+                };
+                SendSettings(settings.GetTargetFps(), qualityLevel);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[VideoReceiver] Failed to apply presentation settings: {ex.Message}");
+            }
+        }
         public void SendSettings(int fps, int qualityLevel)
         {
             if (_inputChannel?.readyState == RTCDataChannelState.open)

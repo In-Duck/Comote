@@ -36,7 +36,7 @@ namespace Host
         public int SelectedOutputIndex => _monitors.Count > 0 ? _monitors[_monitorCombo.SelectedIndex].OutputIndex : 0;
 
         public SetupForm(
-            InputBackendMode inputBackendMode = InputBackendMode.VirtualHid)
+            InputBackendMode inputBackendMode = InputBackendMode.SendInput)
         {
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             Text = "Comote Client 설정";
@@ -183,18 +183,21 @@ namespace Host
             };
             _inputCombo.Items.Add("FakerInput 가상 HID (모드 2 · 게임 정책 확인)");
             _inputCombo.Items.Add("Windows SendInput (호환 모드)");
+            var isVirtualHidReady = FakerInputBackend.IsDriverAvailable();
             _inputCombo.SelectedIndex =
-                inputBackendMode == InputBackendMode.SendInput ? 1 : 0;
+                inputBackendMode == InputBackendMode.VirtualHid && isVirtualHidReady
+                    ? 0
+                    : 1;
             Controls.Add(_inputCombo);
 
             var inputHint = new Label
             {
-                Text = FakerInputBackend.IsDriverAvailable()
+                Text = isVirtualHidReady
                     ? "FakerInput 드라이버 준비됨"
                     : "모드 2 선택 시 서명된 FakerInput 설치 안내가 표시됩니다.",
                 Location = new Point(20, 314),
                 AutoSize = true,
-                ForeColor = FakerInputBackend.IsDriverAvailable()
+                ForeColor = isVirtualHidReady
                     ? Color.FromArgb(34, 197, 94)
                     : Color.FromArgb(251, 191, 36)
             };

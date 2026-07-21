@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text;
 using System.Windows.Forms;
 using SIPSorceryMedia.FFmpeg;
@@ -39,7 +39,7 @@ namespace Host
             var adapterIndex = savedSettings?.AdapterIndex ?? 0;
             var outputIndex = savedSettings?.OutputIndex ?? 0;
             var inputBackendMode = savedSettings?.InputBackendMode ??
-                InputBackendMode.VirtualHid;
+                InputBackendMode.SendInput;
 
             if (!int.TryParse(portText, out var port) ||
                 port is < 1024 or > 65535)
@@ -74,6 +74,10 @@ namespace Host
                 return;
             }
 
+            inputBackendMode = InputBackendFactory.ResolveConfiguredMode(
+                inputBackendMode,
+                null,
+                allowInstall: Environment.UserInteractive);
             HubClientSettingsStore.Save(
                 new HubClientSettings
                 {
@@ -102,11 +106,6 @@ namespace Host
             Console.WriteLine($"Client ID: {clientId}");
             Console.WriteLine($"Manager: {manager}:{port}");
             Console.WriteLine("Client 측 포트포워딩: 필요 없음");
-
-            if (inputBackendMode == InputBackendMode.VirtualHid &&
-                !FakerInputBackend.IsDriverAvailable() &&
-                !InputBackendFactory.EnsureVirtualHidReady(null))
-                return;
 
             var ffmpegPath = FFmpegExtractor.ExtractFFmpeg();
             FFmpegInit.Initialise(

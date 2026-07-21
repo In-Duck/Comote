@@ -22,7 +22,9 @@ namespace Host
             }
             catch (Exception ex)
             {
-                ActivateFallback(ex);
+                _fallback.Dispose();
+                throw new InvalidOperationException(
+                    "FakerInput 가상 HID 장치를 열 수 없습니다.", ex);
             }
         }
 

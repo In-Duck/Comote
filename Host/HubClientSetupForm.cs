@@ -121,10 +121,12 @@ namespace Host
             };
             _inputBox.Items.Add("FakerInput 가상 HID (모드 2 · 게임 정책 확인)");
             _inputBox.Items.Add("Windows SendInput (호환 모드)");
+            var isVirtualHidReady = FakerInputBackend.IsDriverAvailable();
             _inputBox.SelectedIndex =
-                savedSettings?.InputBackendMode == InputBackendMode.SendInput
-                    ? 1
-                    : 0;
+                savedSettings?.InputBackendMode == InputBackendMode.VirtualHid &&
+                isVirtualHidReady
+                    ? 0
+                    : 1;
             Controls.Add(_inputBox);
 
             _updateManifestBox = AddTextBox(

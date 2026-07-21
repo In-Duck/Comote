@@ -12,13 +12,54 @@ namespace Host
 
         public static IInputBackend Create(InputBackendMode mode, ScreenCapture capture)
         {
-            IInputBackend backend = mode switch
+            IInputBackend backend;
+            if (mode == InputBackendMode.VirtualHid)
             {
-                InputBackendMode.VirtualHid => new ResilientInputBackend(capture.Left, capture.Top, capture.Width, capture.Height),
-                _ => new SendInputBackend(capture.Width, capture.Height),
-            };
+                try
+                {
+                    backend = new ResilientInputBackend(
+                        capture.Left, capture.Top, capture.Width, capture.Height);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(
+                        $"[Input] FakerInput could not be opened; using SendInput: {ex.Message}");
+                    backend = new SendInputBackend(capture.Width, capture.Height);
+                }
+            }
+            else
+            {
+                backend = new SendInputBackend(capture.Width, capture.Height);
+            }
             backend.UpdateScreenBounds(capture.Left, capture.Top, capture.Width, capture.Height);
             return backend;
+        }
+
+        public static InputBackendMode ResolveConfiguredMode(
+            InputBackendMode requestedMode,
+            IWin32Window? owner,
+            bool allowInstall)
+        {
+            if (requestedMode != InputBackendMode.VirtualHid ||
+                FakerInputBackend.IsDriverAvailable())
+                return requestedMode;
+
+            if (allowInstall && EnsureVirtualHidReady(owner))
+                return InputBackendMode.VirtualHid;
+
+            Console.WriteLine(
+                "[Input] FakerInput is unavailable. The configured mode was changed to SendInput.");
+            if (Environment.UserInteractive)
+            {
+                MessageBox.Show(
+                    owner,
+                    "FakerInput 장치를 사용할 수 없어 입력 모드를 Windows SendInput으로 변경했습니다.\n\n" +
+                    "가상 HID를 사용하려면 고급 설정에서 FakerInput을 설치한 뒤 다시 선택해 주세요.",
+                    "Comote · 입력 모드 변경",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+            return InputBackendMode.SendInput;
         }
 
         public static bool EnsureVirtualHidReady(IWin32Window? owner)

@@ -12,7 +12,7 @@ namespace Host
         public int AdapterIndex { get; set; }
         public int OutputIndex { get; set; }
         public InputBackendMode InputBackendMode { get; set; } =
-            InputBackendMode.VirtualHid;
+            InputBackendMode.SendInput;
         public string UpdateManifestUrl { get; set; } = "";
         public string EncryptedPassword { get; set; } = "";
     }
