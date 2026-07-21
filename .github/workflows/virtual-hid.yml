@@ -74,8 +74,44 @@ jobs:
             -Include ComoteVirtualHid.sys,ComoteVirtualHid.inf,ComoteVirtualHid.cat | `
             Copy-Item -Destination $output -Force
 
+      - name: Test-sign team driver package
+        shell: pwsh
+        run: |
+          $output = (Resolve-Path "artifacts/ComoteVirtualHid").Path
+          $certificate = New-SelfSignedCertificate `
+            -Type CodeSigningCert `
+            -Subject "CN=Comote Team Test Driver $env:GITHUB_RUN_ID" `
+            -CertStoreLocation "Cert:\CurrentUser\My" `
+            -KeyAlgorithm RSA `
+            -KeyLength 3072 `
+            -HashAlgorithm SHA256 `
+            -KeyExportPolicy NonExportable `
+            -NotAfter (Get-Date).AddDays(90)
+          Export-Certificate `
+            -Cert $certificate `
+            -FilePath "$output/ComoteTeamTest.cer" | Out-Null
+
+          $signTool = (Resolve-Path `
+            "packages/Microsoft.Windows.SDK.CPP.10.0.28000.1839/c/bin/10.0.28000.0/x64/signtool.exe").Path
+          & $signTool sign /v /fd SHA256 /sha1 $($certificate.Thumbprint) `
+            /s My "$output/ComoteVirtualHid.cat"
+          if ($LASTEXITCODE -ne 0) { throw "Catalog test signing failed." }
+
+          Import-Certificate `
+            -FilePath "$output/ComoteTeamTest.cer" `
+            -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
+          & $signTool verify /v /pa "$output/ComoteVirtualHid.cat"
+          if ($LASTEXITCODE -ne 0) { throw "Catalog signature verification failed." }
+
+          Copy-Item Driver/Installer/Install-Team-TestDriver.ps1 $output
+          Copy-Item Driver/Installer/Disable-Team-TestMode.ps1 $output
+          Copy-Item "Driver/Installer/Install Team Test Driver as Administrator.cmd" $output
+          Copy-Item "Driver/Installer/Remove Team Test Driver and Disable Test Mode.cmd" $output
+          Copy-Item Driver/TEST_MODE_GUIDE_KO.md $output
+
       - uses: actions/upload-artifact@v4
         with:
-          name: ComoteVirtualHid-unsigned-developer-build
+          name: ComoteVirtualHid-test-signed-team-build
           path: artifacts/ComoteVirtualHid
           if-no-files-found: error
+          retention-days: 90

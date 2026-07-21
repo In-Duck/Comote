@@ -26,13 +26,14 @@ internal static class Program
             return command switch
             {
                 "install" => Install(),
+                "uninstall" => Uninstall(),
                 _ => ShowUsage(),
             };
         }
         catch (Exception ex)
         {
             MessageBox.Show(
-                "Comote Virtual HID 설치에 실패했습니다.\n\n" + ex.Message,
+                "Comote Virtual HID 작업에 실패했습니다.\n\n" + ex.Message,
                 "Comote Virtual HID",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
@@ -48,8 +49,7 @@ internal static class Program
             throw new FileNotFoundException(
                 "드라이버 설치 파일을 찾을 수 없습니다.", infPath);
 
-        if (!DeviceExists())
-            CreateRootDevice();
+        if (!DeviceExists()) CreateRootDevice();
 
         if (!UpdateDriverForPlugAndPlayDevices(
             IntPtr.Zero,
@@ -63,10 +63,60 @@ internal static class Program
 
         MessageBox.Show(
             rebootRequired
-                ? "Comote Virtual HID를 설치했습니다.\n" +
-                  "Client 컴퓨터를 재부팅한 뒤 Comote를 실행해 주세요."
-                : "Comote Virtual HID를 설치했습니다.\n" +
-                  "Comote Client를 다시 실행해 주세요.",
+                ? "Comote Virtual HID를 설치했습니다. Windows를 다시 시작해 주세요."
+                : "Comote Virtual HID를 설치했습니다. Comote Client를 다시 실행해 주세요.",
+            "Comote Virtual HID",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+        return rebootRequired ? 2 : 0;
+    }
+
+    private static int Uninstall()
+    {
+        var deviceInfoSet = SetupDiGetClassDevs(
+            ref HidClassGuid, null, IntPtr.Zero, 0);
+        if (deviceInfoSet == new IntPtr(-1))
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+
+        var removed = 0;
+        var rebootRequired = false;
+        try
+        {
+            for (uint index = 0; ; index++)
+            {
+                var deviceInfo = NewDeviceInfoData();
+                if (!SetupDiEnumDeviceInfo(deviceInfoSet, index, ref deviceInfo))
+                {
+                    if (Marshal.GetLastWin32Error() == 259) break;
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+
+                if (!IsComoteDevice(deviceInfoSet, ref deviceInfo)) continue;
+                if (!DiUninstallDevice(
+                    IntPtr.Zero,
+                    deviceInfoSet,
+                    ref deviceInfo,
+                    0,
+                    out var deviceNeedsReboot))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error());
+                }
+
+                removed++;
+                rebootRequired |= deviceNeedsReboot;
+            }
+        }
+        finally
+        {
+            SetupDiDestroyDeviceInfoList(deviceInfoSet);
+        }
+
+        MessageBox.Show(
+            removed == 0
+                ? "설치된 Comote Virtual HID 장치가 없습니다."
+                : rebootRequired
+                    ? "Comote Virtual HID를 제거했습니다. Windows를 다시 시작해 주세요."
+                    : "Comote Virtual HID를 제거했습니다.",
             "Comote Virtual HID",
             MessageBoxButtons.OK,
             MessageBoxIcon.Information);
@@ -84,36 +134,14 @@ internal static class Program
         {
             for (uint index = 0; ; index++)
             {
-                var deviceInfo = new SpDevinfoData
-                {
-                    Size = Marshal.SizeOf<SpDevinfoData>(),
-                };
+                var deviceInfo = NewDeviceInfoData();
                 if (!SetupDiEnumDeviceInfo(deviceInfoSet, index, ref deviceInfo))
                 {
                     if (Marshal.GetLastWin32Error() == 259) break;
                     throw new Win32Exception(Marshal.GetLastWin32Error());
                 }
 
-                var buffer = new byte[4096];
-                if (!SetupDiGetDeviceRegistryProperty(
-                    deviceInfoSet,
-                    ref deviceInfo,
-                    SpdrpHardwareId,
-                    out _,
-                    buffer,
-                    buffer.Length,
-                    out _))
-                {
-                    continue;
-                }
-
-                var hardwareIds = Encoding.Unicode.GetString(buffer)
-                    .Split('\0', StringSplitOptions.RemoveEmptyEntries);
-                if (hardwareIds.Any(id => string.Equals(
-                    id, HardwareId, StringComparison.OrdinalIgnoreCase)))
-                {
-                    return true;
-                }
+                if (IsComoteDevice(deviceInfoSet, ref deviceInfo)) return true;
             }
 
             return false;
@@ -123,6 +151,35 @@ internal static class Program
             SetupDiDestroyDeviceInfoList(deviceInfoSet);
         }
     }
+
+    private static SpDevinfoData NewDeviceInfoData() => new()
+    {
+        Size = Marshal.SizeOf<SpDevinfoData>(),
+    };
+
+    private static bool IsComoteDevice(
+        IntPtr deviceInfoSet,
+        ref SpDevinfoData deviceInfo)
+    {
+        var buffer = new byte[4096];
+        if (!SetupDiGetDeviceRegistryProperty(
+            deviceInfoSet,
+            ref deviceInfo,
+            SpdrpHardwareId,
+            out _,
+            buffer,
+            buffer.Length,
+            out _))
+        {
+            return false;
+        }
+
+        return Encoding.Unicode.GetString(buffer)
+            .Split('\0', StringSplitOptions.RemoveEmptyEntries)
+            .Any(id => string.Equals(
+                id, HardwareId, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static void CreateRootDevice()
     {
         var deviceInfoSet = SetupDiCreateDeviceInfoList(
@@ -132,10 +189,7 @@ internal static class Program
 
         try
         {
-            var deviceInfo = new SpDevinfoData
-            {
-                Size = Marshal.SizeOf<SpDevinfoData>(),
-            };
+            var deviceInfo = NewDeviceInfoData();
             if (!SetupDiCreateDeviceInfo(
                 deviceInfoSet,
                 "ComoteVirtualHid",
@@ -152,7 +206,7 @@ internal static class Program
             if (!SetupDiSetDeviceRegistryProperty(
                 deviceInfoSet,
                 ref deviceInfo,
-                1,
+                SpdrpHardwareId,
                 hardwareIds,
                 hardwareIds.Length))
             {
@@ -176,7 +230,7 @@ internal static class Program
     private static int ShowUsage()
     {
         MessageBox.Show(
-            "사용법: ComoteVirtualHidInstaller.exe install",
+            "사용법: ComoteVirtualHidInstaller.exe install | uninstall",
             "Comote Virtual HID");
         return 2;
     }
@@ -190,10 +244,7 @@ internal static class Program
         public IntPtr Reserved;
     }
 
-    [DllImport(
-        "setupapi.dll",
-        CharSet = CharSet.Unicode,
-        SetLastError = true)]
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern IntPtr SetupDiGetClassDevs(
         ref Guid classGuid,
         string? enumerator,
@@ -207,10 +258,7 @@ internal static class Program
         uint memberIndex,
         ref SpDevinfoData deviceInfoData);
 
-    [DllImport(
-        "setupapi.dll",
-        CharSet = CharSet.Unicode,
-        SetLastError = true)]
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetupDiGetDeviceRegistryProperty(
         IntPtr deviceInfoSet,
@@ -220,15 +268,13 @@ internal static class Program
         byte[] propertyBuffer,
         int propertyBufferSize,
         out uint requiredSize);
+
     [DllImport("setupapi.dll", SetLastError = true)]
     private static extern IntPtr SetupDiCreateDeviceInfoList(
         ref Guid classGuid,
         IntPtr parentWindow);
 
-    [DllImport(
-        "setupapi.dll",
-        CharSet = CharSet.Unicode,
-        SetLastError = true)]
+    [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetupDiCreateDeviceInfo(
         IntPtr deviceInfoSet,
@@ -260,10 +306,7 @@ internal static class Program
     private static extern bool SetupDiDestroyDeviceInfoList(
         IntPtr deviceInfoSet);
 
-    [DllImport(
-        "newdev.dll",
-        CharSet = CharSet.Unicode,
-        SetLastError = true)]
+    [DllImport("newdev.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool UpdateDriverForPlugAndPlayDevices(
         IntPtr parentWindow,
@@ -271,4 +314,13 @@ internal static class Program
         string fullInfPath,
         uint installFlags,
         [MarshalAs(UnmanagedType.Bool)] out bool rebootRequired);
+
+    [DllImport("newdev.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DiUninstallDevice(
+        IntPtr parentWindow,
+        IntPtr deviceInfoSet,
+        ref SpDevinfoData deviceInfoData,
+        uint flags,
+        [MarshalAs(UnmanagedType.Bool)] out bool needReboot);
 }

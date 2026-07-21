@@ -57,6 +57,13 @@ if (-not [string]::IsNullOrWhiteSpace($driverPackage)) {
             $catalogSignature.Status
     }
 
+    if ($catalogSignature.SignerCertificate.Subject -like
+        "*Comote Team Test Driver*") {
+        throw (
+            "A team test-signed driver cannot be included in a public package. " +
+            "Use a Microsoft-signed production driver package."
+        )
+    }
     dotnet publish `
         (Join-Path $root "Driver\Installer\ComoteVirtualHidInstaller.csproj") `
         -c $Configuration -r $Runtime --self-contained true `
