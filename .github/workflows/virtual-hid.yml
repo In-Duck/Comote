@@ -97,11 +97,12 @@ jobs:
             /s My "$output/ComoteVirtualHid.cat"
           if ($LASTEXITCODE -ne 0) { throw "Catalog test signing failed." }
 
-          Import-Certificate `
-            -FilePath "$output/ComoteTeamTest.cer" `
-            -CertStoreLocation "Cert:\CurrentUser\Root" | Out-Null
-          & $signTool verify /v /pa "$output/ComoteVirtualHid.cat"
-          if ($LASTEXITCODE -ne 0) { throw "Catalog signature verification failed." }
+          $signature = Get-AuthenticodeSignature `
+            -LiteralPath "$output/ComoteVirtualHid.cat"
+          if ($null -eq $signature.SignerCertificate -or
+              $signature.SignerCertificate.Thumbprint -ne $certificate.Thumbprint) {
+            throw "Catalog signature does not match the generated team certificate."
+          }
 
           Copy-Item Driver/Installer/Install-Team-TestDriver.ps1 $output
           Copy-Item Driver/Installer/Disable-Team-TestMode.ps1 $output
