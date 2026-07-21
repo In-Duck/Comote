@@ -266,7 +266,7 @@ namespace Host
             {
                 // 60초 간격으로 썸네일 업로드
                 _ = RunThumbnailLoopAsync(_lifetimeCts.Token);
-                Console.WriteLine("[Signaling] Thumbnail reporting started (60s interval)");
+                Console.WriteLine("[Signaling] Thumbnail reporting started (30s interval)");
             }
         }
 
@@ -274,10 +274,10 @@ namespace Host
         {
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
                 await SendThumbnailAsync();
 
-                using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+                using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
                 while (await timer.WaitForNextTickAsync(cancellationToken))
                 {
                     await SendThumbnailAsync();
@@ -309,11 +309,16 @@ namespace Host
                 request.Content = new ByteArrayContent(thumbnail);
                 request.Content.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
 
-                var response = await _httpClient.SendAsync(request);
+                using var response = await _httpClient.SendAsync(request);
                 if (response.IsSuccessStatusCode)
                 {
                     await UpdateThumbnailPathInDbAsync(objectPath);
                     Console.WriteLine("[Thumbnail] Uploaded successfully");
+                }
+                else
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine($"[Thumbnail] Upload failed ({(int)response.StatusCode}): {error}");
                 }
             }
             catch (Exception ex)
@@ -333,9 +338,17 @@ namespace Host
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
                 request.Content = new StringContent(JsonConvert.SerializeObject(dto), Encoding.UTF8, "application/json");
 
-                await _httpClient.SendAsync(request);
+                using var response = await _httpClient.SendAsync(request);
+                if (!response.IsSuccessStatusCode)
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine($"[Thumbnail] Database update failed ({(int)response.StatusCode}): {error}");
+                }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Thumbnail] Database update error: {ex.Message}");
+            }
         }
 
         [System.Runtime.InteropServices.DllImport("kernel32.dll")]

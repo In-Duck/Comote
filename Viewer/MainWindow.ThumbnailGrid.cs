@@ -1,4 +1,6 @@
-﻿using System.Windows;
+using System.Net.Http;
+using System.Threading.Tasks;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -9,6 +11,10 @@ namespace Viewer
 {
     public partial class MainWindow
     {
+        private static readonly HttpClient ThumbnailClient = new()
+        {
+            Timeout = TimeSpan.FromSeconds(8),
+        };
         private readonly Dictionary<string, Image> _liveThumbnailImages =
             new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, Border> _thumbnailTiles =
@@ -39,6 +45,8 @@ namespace Viewer
                 VerticalAlignment = VerticalAlignment.Center,
             };
             if (image.Source != null) noSignal.Visibility = Visibility.Collapsed;
+            else if (host.IsOnline && !string.IsNullOrWhiteSpace(host.ThumbnailUrl))
+                _ = LoadCloudThumbnailAsync(host, image, noSignal);
 
             var name = new TextBlock
             {
@@ -125,6 +133,44 @@ namespace Viewer
                 Console.WriteLine($"[Hub] Thumbnail active: {hostId} ({jpeg.Length} bytes)");
         }
 
+        private async Task LoadCloudThumbnailAsync(
+            HostInfo host,
+            Image image,
+            TextBlock placeholder)
+        {
+            try
+            {
+                using var response = await ThumbnailClient.GetAsync(
+                    host.ThumbnailUrl,
+                    HttpCompletionOption.ResponseHeadersRead);
+                response.EnsureSuccessStatusCode();
+                var length = response.Content.Headers.ContentLength;
+                if (length is > 2_000_000)
+                    throw new InvalidOperationException("Thumbnail is too large.");
+
+                var jpeg = await response.Content.ReadAsByteArrayAsync();
+                if (jpeg.Length == 0 || jpeg.Length > 2_000_000)
+                    throw new InvalidOperationException("Thumbnail payload is invalid.");
+
+                var bitmap = DecodeThumbnail(jpeg);
+                if (bitmap == null) return;
+                if (!_liveThumbnailImages.TryGetValue(host.Id, out var current) ||
+                    !ReferenceEquals(current, image)) return;
+
+                host.ThumbnailBytes = jpeg;
+                image.Source = bitmap;
+                placeholder.Visibility = Visibility.Collapsed;
+            }
+            catch (Exception ex)
+            {
+                if (_liveThumbnailImages.TryGetValue(host.Id, out var current) &&
+                    ReferenceEquals(current, image))
+                {
+                    placeholder.Text = "Waiting for preview";
+                }
+                Console.WriteLine($"[Thumbnail] Download failed for {host.Id}: {ex.Message}");
+            }
+        }
         private static BitmapImage? DecodeThumbnail(byte[] jpeg)
         {
             try

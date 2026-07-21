@@ -60,6 +60,12 @@ namespace Viewer
 
         private void ReleaseRemoteInputs()
         {
+            // Disable the process-wide hook before releasing the remote state.
+            if (_keyboardHook != null)
+                _keyboardHook.IsCapturing = false;
+            _ctrlPressed = false;
+            _shiftPressed = false;
+
             try
             {
                 _receiver?.SendInput(new byte[] { 0x13 });
@@ -70,6 +76,20 @@ namespace Viewer
 
             if (_videoDisplay.IsMouseCaptured)
                 _videoDisplay.ReleaseMouseCapture();
+        }
+
+        private bool IsRemoteInputActive()
+        {
+            var controlWindowActive = _remoteWindow == null
+                ? IsActive && WindowState != WindowState.Minimized
+                : _remoteWindow.IsActive &&
+                  _remoteWindow.WindowState != WindowState.Minimized;
+
+            return controlWindowActive &&
+                _remoteGrid.Visibility == Visibility.Visible &&
+                _passwordPanel?.Visibility != Visibility.Visible &&
+                _receiver?.ConnectionState == SIPSorcery.Net.RTCPeerConnectionState.connected &&
+                _receiver.InputChannelReady;
         }
 
         private static void DisposeReceiverSafely(VideoReceiver? receiver)

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -642,7 +642,8 @@ namespace Viewer
             };
             grid.Drop += async (s, e) =>
             {
-                if (_receiver == null || _connectedHostId == null) return;
+                if (_receiver == null || _connectedHostId == null ||
+                    !IsRemoteInputActive()) return;
                 if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
                 string[]? files = e.Data.GetData(DataFormats.FileDrop) as string[];
                 if (files == null || files.Length == 0) return;
@@ -1080,17 +1081,8 @@ namespace Viewer
         {
             if (_keyboardHook == null) return;
             // 리모트 뷰가 보이고 + 창이 활성화 상태 + 패스워드 패널이 안 보일 때만 캡처
-            bool isPasswordInput = _passwordPanel != null && _passwordPanel.Visibility == Visibility.Visible;
-            bool remoteWindowActive = _remoteWindow?.IsActive ?? IsActive;
-            bool remoteInputReady = _receiver?.ConnectionState ==
-                RTCPeerConnectionState.connected &&
-                _receiver.InputChannelReady;
-            bool shouldCapture =
-                (_remoteGrid.Visibility == Visibility.Visible) &&
-                remoteWindowActive &&
-                !isPasswordInput &&
-                remoteInputReady;
-            _keyboardHook.IsCapturing = shouldCapture;
+            _keyboardHook.IsCapturing = IsRemoteInputActive();
+
         }
 
         // ==========================================================
@@ -1117,7 +1109,7 @@ namespace Viewer
             // 로비를 유지한 채 별도 원격 제어 창을 연다.
             ShowRemoteControlWindow(hostId);
 
-            _statusText.Text = "시스템 연결 시도 중...";
+            _statusText.Text = "Client \uC751\uB2F5\uC744 \uD655\uC778\uD558\uB294 \uC911...";
             _statusText.Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)); // Amber
             _statusText.Visibility = Visibility.Visible;
             _statsOverlay.Visibility = Visibility.Collapsed;
@@ -1314,7 +1306,8 @@ namespace Viewer
         {
             _videoDisplay.MouseMove += (s, e) =>
             {
-                if (_receiver == null || _connectedHostId == null) return;
+                if (_receiver == null || _connectedHostId == null ||
+                    !IsRemoteInputActive()) return;
                 if (!TryGetRemoteCoordinates(
                         e, false, out var nx, out var ny)) return;
 
@@ -1327,7 +1320,8 @@ namespace Viewer
 
             _videoDisplay.MouseDown += (s, e) =>
             {
-                if (_receiver == null || _connectedHostId == null) return;
+                if (_receiver == null || _connectedHostId == null ||
+                    !IsRemoteInputActive()) return;
                 if (!TryGetRemoteCoordinates(
                         e, false, out var nx, out var ny) ||
                     !TryGetMouseButton(e.ChangedButton, out var btn)) return;
@@ -1343,7 +1337,8 @@ namespace Viewer
 
             _videoDisplay.MouseUp += (s, e) =>
             {
-                if (_receiver == null || _connectedHostId == null) return;
+                if (_receiver == null || _connectedHostId == null ||
+                    !IsRemoteInputActive()) return;
                 _videoDisplay.ReleaseMouseCapture();
                 if (!TryGetRemoteCoordinates(
                         e, true, out var nx, out var ny) ||
@@ -1362,7 +1357,8 @@ namespace Viewer
 
             _videoDisplay.MouseWheel += (s, e) =>
             {
-                if (_receiver == null || _connectedHostId == null) return;
+                if (_receiver == null || _connectedHostId == null ||
+                    !IsRemoteInputActive()) return;
                 // 프로토콜: {type, int_delta} = 5바이트
                 var data = new byte[5];
                 data[0] = MSG_MOUSE_WHEEL;
@@ -1414,7 +1410,8 @@ namespace Viewer
         private string? _lastSentClipboardText = null;
         private void OnClipboardUpdated()
         {
-            if (_receiver == null || !_settings.AutoClipboard) return;
+            if (_receiver == null || !_settings.AutoClipboard ||
+                !IsRemoteInputActive()) return;
 
             try
             {
@@ -1454,6 +1451,7 @@ namespace Viewer
         // ==========================================================
         private void OnKeyHookEvent(ushort vk, bool isDown)
         {
+            if (!IsRemoteInputActive()) return;
             // Modifier 키 상태 추적 (로컬 단축키 판단용, Host로도 전달)
             if (vk == 0xA2 || vk == 0xA3) _ctrlPressed = isDown;
             if (vk == 0xA0 || vk == 0xA1) _shiftPressed = isDown;
@@ -1774,7 +1772,24 @@ namespace Viewer
             // 연결 상태 변경
             receiver.OnConnectionStateChanged += (state) =>
             {
-                Dispatcher.Invoke(() => UpdateInputCaptureState());
+                Dispatcher.Invoke(() =>
+                {
+                    UpdateInputCaptureState();
+                    if (!ReferenceEquals(_receiver, receiver)) return;
+
+                    if (state == RTCPeerConnectionState.connected)
+                    {
+                        _statusText.Text = "\uC5F0\uACB0 \uC644\uB8CC \u00B7 \uCCAB \uD654\uBA74\uC744 \uBD88\uB7EC\uC624\uB294 \uC911...";
+                        _statusText.Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184));
+                        _statusText.Visibility = Visibility.Visible;
+                    }
+                    else if (state == RTCPeerConnectionState.connecting)
+                    {
+                        _statusText.Text = "\uBCF4\uC548 \uC5F0\uACB0\uACFC \uB124\uD2B8\uC6CC\uD06C \uACBD\uB85C\uB97C \uD655\uC778\uD558\uB294 \uC911...";
+                        _statusText.Visibility = Visibility.Visible;
+                    }
+                });
+
                 if (state == RTCPeerConnectionState.failed ||
                     state == RTCPeerConnectionState.disconnected)
                 {
@@ -1830,9 +1845,12 @@ namespace Viewer
         // ==========================================================
         private async Task WatchConnectionAsync(
             VideoReceiver receiver,
-            string hostId)
+            string hostId,
+            int attempt = 0)
         {
-            await Task.Delay(TimeSpan.FromSeconds(20));
+            await Task.Delay(attempt == 0
+                ? TimeSpan.FromSeconds(3)
+                : TimeSpan.FromSeconds(7));
 
             if (!ReferenceEquals(_receiver, receiver) ||
                 _connectedHostId != hostId ||
@@ -1841,34 +1859,51 @@ namespace Viewer
                 return;
             }
 
+            if (attempt >= 2)
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    _statusText.Text =
+                        "\uC5F0\uACB0\uC774 \uC9C0\uC5F0\uB418\uACE0 \uC788\uC2B5\uB2C8\uB2E4. Client \uC0C1\uD0DC\uC640 TURN \uC124\uC815\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694.";
+                    _statusText.Foreground = Brushes.OrangeRed;
+                    _statusText.Visibility = Visibility.Visible;
+                });
+                return;
+            }
+
             Dispatcher.Invoke(() =>
             {
-                _statusText.Text = "직접 연결이 지연되어 우회 연결을 재시도합니다...";
-                _statusText.Foreground = new SolidColorBrush(
-                    Color.FromRgb(251, 191, 36));
+                _statusText.Text =
+                    "Client \uC751\uB2F5\uC744 \uAE30\uB2E4\uB9AC\uB294 \uC911 \u00B7 \uC5F0\uACB0 \uC694\uCCAD\uC744 \uB2E4\uC2DC \uBCF4\uB0C5\uB2C8\uB2E4...";
+                _statusText.Foreground = new SolidColorBrush(Color.FromRgb(251, 191, 36));
                 _statusText.Visibility = Visibility.Visible;
             });
 
-            await ReconnectAsync(receiver, hostId);
+            await ReconnectAsync(receiver, hostId, 0, attempt + 1);
         }
+
         private async Task ReconnectAsync(
             VideoReceiver receiver,
-            string hostId)
+            string hostId,
+            int delayMilliseconds = 3000,
+            int watchAttempt = 0)
         {
             if (_isReconnecting ||
                 !ReferenceEquals(_receiver, receiver) ||
                 _connectedHostId != hostId) return;
             _isReconnecting = true;
 
-            Console.WriteLine("[UI] Connection lost, reconnecting in 3s...");
-            Dispatcher.Invoke(() =>
+            if (delayMilliseconds > 0)
             {
-                _statusText.Text = "연결 끊김. 3초 후 재연결...";
-                _statusText.Visibility = Visibility.Visible;
-                _statsOverlay.Visibility = Visibility.Collapsed;
-            });
-
-            await Task.Delay(3000);
+                Console.WriteLine($"[UI] Connection lost, reconnecting in {delayMilliseconds}ms...");
+                Dispatcher.Invoke(() =>
+                {
+                    _statusText.Text = "\uC5F0\uACB0\uC774 \uB04A\uACA8 \uC7AC\uC5F0\uACB0\uD558\uB294 \uC911...";
+                    _statusText.Visibility = Visibility.Visible;
+                    _statsOverlay.Visibility = Visibility.Collapsed;
+                });
+                await Task.Delay(delayMilliseconds);
+            }
 
             if (ReferenceEquals(_receiver, receiver) &&
                 _connectedHostId == hostId)
@@ -1877,7 +1912,7 @@ namespace Viewer
                 {
                     receiver.Reset();
                     await receiver.StartAsync(_enteredPassword);
-                    _ = WatchConnectionAsync(receiver, hostId);
+                    _ = WatchConnectionAsync(receiver, hostId, watchAttempt);
                     Console.WriteLine("[UI] Reconnect offer sent");
                 }
                 catch (Exception ex)
@@ -1888,7 +1923,6 @@ namespace Viewer
 
             _isReconnecting = false;
         }
-
         private static T? FindVisualParent<T>(DependencyObject? obj) where T : DependencyObject
         {
             while (obj != null)

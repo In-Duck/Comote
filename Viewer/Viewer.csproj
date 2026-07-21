@@ -1,13 +1,13 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
     <StartupObject>Viewer.Program</StartupObject>
-    <AssemblyVersion>1.6.0.14</AssemblyVersion>
-    <FileVersion>1.6.0.14</FileVersion>
-    <Version>1.6.0-preview.14</Version>
+    <AssemblyVersion>1.6.0.15</AssemblyVersion>
+    <FileVersion>1.6.0.15</FileVersion>
+    <Version>1.6.0-preview.15</Version>
     <ApplicationIcon>Kymote.ico</ApplicationIcon>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
