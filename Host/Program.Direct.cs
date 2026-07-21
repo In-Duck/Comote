@@ -27,7 +27,7 @@ namespace Host
             var password = GetLanArgumentValue(args, "--password");
             var adapterIndex = 0;
             var outputIndex = 0;
-            var inputBackendMode = InputBackendMode.SendInput;
+            var inputBackendMode = InputBackendMode.VirtualHid;
             if (string.IsNullOrWhiteSpace(password))
             {
                 if (!Environment.UserInteractive)
@@ -84,7 +84,7 @@ namespace Host
             using var capture =
                 new ScreenCapture(adapterIndex, outputIndex);
             if (inputBackendMode == InputBackendMode.VirtualHid &&
-                !ComoteVirtualHidBackend.IsDriverAvailable())
+                !FakerInputBackend.IsDriverAvailable())
             {
                 if (!Environment.UserInteractive ||
                     !InputBackendFactory.EnsureVirtualHidReady(null))

@@ -1,4 +1,4 @@
-﻿using System.Drawing;
+using System.Drawing;
 using System.Windows.Forms;
 
 namespace Host
@@ -21,8 +21,8 @@ namespace Host
         public string UpdateManifestUrl => _updateManifestBox.Text.Trim();
         public InputBackendMode SelectedInputBackendMode =>
             _inputBox.SelectedIndex == 0
-                ? InputBackendMode.SendInput
-                : InputBackendMode.VirtualHid;
+                ? InputBackendMode.VirtualHid
+                : InputBackendMode.SendInput;
         public int AdapterIndex =>
             _monitors.Count > 0
                 ? _monitors[_monitorBox.SelectedIndex].AdapterIndex
@@ -119,10 +119,10 @@ namespace Host
                 Height = 30,
                 DropDownStyle = ComboBoxStyle.DropDownList,
             };
-            _inputBox.Items.Add("입력 모드 1 · Windows SendInput");
-            _inputBox.Items.Add("입력 모드 2 · Comote Virtual HID");
+            _inputBox.Items.Add("FakerInput 가상 HID (모드 2 · 게임 정책 확인)");
+            _inputBox.Items.Add("Windows SendInput (호환 모드)");
             _inputBox.SelectedIndex =
-                savedSettings?.InputBackendMode == InputBackendMode.VirtualHid
+                savedSettings?.InputBackendMode == InputBackendMode.SendInput
                     ? 1
                     : 0;
             Controls.Add(_inputBox);
@@ -201,5 +201,3 @@ namespace Host
         }
     }
 }
-
-

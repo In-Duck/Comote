@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+      - agent/complete-comote-prototype
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -35,6 +37,7 @@ jobs:
             -CompressionLevel Optimal
 
       - name: Publish GitHub Release
+        if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -51,5 +54,5 @@ jobs:
             gh release create "v1.6.0-preview.13" $assets `
               --target "${{ github.sha }}" `
               --title "Comote 1.6.0 Preview 13" `
-              --notes "Fixes FakerInput detection on installed Client PCs by matching the official driver control-device probe, and improves the post-install restart guidance."
+              --notes "Uses the official signed FakerInput v0.1.1 package with pinned SHA-256 verification, safe SendInput fallback, bounded verified file transfer, and hardened input cleanup."
           }

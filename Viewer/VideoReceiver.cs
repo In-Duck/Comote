@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Diagnostics;
@@ -121,10 +121,10 @@ namespace Viewer
                 BufferDuration = TimeSpan.FromSeconds(3), // 버퍼 여유 확보 (3초)
                 DiscardOnBufferOverflow = true
             };
-            
+
             // [Stability] Smart Buffering Logic (Drift Correction)
             // _waveProvider의 버퍼가 너무 쌓이면(지연 발생) 일부를 버려서 최신 상태 유지
-            Task.Run(async () => 
+            Task.Run(async () =>
             {
                 // [Stability] Smart Buffering Logic
                 while (_peerConnection != null && _peerConnection.connectionState == RTCPeerConnectionState.connected)
@@ -132,7 +132,7 @@ namespace Viewer
                     if (_waveProvider != null && _waveProvider.BufferedDuration.TotalMilliseconds > 1000)
                     {
                         // 1초 이상 지연 시 0.5초 분량 삭제 (Catch-up)
-                        _waveProvider.ClearBuffer(); 
+                        _waveProvider.ClearBuffer();
                         Console.WriteLine("[Audio] Buffer too large (>1000ms). Cleared to catch up.");
                     }
                     await Task.Delay(1000);
@@ -141,7 +141,7 @@ namespace Viewer
 
             // [Fix] WaveOutEvent 대신 WasapiOut 사용 (지연 시간/안정성 개선)
             // 지연 시간 50ms, Shared 모드
-            try 
+            try
             {
                 var wasapiOut = new NAudio.Wave.WasapiOut(
                     NAudio.CoreAudioApi.AudioClientShareMode.Shared, 50);
@@ -258,7 +258,7 @@ namespace Viewer
                             int totalSamples = decodedSamples * 2; // 스테레오
                             byte[] byteData = new byte[totalSamples * 2]; // 16bit = 2bytes per sample
                             Buffer.BlockCopy(pcmOutput, 0, byteData, 0, byteData.Length);
-                            
+
                             // [Stability] Jitter Buffer 처리 (너무 적으면 무시? 아니면 Silence 삽입?)
                             // 여기서는 단순 추가하지만, 위쪽 Task에서 과다 버퍼링 제어
                             _waveProvider.AddSamples(byteData, 0, byteData.Length);
@@ -499,11 +499,11 @@ namespace Viewer
 
             // DataChannel 생성 (Viewer → Host 입력 전송용)
             _inputChannel = await _peerConnection.createDataChannel("input");
-            _inputChannel.onopen += () => 
+            _inputChannel.onopen += () =>
             {
                 Console.WriteLine("[VideoReceiver] Input DataChannel opened");
                 OnInputReadyChanged?.Invoke(true);
-                try 
+                try
                 {
                     var settings = AppSettings.Load();
                     int qLevel = 2;
@@ -514,8 +514,8 @@ namespace Viewer
                         case "하": qLevel = 0; break;
                     }
                     SendSettings(settings.GetTargetFps(), qLevel);
-                } 
-                catch (Exception ex) 
+                }
+                catch (Exception ex)
                 {
                     Console.WriteLine($"[VideoReceiver] Failed to send initial settings: {ex.Message}");
                 }
@@ -524,7 +524,7 @@ namespace Viewer
             // DataChannel 생성 (파일 전송용)
             _fileChannel = await _peerConnection.createDataChannel("file");
             _fileChannel.onopen += () => Console.WriteLine("[VideoReceiver] File DataChannel opened");
-            _fileChannel.onmessage += (dc, protocol, data) => 
+            _fileChannel.onmessage += (dc, protocol, data) =>
             {
                 if (data.Length > 0 && data[0] == MSG_FILE_ACK)
                 {
@@ -661,14 +661,23 @@ namespace Viewer
 
             string fileName = fileInfo.Name;
             long fileSize = fileInfo.Length;
+            const long maxFileSize = 256L * 1024 * 1024;
+            if (fileSize <= 0 || fileSize > maxFileSize)
+                throw new InvalidOperationException("Files must be between 1 byte and 256 MB.");
             Console.WriteLine($"[FileTransfer] Sending: {fileName} ({fileSize} bytes)");
 
-            // 1) FILE_START: {type, uint32 size, string name}
+            // 1) FILE_START: [type][uint32 size][UTF-8 name][SHA-256]
             byte[] nameBytes = System.Text.Encoding.UTF8.GetBytes(fileName);
-            byte[] startMsg = new byte[1 + 4 + nameBytes.Length];
+            if (nameBytes.Length is < 1 or > 1024)
+                throw new InvalidOperationException("File name is too long.");
+            byte[] hashBytes;
+            using (var hashStream = fileInfo.OpenRead())
+                hashBytes = await System.Security.Cryptography.SHA256.HashDataAsync(hashStream);
+            byte[] startMsg = new byte[1 + 4 + nameBytes.Length + hashBytes.Length];
             startMsg[0] = MSG_FILE_START;
             BitConverter.GetBytes((uint)fileSize).CopyTo(startMsg, 1);
             nameBytes.CopyTo(startMsg, 5);
+            hashBytes.CopyTo(startMsg, 5 + nameBytes.Length);
             _fileChannel.send(startMsg);
 
             // 2) FILE_CHUNK: 14KB 단위로 전송 (DataChannel SCTP 제한 고려)

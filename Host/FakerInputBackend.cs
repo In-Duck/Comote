@@ -5,16 +5,19 @@ using System.Runtime.InteropServices;
 namespace Host
 {
     /// <summary>
-    /// Sends keyboard and absolute mouse reports through the transparent
-    /// Comote Virtual HID driver. The device identifies itself as Comote
-    /// hardware and does not impersonate another vendor's physical device.
+    /// Sends keyboard and absolute mouse reports through the signed FakerInput
+    /// virtual HID driver. The driver makes input visible as a real HID device,
+    /// including to applications that intentionally ignore SendInput events.
     /// </summary>
-    public sealed class ComoteVirtualHidBackend : IInputBackend
+    public sealed class FakerInputBackend : IInputBackend
     {
         private const byte MsgReleaseAll = 0x13;
+        private const byte ReportControl = 0x40;
         private const byte ReportKeyboard = 0x01;
-        private const byte ReportAbsoluteMouse = 0x02;
-        private const uint IoctlSubmitReport = 0x0022A000;
+        private const byte ReportAbsoluteMouse = 0x04;
+        private const ushort FakerVid = 0xFE0F;
+        private const ushort FakerPid = 0x00FF;
+        private const int ControlReportSize = 0x41;
         private const uint DigcfPresent = 0x00000002;
         private const uint DigcfDeviceInterface = 0x00000010;
         private const uint GenericRead = 0x80000000;
@@ -26,21 +29,22 @@ namespace Host
         private readonly object _sync = new();
         private readonly HashSet<byte> _keys = new();
         private SafeFileHandle _handle;
+        private FileStream _stream;
         private byte _modifiers;
         private byte _mouseButtons;
         private ushort _mouseX;
         private ushort _mouseY;
         private bool _disposed;
 
-        public ComoteVirtualHidBackend(int left, int top, int width, int height)
+        public FakerInputBackend(int left, int top, int width, int height)
         {
             UpdateScreenBounds(left, top, width, height);
-            _handle = OpenControlDevice();
-            Console.WriteLine("[Input] Comote Virtual HID connected.");
+            (_handle, _stream) = OpenControlDevice();
+            Console.WriteLine("[Input] FakerInput virtual HID connected.");
         }
 
         public InputBackendMode Mode => InputBackendMode.VirtualHid;
-        public string Name => "Comote Virtual HID";
+        public string Name => "Virtual HID (FakerInput)";
 
         public InputBackendStatus GetStatus()
         {
@@ -52,8 +56,8 @@ namespace Host
                     Name,
                     available,
                     available
-                        ? "Comote Virtual HID driver connected"
-                        : "Comote Virtual HID driver is not connected");
+                        ? "Driver connected (VID_FE0F&PID_00FF)"
+                        : "FakerInput driver is not connected");
             }
         }
 
@@ -61,7 +65,8 @@ namespace Host
         {
             try
             {
-                var handle = OpenControlDevice();
+                var (handle, stream) = OpenControlDevice();
+                stream.Dispose();
                 handle.Dispose();
                 return true;
             }
@@ -78,7 +83,7 @@ namespace Host
         {
             if (width <= 0) throw new ArgumentOutOfRangeException(nameof(width));
             if (height <= 0) throw new ArgumentOutOfRangeException(nameof(height));
-            // Comote's absolute HID report is already normalized to the
+            // FakerInput's absolute HID report is already normalized to the
             // Windows virtual desktop, so bounds are validated but not stored.
         }
 
@@ -146,9 +151,20 @@ namespace Host
             lock (_sync)
             {
                 if (_disposed) return;
-                ReleaseAllInputs();
-                _disposed = true;
-                _handle.Dispose();
+                try
+                {
+                    ReleaseAllInputs();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Input] FakerInput release warning: {ex.Message}");
+                }
+                finally
+                {
+                    _disposed = true;
+                    _stream.Dispose();
+                    _handle.Dispose();
+                }
             }
         }
 
@@ -190,7 +206,7 @@ namespace Host
             BitConverter.TryWriteBytes(report[2..4], _mouseX);
             BitConverter.TryWriteBytes(report[4..6], _mouseY);
             report[6] = unchecked((byte)wheel);
-            SubmitReport(report);
+            WriteControlReport(report);
         }
 
         private void SetKey(ushort virtualKey, bool isDown)
@@ -256,41 +272,33 @@ namespace Host
                 if (index >= report.Length) break;
                 report[index++] = key;
             }
-            SubmitReport(report);
+            WriteControlReport(report);
         }
 
-        private void SubmitReport(ReadOnlySpan<byte> report)
+        private void WriteControlReport(ReadOnlySpan<byte> payload)
         {
-            var data = report.ToArray();
+            var data = new byte[ControlReportSize];
+            data[0] = ReportControl;
+            data[1] = checked((byte)payload.Length);
+            payload.CopyTo(data.AsSpan(2));
             try
             {
-                if (!DeviceIoControl(
-                    _handle,
-                    IoctlSubmitReport,
-                    data,
-                    data.Length,
-                    null,
-                    0,
-                    out _,
-                    IntPtr.Zero))
-                {
-                    throw new Win32Exception(Marshal.GetLastWin32Error());
-                }
+                _stream.Write(data, 0, data.Length);
+                _stream.Flush();
             }
-            catch (Exception ex) when (
-                ex is Win32Exception or ObjectDisposedException)
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException)
             {
                 throw new IOException(
-                    "Comote Virtual HID 드라이버 연결이 끊어졌습니다.", ex);
+                    "FakerInput 가상 HID 드라이버 연결이 끊어졌습니다.", ex);
             }
         }
 
-        private static SafeFileHandle OpenControlDevice()
+        private static (SafeFileHandle Handle, FileStream Stream)
+            OpenControlDevice()
         {
-            var interfaceGuid = new Guid(
-                "C054A351-7203-4C6A-AFD8-D8299BBAA054");
+            HidD_GetHidGuid(out var hidGuid);
             var deviceInfo = SetupDiGetClassDevs(
-                ref interfaceGuid,
+                ref hidGuid,
                 null,
                 IntPtr.Zero,
                 DigcfPresent | DigcfDeviceInterface);
@@ -306,7 +314,7 @@ namespace Host
                         Size = Marshal.SizeOf<SpDeviceInterfaceData>(),
                     };
                     if (!SetupDiEnumDeviceInterfaces(
-                        deviceInfo, IntPtr.Zero, ref interfaceGuid, index,
+                        deviceInfo, IntPtr.Zero, ref hidGuid, index,
                         ref interfaceData))
                     {
                         if (Marshal.GetLastWin32Error() == 259) break;
@@ -336,7 +344,29 @@ namespace Host
                             OpenExisting,
                             0,
                             IntPtr.Zero);
-                        if (!handle.IsInvalid) return handle;
+                        if (handle.IsInvalid)
+                        {
+                            handle.Dispose();
+                            continue;
+                        }
+
+                        var attributes = new HiddAttributes
+                        {
+                            Size = Marshal.SizeOf<HiddAttributes>(),
+                        };
+                        if (HidD_GetAttributes(handle, ref attributes) &&
+                            attributes.VendorId == FakerVid &&
+                            attributes.ProductId == FakerPid &&
+                            IsControlCollection(handle))
+                        {
+                            return (
+                                handle,
+                                new FileStream(
+                                    handle,
+                                    FileAccess.ReadWrite,
+                                    ControlReportSize,
+                                    false));
+                        }
                         handle.Dispose();
                     }
                     finally
@@ -351,8 +381,23 @@ namespace Host
             }
 
             throw new InvalidOperationException(
-                "Comote Virtual HID 드라이버가 설치되어 있지 않거나 " +
-                "제어 장치를 열 수 없습니다.");
+                "FakerInput 드라이버가 설치되지 않았거나 제어 장치를 열 수 없습니다.");
+        }
+
+        private static bool IsControlCollection(SafeFileHandle handle)
+        {
+            if (!HidD_GetPreparsedData(handle, out var preparsedData))
+                return false;
+            try
+            {
+                return HidP_GetCaps(preparsedData, out var caps) >= 0 &&
+                    caps.UsagePage == 0xFF00 &&
+                    caps.Usage == 0x0001;
+            }
+            finally
+            {
+                HidD_FreePreparsedData(preparsedData);
+            }
         }
         private static bool TryGetModifier(ushort vk, out byte modifier)
         {
@@ -411,6 +456,60 @@ namespace Host
             public IntPtr Reserved;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct HidpCaps
+        {
+            public ushort Usage;
+            public ushort UsagePage;
+            public ushort InputReportByteLength;
+            public ushort OutputReportByteLength;
+            public ushort FeatureReportByteLength;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 17)]
+            public ushort[] Reserved;
+            public ushort NumberLinkCollectionNodes;
+            public ushort NumberInputButtonCaps;
+            public ushort NumberInputValueCaps;
+            public ushort NumberInputDataIndices;
+            public ushort NumberOutputButtonCaps;
+            public ushort NumberOutputValueCaps;
+            public ushort NumberOutputDataIndices;
+            public ushort NumberFeatureButtonCaps;
+            public ushort NumberFeatureValueCaps;
+            public ushort NumberFeatureDataIndices;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct HiddAttributes
+        {
+            public int Size;
+            public ushort VendorId;
+            public ushort ProductId;
+            public ushort VersionNumber;
+        }
+
+        [DllImport("hid.dll")]
+        private static extern void HidD_GetHidGuid(out Guid hidGuid);
+
+        [DllImport("hid.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool HidD_GetPreparsedData(
+            SafeFileHandle hidDeviceObject,
+            out IntPtr preparsedData);
+
+        [DllImport("hid.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool HidD_FreePreparsedData(
+            IntPtr preparsedData);
+
+        [DllImport("hid.dll")]
+        private static extern int HidP_GetCaps(
+            IntPtr preparsedData,
+            out HidpCaps capabilities);
+        [DllImport("hid.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool HidD_GetAttributes(
+            SafeFileHandle hidDeviceObject,
+            ref HiddAttributes attributes);
+
         [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern IntPtr SetupDiGetClassDevs(
             ref Guid classGuid,
@@ -451,18 +550,6 @@ namespace Host
             uint creationDisposition,
             uint flagsAndAttributes,
             IntPtr templateFile);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool DeviceIoControl(
-            SafeFileHandle device,
-            uint controlCode,
-            byte[] inputBuffer,
-            int inputBufferSize,
-            byte[]? outputBuffer,
-            int outputBufferSize,
-            out int bytesReturned,
-            IntPtr overlapped);
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         private static extern short VkKeyScan(char character);

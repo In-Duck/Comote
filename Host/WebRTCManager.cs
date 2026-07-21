@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Text;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
@@ -57,14 +57,13 @@ namespace Host
         private const byte MSG_FILE_END   = 0x32;
         private const byte MSG_FILE_ACK   = 0x33;
         private const byte MSG_FILE_HASH_MISMATCH = 0x34;
+        private const uint MaxReceivedFileSize = 256 * 1024 * 1024;
+        private const int MaxClipboardBytes = 1024 * 1024;
 
         // 적응형 비트레이트 상태
         private int _viewerFps = 0;
         private int _targetFps = EncoderConfig.DefaultFps;
         private string? _password;
-        
-        // [Security] 세션 토큰 (연결 시 생성, 모든 제어 명령에 필수)
-        private string _sessionToken = "";
 
         // Encoder Configuration Class
         private static class EncoderConfig
@@ -151,7 +150,7 @@ namespace Host
 
             _peerConnection = new RTCPeerConnection(config);
             _videoEncoder = new FFmpegVideoEncoder();
-            
+
             // 오디오 트랙 설정 (Opus 48kHz)
             var audioFormat = new AudioFormat(111, "opus", 48000);
             var audioTrack = new MediaStreamTrack(audioFormat, MediaStreamStatusEnum.SendOnly);
@@ -162,19 +161,19 @@ namespace Host
             var (codecId, encoderName, encoderOpts) = SelectBestVideoEncoder();
             Console.WriteLine($"[Video] Selected Encoder: {encoderName} (CodecID: {codecId})");
 
-            try 
+            try
             {
                 _videoEncoder.SetCodec(codecId, encoderName, encoderOpts);
                 _videoEncoder.InitialiseEncoder(codecId, _capture.Width, _capture.Height, 20);
-                
+
                 // 비트레이트 설정 (H.265/AV1은 압축 효율이 좋으므로 H.264와 동일 비트레이트에서도 화질 우수)
-                _videoEncoder.SetBitrate(6_000_000, null, null, null);
+                _videoEncoder?.SetBitrate(6_000_000, null, null, null);
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[Video] Failed to init {encoderName}: {ex.Message}. Falling back to libx264.");
-                var fallbackOpts = new System.Collections.Generic.Dictionary<string, string> { 
-                    { "preset", "ultrafast" }, 
+                var fallbackOpts = new System.Collections.Generic.Dictionary<string, string> {
+                    { "preset", "ultrafast" },
                     { "tune", "zerolatency" },
                     { "crf", "18" }
                 };
@@ -186,17 +185,17 @@ namespace Host
             // 현재 SIPSorceryMedia.FFmpeg 구현상 VideoCodecsEnum으로 변환하는 과정이 있어 H264 외 사용이 까다로움.
             // 일단 AV_CODEC_ID_HEVC로 인코딩하더라도 트랙 포맷은 H264라고 속이거나(위험), Custom VideoFormat을 써야 함.
             // 여기서는 일단 H264 기본 호환성을 유지하되, 인코더만 교체 시도. (하지만 SDP 협상 없이는 Viewer가 디코딩 불가)
-            
-            // FIXME: Viewer가 HEVC/AV1을 받을 준비가 되어 있어야 함. 
+
+            // FIXME: Viewer가 HEVC/AV1을 받을 준비가 되어 있어야 함.
             // VP8/VP9 대신 HEVC(H.265) 페이로드 타입(97~127 동적 할당)을 명시해야 함.
             // 하지만 WebRTC 표준에서 H.265 지원은 브라우저마다 다르며 SIPSorcery도 표준 Enum을 씀.
-            
+
             // 임시: H.264 트랙만 추가 (실제 스트림이 HEVC면 디코더 에러 날 수 있음. 이 부분은 Viewer 수정과 맞물려야 함)
             var videoFormat = new VideoFormat(VideoCodecsEnum.H264, 96, 90000, null);
             if (codecId == FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_HEVC)
             {
                 // Dynamic Payload Type for H.265
-                videoFormat = new VideoFormat(VideoCodecsEnum.H265, 100, 90000, null); 
+                videoFormat = new VideoFormat(VideoCodecsEnum.H265, 100, 90000, null);
             }
              // else if (codecId == FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_AV1)
             // {
@@ -210,21 +209,12 @@ namespace Host
             {
                 if (candidate != null && _remoteSocketId != null)
                 {
-                    // [Security] 토큰 생성 (연결 수립 시점)
-                    if (string.IsNullOrEmpty(_sessionToken)) 
-                    {
-                        _sessionToken = Guid.NewGuid().ToString("N");
-                        Console.WriteLine($"[Security] Session Token Generated: {_sessionToken}");
-                    }
-
-                    OnSignalReady?.Invoke(_remoteSocketId, new { 
-                        ice = new { 
-                            candidate = candidate.candidate, 
-                            sdpMid = candidate.sdpMid, 
-                            sdpMLineIndex = candidate.sdpMLineIndex 
-                        },
-                        // ICE 후보 교환 시 토큰 전달 (Viewer가 알 수 있도록)
-                        token = _sessionToken 
+                    OnSignalReady?.Invoke(_remoteSocketId, new {
+                        ice = new {
+                            candidate = candidate.candidate,
+                            sdpMid = candidate.sdpMid,
+                            sdpMLineIndex = candidate.sdpMLineIndex
+                        }
                     });
                 }
             };
@@ -288,6 +278,11 @@ namespace Host
                 {
                     _viewerFileChannel = channel;
                     channel.onmessage += (dc, protocol, data) => HandleFileMessage(dc, data);
+                    channel.onclose += () =>
+                    {
+                        ResetFileReceive();
+                        _viewerFileChannel = null;
+                    };
                     Console.WriteLine("[WebRTC] File DataChannel ready");
                 }
             };
@@ -300,13 +295,6 @@ namespace Host
         private void HandleInputMessage(RTCDataChannel dc, byte[] data)
         {
             if (data == null || data.Length < 1) return;
-
-            // [Security] 세션 토큰 검증 로직 추가 필요
-            // 현재 구조상 Input 채널 메시지는 [Type][Data...] 형태이므로, 
-            // 토큰을 매번 보내면 오버헤드가 큼. 
-            // 하지만 보안이 중요하므로 중요 명령(파일전송, 클립보드)에는 토큰 검증 권장.
-            // 여기서는 일단 구조만 잡아두고 Pass (Viewer 수정 범위가 너무 큼)
-            // TODO: Viewer에서 DataChannel 오픈 후 첫 메시지로 토큰 인증하도록 프로토콜 개선 필요
 
             switch (data[0])
             {
@@ -345,7 +333,7 @@ namespace Host
                     }
                     break;
                 case MSG_CLIPBOARD:
-                    if (data.Length > 1)
+                    if (data.Length > 1 && data.Length - 1 <= MaxClipboardBytes)
                     {
                         string text = Encoding.UTF8.GetString(data, 1, data.Length - 1);
                         _lastClipboardText = text;
@@ -360,9 +348,17 @@ namespace Host
                     HandleFileMessage(dc, data);
                     break;
                 default:
-                    _inputBackend.ProcessMessage(data);
-                    if (dc.readyState == RTCDataChannelState.open)
-                        dc.send(new byte[] { MSG_INPUT_ACK, data[0] });
+                    try
+                    {
+                        _inputBackend.ProcessMessage(data);
+                        if (dc.readyState == RTCDataChannelState.open)
+                            dc.send(new byte[] { MSG_INPUT_ACK, data[0] });
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Input] Message rejected: {ex.Message}");
+                        try { _inputBackend.ReleaseAllInputs(); } catch { }
+                    }
                     break;
             }
         }
@@ -375,20 +371,20 @@ namespace Host
                 // 3: 20Mbps (Ultra), 2: 10Mbps (High/Default), 1: 5Mbps (Medium), 0: 2Mbps (Low)
                 long baseBitrate = 10_000_000;
                 long targetBitrate = baseBitrate;
-                
+
                 switch (qualityLevel)
                 {
-                    case 3: targetBitrate = EncoderConfig.BitrateUltra; break; 
-                    case 2: targetBitrate = EncoderConfig.BitrateHigh; break; 
-                    case 1: targetBitrate = EncoderConfig.BitrateMedium; break;  
-                    case 0: targetBitrate = EncoderConfig.BitrateLow; break;  
+                    case 3: targetBitrate = EncoderConfig.BitrateUltra; break;
+                    case 2: targetBitrate = EncoderConfig.BitrateHigh; break;
+                    case 1: targetBitrate = EncoderConfig.BitrateMedium; break;
+                    case 0: targetBitrate = EncoderConfig.BitrateLow; break;
                 }
 
                 Console.WriteLine($"[WebRTC] Updating Encoder Settings -> FPS: {fps}, Bitrate: {targetBitrate / 1_000_000.0:F1}Mbps");
-                
+
                 // 비트레이트 적용
-                _videoEncoder.SetBitrate(targetBitrate, null, null, null); 
-                
+                _videoEncoder?.SetBitrate(targetBitrate, null, null, null);
+
                 // FPS 적용 (ChangeFps 메서드가 인코더 래퍼에 있다고 가정하거나, 캡처 루프 딜레이 조절 필요)
                 // 만약 ChangeFps가 없다면 InitialiseEncoder 재호출은 너무 무거움.
                 // 여기서는 비트레이트 변경에 집중하고 FPS는 인코더 내부 제어 혹은 캡처 딜레이 변수(_targetFps)를 둬야 함.
@@ -408,151 +404,114 @@ namespace Host
             {
                 if (data == null || data.Length < 1) return;
 
-                if (data[0] == MSG_FILE_START && data.Length >= 5)
+                if (data[0] == MSG_FILE_START)
                 {
-                    _fileReceiveSize = BitConverter.ToUInt32(data, 1);
-                    
-                    // Old header: [Type:1][Size:4][Name...] (Length: 5 + NameLen)
-                    // New header: [Type:1][Size:4][Name...][Hash:32] (Length: 5 + NameLen + 32)
-                    
-                    int nameLen = data.Length - 5;
+                    ResetFileReceive();
+                    if (data.Length < 6) throw new InvalidDataException("Invalid file header");
+
+                    var declaredSize = BitConverter.ToUInt32(data, 1);
+                    if (declaredSize == 0 || declaredSize > MaxReceivedFileSize)
+                        throw new InvalidDataException($"File size is outside the 1-{MaxReceivedFileSize} byte limit");
+
+                    var nameLength = data.Length - 5;
                     _fileReceiveExpectedHash = null;
-
-                    // 해시가 포함되어 있는지 확인 (파일 이름 길이를 적절히 추정하거나, 프로토콜 버전을 두면 좋음)
-                    // 여기서는 단순히 길이가 충분히 길면 맨 뒤 32바이트를 해시로 간주 (Viewer 수정 사항 반영)
-                    // Viewer는 Name + Hash 순으로 보냄
-                    if (data.Length > 5 + 32) 
+                    if (nameLength > 32)
                     {
-                        nameLen = data.Length - 5 - 32;
-                        byte[] hashBytes = new byte[32];
-                        Array.Copy(data, 5 + nameLen, hashBytes, 0, 32);
-                        _fileReceiveExpectedHash = BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
-                        Console.WriteLine($"[FileTransfer] Expected Hash: {_fileReceiveExpectedHash}");
+                        nameLength -= 32;
+                        _fileReceiveExpectedHash = Convert.ToHexString(data.AsSpan(5 + nameLength, 32));
                     }
+                    if (nameLength is < 1 or > 1024)
+                        throw new InvalidDataException("Invalid file name length");
 
-                    _fileReceiveName = Encoding.UTF8.GetString(data, 5, nameLen);
-                    _fileReceiveStream = new System.IO.MemoryStream();
-                    Console.WriteLine($"[FileTransfer] Start Receiving: {_fileReceiveName} ({_fileReceiveSize} bytes)");
+                    _fileReceiveName = Encoding.UTF8.GetString(data, 5, nameLength);
+                    _fileReceiveSize = declaredSize;
+                    _fileReceiveStream = new MemoryStream((int)Math.Min(declaredSize, 1024 * 1024));
+                    Console.WriteLine($"[FileTransfer] Receiving {_fileReceiveSize} bytes");
                 }
                 else if (data[0] == MSG_FILE_CHUNK && _fileReceiveStream != null)
                 {
-                    _fileReceiveStream.Write(data, 1, data.Length - 1);
-                    // 진행 상황 로그 (너무 자주는 말고)
-                    if (_fileReceiveStream.Length % (1024 * 1024) < 16000) // 약 1MB 마다
-                    {
-                         Console.WriteLine($"[FileTransfer] Received {_fileReceiveStream.Length} / {_fileReceiveSize}");
-                    }
+                    var chunkLength = data.Length - 1;
+                    if (chunkLength <= 0 || _fileReceiveStream.Length + chunkLength > _fileReceiveSize)
+                        throw new InvalidDataException("File chunk exceeds declared size");
+                    _fileReceiveStream.Write(data, 1, chunkLength);
                 }
                 else if (data[0] == MSG_FILE_END && _fileReceiveStream != null)
                 {
-                    Console.WriteLine($"[FileTransfer] File End Received. Processing save...");
+                    if (_fileReceiveStream.Length != _fileReceiveSize)
+                        throw new InvalidDataException("Received file size does not match declared size");
                     SaveReceivedFile(dc);
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[FileTransfer] CRITICAL ERROR: {ex}");
+                Console.WriteLine($"[FileTransfer] Rejected: {ex.Message}");
+                ResetFileReceive();
+                if (dc.readyState == RTCDataChannelState.open)
+                    dc.send(new byte[] { MSG_FILE_HASH_MISMATCH });
             }
         }
 
         private void SaveReceivedFile(RTCDataChannel dc)
         {
+            if (_fileReceiveStream == null) return;
             try
             {
-                string rawFileName = _fileReceiveName ?? "received_file";
-                string safeFileName = System.IO.Path.GetFileName(rawFileName);
-                
-                // 유효하지 않은 문자 제거
-                foreach (char c in System.IO.Path.GetInvalidFileNameChars())
-                {
-                    safeFileName = safeFileName.Replace(c, '_');
-                }
-
-                string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-                // string downloadFolder = System.IO.Path.Combine(desktopPath, "Comote_Downloads");
-                
-                // if (!System.IO.Directory.Exists(downloadFolder))
-                // {
-                //     System.IO.Directory.CreateDirectory(downloadFolder);
-                //     Console.WriteLine($"[FileTransfer] Created directory: {downloadFolder}");
-                // }
-
-                // 바탕화면에 직접 저장
-                string savePath = System.IO.Path.Combine(desktopPath, safeFileName);
-                
-                // 중복 처리
-                if (System.IO.File.Exists(savePath))
-                {
-                    string nameOnly = System.IO.Path.GetFileNameWithoutExtension(safeFileName);
-                    string extension = System.IO.Path.GetExtension(safeFileName);
-                    int count = 1;
-                    while (System.IO.File.Exists(savePath))
-                    {
-                        savePath = System.IO.Path.Combine(desktopPath, $"{nameOnly} ({count++}){extension}");
-                    }
-                }
-
-                // 해시 검증
-                bool hashMismatch = false;
                 if (!string.IsNullOrEmpty(_fileReceiveExpectedHash))
                 {
-                    using (var sha256 = System.Security.Cryptography.SHA256.Create())
+                    _fileReceiveStream.Position = 0;
+                    using var sha256 = System.Security.Cryptography.SHA256.Create();
+                    var actualHash = Convert.ToHexString(sha256.ComputeHash(_fileReceiveStream));
+                    if (!string.Equals(actualHash, _fileReceiveExpectedHash, StringComparison.OrdinalIgnoreCase))
                     {
-                        var writtenData = _fileReceiveStream.ToArray(); // Already in memory
-                        var computedBytes = sha256.ComputeHash(writtenData);
-                        string computedHash = BitConverter.ToString(computedBytes).Replace("-", "").ToLower();
-
-                        if (!computedHash.Equals(_fileReceiveExpectedHash, StringComparison.OrdinalIgnoreCase))
-                        {
-                            Console.WriteLine($"[FileTransfer] Hash Mismatch! Expected: {_fileReceiveExpectedHash}, Actual: {computedHash}");
-                            hashMismatch = true;
-                        }
-                        else
-                        {
-                            Console.WriteLine($"[FileTransfer] Hash Verified: {computedHash}");
-                        }
+                        Console.WriteLine("[FileTransfer] Hash mismatch; file was not saved");
+                        if (dc.readyState == RTCDataChannelState.open)
+                            dc.send(new byte[] { MSG_FILE_HASH_MISMATCH });
+                        ResetFileReceive();
+                        return;
                     }
                 }
 
-                if (hashMismatch)
-                {
-                     // 실패 시 저장된 파일 삭제? 정책 결정 필요. 일단 삭제하지 않고 실패 응답만 보냄.
-                     Console.WriteLine($"[FileTransfer] Integrity check failed. Saving anyway but reporting failure.");
-                }
+                var safeName = Path.GetFileName(_fileReceiveName ?? "received_file");
+                foreach (var invalid in Path.GetInvalidFileNameChars())
+                    safeName = safeName.Replace(invalid, '_');
+                if (string.IsNullOrWhiteSpace(safeName)) safeName = "received_file";
 
-                Console.WriteLine($"[FileTransfer] Writing to {savePath}...");
-                System.IO.File.WriteAllBytes(savePath, _fileReceiveStream.ToArray());
-                Console.WriteLine($"[FileTransfer] Success: Saved to {savePath} ({_fileReceiveStream.Length} bytes)");
+                var downloads = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    "Downloads",
+                    "Comote Downloads");
+                Directory.CreateDirectory(downloads);
+                var savePath = Path.Combine(downloads, safeName);
+                var stem = Path.GetFileNameWithoutExtension(safeName);
+                var extension = Path.GetExtension(safeName);
+                for (var count = 1; File.Exists(savePath); count++)
+                    savePath = Path.Combine(downloads, $"{stem} ({count}){extension}");
 
-                _fileReceiveStream.Dispose();
-                _fileReceiveStream = null;
-                _fileReceiveName = null;
-                _fileReceiveExpectedHash = null;
-
+                _fileReceiveStream.Position = 0;
+                using (var output = new FileStream(savePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    _fileReceiveStream.CopyTo(output);
+                Console.WriteLine($"[FileTransfer] Saved: {savePath}");
+                ResetFileReceive();
                 if (dc.readyState == RTCDataChannelState.open)
-                {
-                    if (hashMismatch)
-                    {
-                        dc.send(new byte[] { MSG_FILE_HASH_MISMATCH });
-                        Console.WriteLine("[FileTransfer] HASH MISMATCH sent");
-                    }
-                    else
-                    {
-                        dc.send(new byte[] { MSG_FILE_ACK });
-                        Console.WriteLine("[FileTransfer] ACK sent");
-                    }
-                }
-                else
-                {
-                    Console.WriteLine($"[FileTransfer] Cannot send ACK, state: {dc.readyState}");
-                }
+                    dc.send(new byte[] { MSG_FILE_ACK });
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[FileTransfer] Save failed: {ex.Message}");
+                ResetFileReceive();
+                if (dc.readyState == RTCDataChannelState.open)
+                    dc.send(new byte[] { MSG_FILE_HASH_MISMATCH });
             }
         }
 
+        private void ResetFileReceive()
+        {
+            _fileReceiveStream?.Dispose();
+            _fileReceiveStream = null;
+            _fileReceiveName = null;
+            _fileReceiveSize = 0;
+            _fileReceiveExpectedHash = null;
+        }
         private void CycleMonitor()
         {
             var monitors = ScreenCapture.GetMonitors();
@@ -569,12 +528,12 @@ namespace Host
             if (_currentAdapterIndex == adapterIndex && _currentOutputIndex == outputIndex) return;
 
             Console.WriteLine($"[WebRTC] Switching monitor to Adapter:{adapterIndex}, Output:{outputIndex}");
-            
-            try 
+
+            try
             {
                 var newCapture = new ScreenCapture(adapterIndex, outputIndex);
                 var oldCapture = _capture;
-                
+
                 // 락을 걸거나 캡처 루프에서 교체되도록 안전하게 교체
                 lock (this)
                 {
@@ -604,7 +563,7 @@ namespace Host
         {
             // 우선순위: AV1 (최고 효율) > HEVC (고효율) > H264 (호환성)
             // 하드웨어: NVENC > QSV > AMF
-            
+
             var commonOpts = new System.Collections.Generic.Dictionary<string, string>
             {
                 { "preset", "llhq" }, // Low Latency High Quality
@@ -638,7 +597,7 @@ namespace Host
 
         private unsafe bool IsEncoderAvailable(string encoderName)
         {
-            try 
+            try
             {
                 var codec = FFmpeg.AutoGen.ffmpeg.avcodec_find_encoder_by_name(encoderName);
                 return codec != null;
@@ -717,7 +676,7 @@ namespace Host
                                 var encoded = new byte[encodedLen];
                                 Array.Copy(opusOutput, encoded, encodedLen);
                                 _peerConnection.SendAudio((uint)frameSizePerChannel, encoded);
-                                
+
                                 _totalAudioFramesSent++;
                                 if (_totalAudioFramesSent <= 10 || _totalAudioFramesSent % 500 == 0)
                                 {
@@ -766,7 +725,7 @@ namespace Host
 
                     if (_lastRawFrame != null)
                     {
-                        try 
+                        try
                         {
                             // 1) BGRA 프레임을 H.264로 인코딩
                             if (_frameCount % 30 == 0) _videoEncoder.ForceKeyFrame();
@@ -845,7 +804,7 @@ namespace Host
                     // 인코딩+전송에 걸린 시간을 제외한 남은 시간만 대기
                     long elapsedMs = loopWatch.ElapsedMilliseconds;
                     int targetInterval = _targetFps > 0 ? 1000 / _targetFps : 33; // Dynamic FPS
-                    
+
                     int delay = targetInterval - (int)elapsedMs;
                     if (delay > 0)
                     {
@@ -912,11 +871,11 @@ namespace Host
                     {
                         var answer = _peerConnection.createAnswer();
                         await _peerConnection.setLocalDescription(answer);
-                        OnSignalReady?.Invoke(from, new { 
-                            sdp = new { 
-                                sdp = answer.sdp, 
-                                type = answer.type.ToString().ToLower() 
-                            } 
+                        OnSignalReady?.Invoke(from, new {
+                            sdp = new {
+                                sdp = answer.sdp,
+                                type = answer.type.ToString().ToLower()
+                            }
                         });
                         Console.WriteLine("[WebRTC] Answer sent");
                     }
@@ -1007,6 +966,7 @@ namespace Host
             _inputBackend.ReleaseAllInputs();
             _isStreaming = false;
             _clipboardTimer?.Dispose();
+            ResetFileReceive();
             _videoEncoder?.Dispose();
             _peerConnection?.Close("disposed");
             _inputBackend.Dispose();
