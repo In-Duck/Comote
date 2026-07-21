@@ -1,6 +1,6 @@
 const downloads = {
-  manager: "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.17/ComoteManager-1.6.0-preview.17-win-x64.zip",
-  client: "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.17/ComoteClient-1.6.0-preview.17-win-x64.zip",
+  manager: "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.18/ComoteManager-1.6.0-preview.18-win-x64.zip",
+  client: "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.18/ComoteClient-1.6.0-preview.18-win-x64.zip",
 } as const;
 
 export async function GET(

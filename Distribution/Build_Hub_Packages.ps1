@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$version = "1.6.0-preview.17"
+$version = "1.6.0-preview.18"
 $artifacts = Join-Path $root "artifacts"
 $stage = Join-Path $artifacts "Comote-$version"
 $managerOut = Join-Path $stage "Manager"
@@ -102,7 +102,7 @@ Compress-Archive `
     -CompressionLevel Optimal
 
 $updateManifest = [ordered]@{
-    version = "1.6.0.17"
+    version = "1.6.0.18"
     client_package_url = "REPLACE_WITH_HTTPS_PACKAGE_URL"
     client_package_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash
 }

@@ -24,6 +24,8 @@ namespace Host
         private const uint FileShareRead = 0x00000001;
         private const uint FileShareWrite = 0x00000002;
         private const uint OpenExisting = 3;
+        private static readonly Guid FakerInputInterfaceGuid = new(
+            "ab67b0fa-d0f5-4f60-81f4-346e18fd0805");
 
         private readonly object _sync = new();
         private readonly HashSet<byte> _keys = new();
@@ -310,7 +312,8 @@ namespace Host
             if (deviceInfo == new IntPtr(-1))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
 
-            var fakerDeviceSeen = false;
+            var fakerDeviceSeen = HasPresentDeviceInterface(
+                FakerInputInterfaceGuid);
             var controlCollectionSeen = false;
             var lastOpenError = 0;
             try
@@ -341,8 +344,9 @@ namespace Host
                             out _, IntPtr.Zero))
                             continue;
 
-                        var path = Marshal.PtrToStringUni(
-                            detail + (IntPtr.Size == 8 ? 8 : 4));
+                        // cbSize is 8 on x64, but DevicePath starts immediately
+                        // after the 4-byte DWORD on every architecture.
+                        var path = Marshal.PtrToStringUni(detail + 4);
                         if (string.IsNullOrWhiteSpace(path)) continue;
                         if (path.Contains(
                             "vid_fe0f&pid_00ff",
@@ -451,6 +455,34 @@ namespace Host
                 HidD_FreePreparsedData(preparsedData);
             }
         }
+
+        private static bool HasPresentDeviceInterface(Guid interfaceGuid)
+        {
+            var deviceInfo = SetupDiGetClassDevs(
+                ref interfaceGuid,
+                null,
+                IntPtr.Zero,
+                DigcfPresent | DigcfDeviceInterface);
+            if (deviceInfo == new IntPtr(-1)) return false;
+            try
+            {
+                var interfaceData = new SpDeviceInterfaceData
+                {
+                    Size = Marshal.SizeOf<SpDeviceInterfaceData>(),
+                };
+                return SetupDiEnumDeviceInterfaces(
+                    deviceInfo,
+                    IntPtr.Zero,
+                    ref interfaceGuid,
+                    0,
+                    ref interfaceData);
+            }
+            finally
+            {
+                SetupDiDestroyDeviceInfoList(deviceInfo);
+            }
+        }
+
         private static bool TryGetModifier(ushort vk, out byte modifier)
         {
             modifier = vk switch
