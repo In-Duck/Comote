@@ -8,7 +8,7 @@ $root = Split-Path -Parent $PSScriptRoot
 
 if ([string]::IsNullOrWhiteSpace($PackagePath)) {
     $PackagePath = Join-Path $root `
-        "artifacts\Comote-1.6.0-preview.20-win-x64.zip"
+        "artifacts\Comote-1.6.0-preview.21-win-x64.zip"
 }
 
 if (-not (Test-Path -LiteralPath $PackagePath)) {
@@ -66,14 +66,14 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $installer = Join-Path $outputDir `
-    "ComoteClient_Setup_1.6.0-preview.20_Offline.exe"
+    "ComoteClient_Setup_1.6.0-preview.21_Offline.exe"
 if (-not (Test-Path -LiteralPath $installer)) {
     throw "Installer output was not created."
 }
 
 $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $installer
 [ordered]@{
-    version = "1.6.0-preview.20"
+    version = "1.6.0-preview.21"
     file = Split-Path $installer -Leaf
     bytes = (Get-Item -LiteralPath $installer).Length
     sha256 = $hash.Hash

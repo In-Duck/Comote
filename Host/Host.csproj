@@ -7,9 +7,9 @@
     <CETCompat>false</CETCompat>
     <UseWindowsForms>true</UseWindowsForms>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <AssemblyVersion>1.6.0.20</AssemblyVersion>
-    <FileVersion>1.6.0.20</FileVersion>
-    <Version>1.6.0-preview.20</Version>
+    <AssemblyVersion>1.6.0.21</AssemblyVersion>
+    <FileVersion>1.6.0.21</FileVersion>
+    <Version>1.6.0-preview.21</Version>
     <ApplicationIcon>Kymote.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>

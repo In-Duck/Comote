@@ -1,7 +1,7 @@
 {
-    "version":  "1.6.0.20",
-    "client_package_url":  "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.20/ComoteClient-1.6.0-preview.20-win-x64.zip",
-    "client_package_sha256":  "4C3B598143CAA0208EB6E549E0114E726D3E16015A1837A3A958B8531D1400C5",
+    "version":  "1.6.0.21",
+    "client_package_url":  "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.21/ComoteClient-1.6.0-preview.21-win-x64.zip",
+    "client_package_sha256":  "D43D7E2F93FECADFF088BF70E5406F458F2EAE94B5891DC87F77E889CE786C17",
     "minimum_version":  "1.6.0.19",
-    "release_notes":  "Tray update alerts, per-PC Manager update status, verified service-safe replacement, and standby media pause."
+    "release_notes":  "UAC secure desktop transitions now automatically reconnect screen capture without extra software."
 }

@@ -38,6 +38,8 @@ public sealed class ScreenCapture : IDisposable
     private IDXGIOutputDuplication? _duplication;
     private ID3D11Texture2D? _stagingTexture;
     private byte[]? _frameBuffer;
+    private string? _desktopName;
+    private long _nextDesktopCheckTick;
     private int _width;
     private int _height;
     private int _left;
@@ -166,8 +168,30 @@ public sealed class ScreenCapture : IDisposable
 
     private void EnsureWorker()
     {
-        if (_worker is { IsAlive: true } && !_restartRequested) return;
+        if (_worker is { IsAlive: true } &&
+            !_restartRequested &&
+            !HasInputDesktopChanged())
+            return;
         RestartWorker();
+    }
+
+    private bool HasInputDesktopChanged()
+    {
+        var now = Environment.TickCount64;
+        if (now < _nextDesktopCheckTick) return false;
+        _nextDesktopCheckTick = now + 100;
+
+        var activeDesktop = SessionManager.GetInputDesktopName();
+        if (string.IsNullOrWhiteSpace(activeDesktop)) return false;
+        if (string.Equals(activeDesktop, _desktopName,
+                StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        Console.WriteLine(
+            "[Capture] Input desktop changed: " +
+            (_desktopName ?? "unknown") + " -> " + activeDesktop);
+        _desktopName = activeDesktop;
+        return true;
     }
 
     private void RestartWorker()
@@ -188,6 +212,8 @@ public sealed class ScreenCapture : IDisposable
     private void StartWorker()
     {
         _restartRequested = false;
+        _desktopName = SessionManager.GetInputDesktopName();
+        _nextDesktopCheckTick = Environment.TickCount64 + 100;
         _initialised.Reset();
         _worker = new Thread(CaptureWorker)
         {
