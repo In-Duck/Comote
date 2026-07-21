@@ -14,7 +14,7 @@ namespace Host
 {
     internal static partial class Program
     {
-        private const string ServiceName = "KymoteHost";
+        private const string LegacyServiceName = "KymoteHost";
 
         [DllImport("kernel32.dll")]
         private static extern IntPtr GetStdHandle(int nStdHandle);
@@ -28,15 +28,29 @@ namespace Host
         [STAThread]
         private static async Task Main(string[] args)
         {
+            if (args.Any(argument => argument.Equals(
+                    "--service", StringComparison.OrdinalIgnoreCase)))
+            {
+                await SecureDesktopService.RunAsync(args);
+                return;
+            }
+
+            var systemAgent = args.Any(argument => argument.Equals(
+                "--system-agent", StringComparison.OrdinalIgnoreCase));
+            if (systemAgent && !SecureDesktopService.IsSystemAgent())
+            {
+                Console.WriteLine("[Security] SYSTEM agent launch rejected.");
+                return;
+            }
             if (args.Length > 0 && args[0].Equals("--install", StringComparison.OrdinalIgnoreCase))
             {
-                InstallService();
+                Environment.ExitCode = InstallService() ? 0 : 1;
                 return;
             }
 
             if (args.Length > 0 && args[0].Equals("--uninstall", StringComparison.OrdinalIgnoreCase))
             {
-                UninstallService();
+                Environment.ExitCode = UninstallService() ? 0 : 1;
                 return;
             }
 
@@ -65,9 +79,10 @@ namespace Host
             var forceNoGui = Array.Exists(
                 args,
                 argument => argument.Equals("--nogui", StringComparison.OrdinalIgnoreCase));
-            var isService = !Environment.UserInteractive || forceNoGui;
+            var isService = systemAgent || !Environment.UserInteractive || forceNoGui;
 
-            await AutoUpdater.CheckAndApplyUpdate(isService);
+            if (!systemAgent)
+                await AutoUpdater.CheckAndApplyUpdate(isService);
             ConfigureConsole(isService);
 
             var appSettings = AppSettings.Load();
@@ -131,6 +146,19 @@ namespace Host
                 appSettings.InputBackendMode = inputBackendMode;
                 appSettings.Save();
             }
+            if (!isService && SecureDesktopService.IsInstalled())
+            {
+                var restarted = SecureDesktopService.Restart();
+                MessageBox.Show(
+                    restarted
+                        ? "설정과 로그인 정보가 저장되었습니다. Comote는 보안 화면 서비스로 백그라운드에서 실행됩니다."
+                        : "설정은 저장했지만 Comote 보안 화면 서비스를 시작하지 못했습니다.",
+                    "Comote",
+                    MessageBoxButtons.OK,
+                    restarted ? MessageBoxIcon.Information : MessageBoxIcon.Error);
+                return;
+            }
+
             Console.WriteLine(
                 "[Host] Cloud account mode enabled; no VPN address or connection password is required.");
 
@@ -284,37 +312,87 @@ namespace Host
             }
         }
 
-        private static void InstallService()
+        private static bool InstallService()
         {
             var executablePath =
                 Process.GetCurrentProcess().MainModule?.FileName ?? "";
-            if (string.IsNullOrWhiteSpace(executablePath)) return;
+            if (string.IsNullOrWhiteSpace(executablePath)) return false;
 
+            RunServiceControl("stop", LegacyServiceName);
+            RunServiceControl("delete", LegacyServiceName);
+
+            var service = SecureDesktopService.ServiceName;
+            var binaryPath = $"\"{executablePath}\" --service";
+            var exists = RunServiceControl("query", service) == 0;
+            if (exists)
+            {
+                RunServiceControl("stop", service);
+                Thread.Sleep(1000);
+            }
+            var configured = exists
+                ? RunServiceControl(
+                    "config", service, "binPath=", binaryPath,
+                    "start=", "auto", "obj=", "LocalSystem")
+                : RunServiceControl(
+                    "create", service, "binPath=", binaryPath,
+                    "start=", "auto", "obj=", "LocalSystem",
+                    "DisplayName=", "Comote Secure Desktop Service");
             RunServiceControl(
-                $"create {ServiceName} binPath= \"\\\"{executablePath}\\\" --nogui\" " +
-                "start= auto DisplayName= \"Comote Host Service\"");
+                "description", service,
+                "Comote authenticated remote control and secure desktop service");
+            RunServiceControl("sidtype", service, "unrestricted");
             RunServiceControl(
-                $"description {ServiceName} \"Comote Remote Control Host Service\"");
-            RunServiceControl($"start {ServiceName}");
+                "failure", service, "reset=", "86400",
+                "actions=", "restart/5000/restart/15000/\"\"/0");
+            var started = configured == 0 &&
+                RunServiceControl("start", service) == 0;
+
+            if (Environment.UserInteractive)
+            {
+                MessageBox.Show(
+                    started
+                        ? "Comote 보안 화면 서비스가 설치되어 실행 중입니다."
+                        : "서비스 설치 또는 시작에 실패했습니다. 관리자 권한과 Windows 이벤트 로그를 확인해 주세요.",
+                    "Comote 보안 화면 서비스",
+                    MessageBoxButtons.OK,
+                    started ? MessageBoxIcon.Information : MessageBoxIcon.Error);
+            }
+            return started;
         }
 
-        private static void UninstallService()
+        private static bool UninstallService()
         {
-            RunServiceControl($"stop {ServiceName}");
-            RunServiceControl($"delete {ServiceName}");
+            RunServiceControl("stop", SecureDesktopService.ServiceName);
+            var removed = RunServiceControl(
+                "delete", SecureDesktopService.ServiceName) == 0;
+            RunServiceControl("stop", LegacyServiceName);
+            RunServiceControl("delete", LegacyServiceName);
+            if (Environment.UserInteractive)
+            {
+                MessageBox.Show(
+                    removed
+                        ? "Comote 보안 화면 서비스를 제거했습니다."
+                        : "서비스가 설치되어 있지 않거나 제거하지 못했습니다.",
+                    "Comote 보안 화면 서비스");
+            }
+            return removed;
         }
 
-        private static void RunServiceControl(string arguments)
+        internal static int RunServiceControl(params string[] arguments)
         {
-            using var process = Process.Start(
-                new ProcessStartInfo
-                {
-                    FileName = "sc.exe",
-                    Arguments = arguments,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                });
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "sc.exe",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            foreach (var argument in arguments)
+                startInfo.ArgumentList.Add(argument);
+            using var process = Process.Start(startInfo);
             process?.WaitForExit();
+            return process?.ExitCode ?? -1;
         }
     }
 }

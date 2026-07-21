@@ -36,6 +36,7 @@ namespace Host
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("가상 HID 상태 확인", null, (_, _) => ShowVirtualHidStatus());
             menu.Items.Add("고급 설정", null, (_, _) => RestartWithSetup());
+            menu.Items.Add("보안 화면 서비스 설치/복구", null, (_, _) => InstallSecureDesktopService());
             menu.Items.Add("로그아웃", null, (_, _) => LogOut());
             menu.Items.Add("종료", null, (_, _) => Environment.Exit(0));
 
@@ -60,6 +61,29 @@ namespace Host
                 MessageBoxButtons.OK,
                 ready ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
+        private static void InstallSecureDesktopService()
+        {
+            var executable = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(executable)) return;
+            try
+            {
+                using var installer = Process.Start(new ProcessStartInfo(
+                    executable, "--install")
+                {
+                    UseShellExecute = true,
+                    Verb = "runas",
+                });
+                installer?.WaitForExit();
+                if (installer?.ExitCode == 0) Environment.Exit(0);
+            }
+            catch (System.ComponentModel.Win32Exception)
+            {
+                MessageBox.Show(
+                    "관리자 승인이 취소되어 서비스를 설치하지 않았습니다.",
+                    "Comote 보안 화면 서비스");
+            }
+        }
+
         private static void RestartWithSetup()
         {
             var executable = Environment.ProcessPath;

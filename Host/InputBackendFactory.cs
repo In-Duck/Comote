@@ -32,7 +32,7 @@ namespace Host
                 backend = new SendInputBackend(capture.Width, capture.Height);
             }
             backend.UpdateScreenBounds(capture.Left, capture.Top, capture.Width, capture.Height);
-            return backend;
+            return new DesktopAwareInputBackend(backend);
         }
 
         public static InputBackendMode ResolveConfiguredMode(

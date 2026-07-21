@@ -47,7 +47,7 @@ namespace Host
         {
             try
             {
-                Directory.CreateDirectory(AppSettings.DataDirectory);
+                MachineDataSecurity.EnsureRestrictedDirectory(AppSettings.DataDirectory);
                 var bytes = Encoding.UTF8.GetBytes(refreshToken);
                 var encrypted = ProtectedData.Protect(
                     bytes,

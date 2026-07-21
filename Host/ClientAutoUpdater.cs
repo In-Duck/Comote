@@ -153,11 +153,16 @@ namespace Host
         {
             availableVersion = new Version(0, 0);
             packageUri = null!;
-            return manifest != null &&
-                   Version.TryParse(manifest.Version, out availableVersion) &&
-                   TryGetHttpsUri(manifest.ClientPackageUrl, out packageUri) &&
-                   manifest.ClientPackageSha256.Length == 64 &&
-                   manifest.ClientPackageSha256.All(Uri.IsHexDigit);
+            if (manifest == null ||
+                !Version.TryParse(manifest.Version, out var parsedVersion) ||
+                parsedVersion == null ||
+                !TryGetHttpsUri(manifest.ClientPackageUrl, out packageUri) ||
+                manifest.ClientPackageSha256.Length != 64 ||
+                !manifest.ClientPackageSha256.All(Uri.IsHexDigit))
+                return false;
+
+            availableVersion = parsedVersion;
+            return true;
         }
 
         private static bool TryGetHttpsUri(string value, out Uri uri)

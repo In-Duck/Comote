@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$version = "1.6.0-preview.18"
+$version = "1.6.0-preview.19"
 $artifacts = Join-Path $root "artifacts"
 $stage = Join-Path $artifacts "Comote-$version"
 $managerOut = Join-Path $stage "Manager"
@@ -75,6 +75,12 @@ Rename-Item -LiteralPath (Join-Path $clientOut "Host.exe") `
 Copy-Item -LiteralPath `
     (Join-Path $root "docs\ACCOUNT_CONNECTION_GUIDE.md") `
     -Destination (Join-Path $stage "README.md")
+Copy-Item -LiteralPath `
+    (Join-Path $root "docs\ACCOUNT_CONNECTION_GUIDE.md") `
+    -Destination (Join-Path $clientOut "README.md")
+Copy-Item -LiteralPath `
+    (Join-Path $root "docs\SECURE_DESKTOP_GUIDE.md") `
+    -Destination (Join-Path $clientOut "SECURE_DESKTOP_GUIDE.md")
 
 Copy-Item -LiteralPath `
     (Join-Path $root "docs\CLIENT_AUTO_UPDATE_GUIDE.md") `
@@ -101,14 +107,28 @@ Compress-Archive `
     -DestinationPath $zip `
     -CompressionLevel Optimal
 
+$managerZip = Join-Path $artifacts "ComoteManager-$version-win-x64.zip"
+$clientZip = Join-Path $artifacts "ComoteClient-$version-win-x64.zip"
+foreach ($releaseZip in @($managerZip, $clientZip)) {
+    if (Test-Path -LiteralPath $releaseZip) {
+        Remove-Item -LiteralPath $releaseZip -Force
+    }
+}
+Compress-Archive -Path (Join-Path $managerOut "*") `
+    -DestinationPath $managerZip -CompressionLevel Optimal
+Compress-Archive -Path (Join-Path $clientOut "*") `
+    -DestinationPath $clientZip -CompressionLevel Optimal
+
 $updateManifest = [ordered]@{
-    version = "1.6.0.18"
+    version = "1.6.0.19"
     client_package_url = "REPLACE_WITH_HTTPS_PACKAGE_URL"
-    client_package_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash
+    client_package_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $clientZip).Hash
 }
 $updateManifest | ConvertTo-Json | Set-Content `
     -LiteralPath (Join-Path $artifacts "Comote-$version-client-update.json") `
     -Encoding UTF8
 
 Write-Host "Hub package: $zip"
+Write-Host "Manager release: $managerZip"
+Write-Host "Client release: $clientZip"
 Write-Host "Unpacked: $stage"
