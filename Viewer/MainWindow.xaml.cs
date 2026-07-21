@@ -1,4 +1,5 @@
 using System;
+using Comote.Shared;
 using System.IO;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
@@ -14,6 +15,7 @@ using System.Windows.Interop;
 using SIPSorcery.Net;
 using System.Windows.Shell;
 using System.Linq;
+using Newtonsoft.Json.Linq;
 
 namespace Viewer
 {
@@ -347,6 +349,7 @@ namespace Viewer
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "식별명", Binding = new Binding("Name"), Width = 150 });
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "아이피", Binding = new Binding("Ip"), Width = 140 });
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "CPU", Binding = new Binding("CpuText"), Width = 80 });
+            _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "버전", Binding = new Binding("VersionText"), Width = 125 });
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "메모리", Binding = new Binding("Ram"), Width = 120 });
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "디스크", Binding = new Binding("Hdd"), Width = 120 });
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "해상도", Binding = new Binding("Resolution"), Width = 120 });
@@ -850,6 +853,11 @@ namespace Viewer
                     Name = host.Name,
                     Ip = host.Ip,
                     CpuText = $"{host.Cpu}%",
+                    VersionText = host.HasClientUpdate
+                        ? host.SupportsManagedUpdate
+                            ? $"{host.AgentVersion} · 업데이트"
+                            : $"{host.AgentVersion} · 1회 수동 설치"
+                        : host.AgentVersion,
                     Ram = host.Ram,
                     Hdd = host.Hdd,
                     Resolution = host.Resolution,
@@ -927,6 +935,18 @@ namespace Viewer
                 VerticalAlignment = VerticalAlignment.Center
             });
             headerStack.Children.Add(statusPanel);
+            if (host.HasClientUpdate)
+            {
+                headerStack.Children.Add(new TextBlock
+                {
+                    Text = host.SupportsManagedUpdate
+                        ? $"Client {ClientUpdateCatalog.LatestVersion} 업데이트 가능"
+                        : "Preview 20을 한 번 직접 설치해주세요.",
+                    Foreground = new SolidColorBrush(Color.FromRgb(250, 204, 21)),
+                    FontSize = 11,
+                    Margin = new Thickness(14, 3, 0, 0),
+                });
+            }
 
             // === 2. 썸네일 (Row 1) ===
             var thumbnailBorder = new Border
@@ -1610,6 +1630,7 @@ namespace Viewer
                             existing.Hdd = h.Hdd ?? existing.Hdd;
                             existing.Uptime = h.Uptime ?? existing.Uptime;
                             existing.LastSeen = h.LastSeen;
+                            existing.AgentVersion = h.AgentVersion ?? "";
                             existing.ThumbnailUrl = h.ThumbnailUrl;
                         }
                         else
@@ -1626,6 +1647,7 @@ namespace Viewer
                                 Hdd = h.Hdd ?? "N/A",
                                 Uptime = h.Uptime ?? "N/A",
                                 LastSeen = h.LastSeen,
+                                AgentVersion = h.AgentVersion ?? "",
                                 ThumbnailUrl = h.ThumbnailUrl
                             };
                         }
@@ -1688,6 +1710,8 @@ namespace Viewer
         // ==========================================================
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
+            await ClientUpdateCatalog.RefreshAsync();
+
             if (_isDemoMode)
             {
                 LoadDemoFleet();
@@ -1728,6 +1752,15 @@ namespace Viewer
                 _signaling.OnSignalReceived += async (from, signal) =>
                 {
                     Console.WriteLine($"[Signaling] Signal from {from}: {signal}");
+                    var token = JToken.FromObject(signal);
+                    if (token.Value<string>("type") == "comote-command-result" &&
+                        token.Value<string>("action") == "update")
+                    {
+                        _statusBarText.Text = token.Value<bool>("ok")
+                            ? $"Client 업데이트 시작 · {from}"
+                            : $"Client 업데이트 실패 · {from} · {token.Value<string>("message")}";
+                        return;
+                    }
                     if (_receiverPool.TryGetValue(from, out var receiver))
                     {
                         await receiver.HandleSignalAsync(signal);
@@ -2045,6 +2078,7 @@ namespace Viewer
         public string Name { get; set; } = "";
         public string Ip { get; set; } = "";
         public string CpuText { get; set; } = "";
+        public string VersionText { get; set; } = "";
         public string Ram { get; set; } = "";
         public string Hdd { get; set; } = "";
         public string Resolution { get; set; } = "";

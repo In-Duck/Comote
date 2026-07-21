@@ -7,6 +7,7 @@ using Newtonsoft.Json;
 using System.Text;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using Comote.Shared;
 
 namespace Viewer
 {
@@ -115,6 +116,19 @@ namespace Viewer
         public string Uptime { get; set; } = "N/A";
         public bool IsOnline { get; set; } = false;
         public DateTime LastSeen { get; set; } = DateTime.MinValue;
+        public string AgentVersion { get; set; } = "";
+        public bool HasClientUpdate
+        {
+            get
+            {
+                return Version.TryParse(AgentVersion, out var installed) &&
+                       installed < ClientUpdateCatalog.LatestVersion;
+            }
+        }
+
+        public bool SupportsManagedUpdate =>
+            Version.TryParse(AgentVersion, out var installed) &&
+            installed >= ProductUpdateSettings.LatestClientVersion;
         public string? ThumbnailUrl { get; set; }
         public byte[]? ThumbnailBytes { get; set; }
     }

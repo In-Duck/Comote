@@ -3,5 +3,5 @@
   "PusherCluster": "ap3",
   "SupabaseUrl": "",
   "SupabaseAnonKey": "",
-  "WebAuthUrl": "https://kymote.vercel.app/api/pusher/auth"
+  "WebAuthUrl": "https://comote-remote.dopum54.chatgpt.site/api/pusher/auth"
 }

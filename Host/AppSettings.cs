@@ -17,7 +17,7 @@ namespace Host
             InputBackendMode.SendInput;
         public string SupabaseUrl { get; set; } = "";
         public string SupabaseAnonKey { get; set; } = "";
-        public string WebAuthUrl { get; set; } = "https://kymote.vercel.app/api/pusher/auth";
+        public string WebAuthUrl { get; set; } = "https://comote-remote.dopum54.chatgpt.site/api/pusher/auth";
 
         public static string DataDirectory =>
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Comote");

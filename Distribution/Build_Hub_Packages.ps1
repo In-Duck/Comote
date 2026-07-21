@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$version = "1.6.0-preview.19"
+$version = "1.6.0-preview.20"
 $artifacts = Join-Path $root "artifacts"
 $stage = Join-Path $artifacts "Comote-$version"
 $managerOut = Join-Path $stage "Manager"
@@ -120,8 +120,8 @@ Compress-Archive -Path (Join-Path $clientOut "*") `
     -DestinationPath $clientZip -CompressionLevel Optimal
 
 $updateManifest = [ordered]@{
-    version = "1.6.0.19"
-    client_package_url = "REPLACE_WITH_HTTPS_PACKAGE_URL"
+    version = "1.6.0.20"
+    client_package_url = "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.20/ComoteClient-1.6.0-preview.20-win-x64.zip"
     client_package_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $clientZip).Hash
 }
 $updateManifest | ConvertTo-Json | Set-Content `

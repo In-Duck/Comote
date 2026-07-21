@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Newtonsoft.Json.Linq;
+using Comote.Shared;
 
 namespace Host
 {
@@ -92,7 +93,11 @@ namespace Host
         private static async Task<JObject> UpdateAsync(string manifestUrl)
         {
             if (string.IsNullOrWhiteSpace(manifestUrl))
-                return Result(false, "업데이트 manifest URL이 비어 있습니다.");
+                manifestUrl = ProductUpdateSettings.ClientManifestUrl;
+            if (!manifestUrl.Equals(
+                    ProductUpdateSettings.ClientManifestUrl,
+                    StringComparison.OrdinalIgnoreCase))
+                return Result(false, "공식 Comote 업데이트 주소만 사용할 수 있습니다.");
 
             var restartArguments = Environment.GetCommandLineArgs().Skip(1).ToArray();
             var staged = await ClientAutoUpdater.TryStageUpdateAsync(manifestUrl, restartArguments);

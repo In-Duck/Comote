@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using Comote.Shared;
 
 namespace Viewer
 {
@@ -72,6 +73,17 @@ namespace Viewer
                 count == 1 && selected[0].IsOnline,
                 (_, _) => OpenControlWindows(selected));
 
+            var updateTargets = selected
+                .Where(host => host.IsOnline && host.HasClientUpdate && host.SupportsManagedUpdate)
+                .ToList();
+            AddMenuItem(
+                menu,
+                updateTargets.Count == 1
+                    ? $"{updateTargets[0].Name} - Client 업데이트"
+                    : $"({updateTargets.Count}개) Client 업데이트",
+                updateTargets.Count > 0 && !_isDemoMode,
+                async (_, _) => await RequestClientUpdatesAsync(updateTargets));
+
             AddMenuItem(
                 menu,
                 "\uC804\uCCB4 \uC120\uD0DD",
@@ -107,6 +119,53 @@ namespace Viewer
                 "\uBAA9\uB85D\uC5D0\uC11C \uC0AD\uC81C",
                 count == 1,
                 OnDeleteHostClick);
+        }
+
+        private async Task RequestClientUpdatesAsync(IReadOnlyList<HostInfo> targets)
+        {
+            if (targets.Count == 0) return;
+            var names = string.Join(", ", targets.Select(host => host.Name));
+            if (MessageBox.Show(
+                    $"다음 Client에 {ClientUpdateCatalog.LatestVersion} 업데이트를 요청할까요?\n\n{names}",
+                    "Comote Client 업데이트",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return;
+
+            var sent = 0;
+            foreach (var host in targets)
+            {
+                try
+                {
+                    if (_isHubMode && _hubServer != null)
+                    {
+                        await _hubServer.SendCommandAsync(
+                            host.Id,
+                            "update",
+                            "Comote Client 업데이트",
+                            "",
+                            ProductUpdateSettings.ClientManifestUrl);
+                    }
+                    else if (_signaling != null)
+                    {
+                        await _signaling.SendSignalAsync(host.Id, new
+                        {
+                            type = "comote-command",
+                            action = "update",
+                        });
+                    }
+                    else
+                    {
+                        continue;
+                    }
+                    sent++;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Updater] Request failed for {host.Name}: {ex.Message}");
+                }
+            }
+            _statusBarText.Text = $"Client 업데이트 요청 전송 · {sent}/{targets.Count}";
         }
         private static void AddMenuItem(
             ItemsControl parent,
@@ -498,4 +557,3 @@ namespace Viewer
         }
     }
 }
-

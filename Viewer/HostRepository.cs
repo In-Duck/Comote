@@ -43,6 +43,9 @@ namespace Viewer
         [JsonProperty("mac_address")]
         public string MacAddress { get; set; } = "";
 
+        [JsonProperty("agent_version")]
+        public string AgentVersion { get; set; } = "";
+
         [JsonProperty("thumbnail_path")]
         public string? ThumbnailPath { get; set; }
 

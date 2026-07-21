@@ -9,6 +9,7 @@ using System.Windows.Forms;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using SIPSorceryMedia.FFmpeg;
+using Comote.Shared;
 
 namespace Host
 {
@@ -80,9 +81,6 @@ namespace Host
                 args,
                 argument => argument.Equals("--nogui", StringComparison.OrdinalIgnoreCase));
             var isService = systemAgent || !Environment.UserInteractive || forceNoGui;
-
-            if (!systemAgent)
-                await AutoUpdater.CheckAndApplyUpdate(isService);
             ConfigureConsole(isService);
 
             var appSettings = AppSettings.Load();
@@ -187,16 +185,38 @@ namespace Host
             using var webRtc = new WebRTCManager(
                 capture, password, inputBackend);
 
-            signaling.OnSignalReceived +=
-                async (from, signal) => await webRtc.HandleSignalAsync(from, signal);
+            signaling.OnSignalReceived += async (from, signal) =>
+            {
+                var token = JToken.FromObject(signal);
+                if (token.Value<string>("type") == "comote-command" &&
+                    token.Value<string>("action") == "update")
+                {
+                    var result = await RemoteTaskExecutor.ExecuteAsync(new JObject
+                    {
+                        ["action"] = "update",
+                        ["value"] = ProductUpdateSettings.ClientManifestUrl,
+                    });
+                    Console.WriteLine($"[Updater] Remote request: {result.Value<string>("message")}");
+                    await signaling.SendSignalAsync(from, new
+                    {
+                        type = "comote-command-result",
+                        action = "update",
+                        ok = result.Value<bool>("ok"),
+                        message = result.Value<string>("message"),
+                        version = ClientAutoUpdater.CurrentVersion.ToString(),
+                    });
+                    return;
+                }
+                await webRtc.HandleSignalAsync(from, signal);
+            };
             webRtc.OnSignalReady +=
                 async (to, signal) => await signaling.SendSignalAsync(to, signal);
 
             await signaling.ConnectAsync();
             signaling.StartThumbnailReporting(capture);
-            using var tray = isService
-                ? null
-                : CloudClientTrayIcon.Start(hostName, inputBackend.Mode);
+            using var tray = systemAgent || !isService
+                ? CloudClientTrayIcon.Start(hostName, inputBackend.Mode, systemAgent)
+                : null;
 
             await Task.Delay(Timeout.InfiniteTimeSpan);
         }

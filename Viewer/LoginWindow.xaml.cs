@@ -123,7 +123,7 @@ namespace Viewer
             {
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = "https://kymote.vercel.app/login",
+                    FileName = "https://comote-remote.dopum54.chatgpt.site/login",
                     UseShellExecute = true,
                 });
             }

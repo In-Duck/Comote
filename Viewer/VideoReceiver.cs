@@ -625,7 +625,7 @@ namespace Viewer
             if (!InputChannelReady) return;
             if (!_presentationActive)
             {
-                SendSettings(2, 0);
+                SendSettings(0, 0);
                 return;
             }
 

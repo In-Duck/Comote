@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.Net.Http;
@@ -96,7 +96,7 @@ namespace Host
 
         private void OpenAccountPage()
         {
-            try { Process.Start(new ProcessStartInfo { FileName = "https://kymote.vercel.app/login", UseShellExecute = true }); }
+            try { Process.Start(new ProcessStartInfo { FileName = "https://comote-remote.dopum54.chatgpt.site/login", UseShellExecute = true }); }
             catch { ShowStatus("브라우저를 열 수 없습니다. 계정 웹사이트에 직접 접속해 주세요.", true); }
         }
 

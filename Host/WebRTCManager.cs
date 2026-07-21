@@ -64,6 +64,7 @@ namespace Host
         // 적응형 비트레이트 상태
         private int _viewerFps = 0;
         private int _targetFps = EncoderConfig.DefaultFps;
+        private volatile bool _standby;
         private string? _password;
 
         // Encoder Configuration Class
@@ -374,7 +375,8 @@ namespace Host
                 // 만약 ChangeFps가 없다면 InitialiseEncoder 재호출은 너무 무거움.
                 // 여기서는 비트레이트 변경에 집중하고 FPS는 인코더 내부 제어 혹은 캡처 딜레이 변수(_targetFps)를 둬야 함.
                 // 일단 _targetFps 변수를 필드로 만들고 캡처 루프에서 참조하도록 수정 필요.
-                _targetFps = fps > 0 ? fps : 30; // 0이면 기본값 30
+                _standby = fps == 0;
+                _targetFps = fps;
             }
             catch (Exception ex)
             {
@@ -612,7 +614,7 @@ namespace Host
 
                 _audioCapture.DataAvailable += (s, e) =>
                 {
-                    if (!_isStreaming || _peerConnection == null || _peerConnection.connectionState != RTCPeerConnectionState.connected) return;
+                    if (!_isStreaming || _standby || _peerConnection == null || _peerConnection.connectionState != RTCPeerConnectionState.connected) return;
 
                     try
                     {
@@ -702,6 +704,12 @@ namespace Host
             {
                 while (_isStreaming && _peerConnection != null && _videoEncoder != null)
                 {
+                    if (_standby)
+                    {
+                        await Task.Delay(100);
+                        loopWatch.Restart();
+                        continue;
+                    }
                     var rawFrame = _capture.Capture();
                     if (rawFrame != null)
                     {
