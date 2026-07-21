@@ -64,12 +64,12 @@ namespace Host
 
         public static bool EnsureVirtualHidReady(IWin32Window? owner)
         {
-            if (FakerInputBackend.IsDriverAvailable()) return true;
+            if (FakerInputBackend.TryGetDriverStatus(out var driverStatus)) return true;
 
             var answer = MessageBox.Show(
                 owner,
-                "가상 HID 입력에는 공식 FakerInput v0.1.1 드라이버가 필요합니다.\n\n" +
-                "검증된 설치 파일을 관리자 권한으로 설치할까요?",
+                "현재 상태:\n" + driverStatus + "\n\n" +
+                "공식 FakerInput v0.1.1 설치 파일로 복구 설치할까요?",
                 "Comote · 가상 HID 설치",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Information);
@@ -114,9 +114,14 @@ namespace Host
                 return false;
             }
 
-            if (FakerInputBackend.IsDriverAvailable()) return true;
-            MessageBox.Show(owner, "설치는 완료됐지만 장치가 아직 준비되지 않았습니다.\n\nClient를 완전히 종료하고 PC를 한 번 재부팅한 뒤 다시 실행해 주세요.",
-                "Comote · 재부팅 필요", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if (FakerInputBackend.TryGetDriverStatus(out driverStatus)) return true;
+            MessageBox.Show(
+                owner,
+                "설치는 완료됐지만 가상 HID를 사용할 수 없습니다.\n\n" + driverStatus +
+                "\n\n장치 관리자 > 시스템 장치에서 FakerInput Device에 노란 경고 표시가 있는지 확인해 주세요.",
+                "Comote · FakerInput 상태",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
             return false;
         }
     }

@@ -1,4 +1,4 @@
-name: Release Preview 16
+name: Release Preview 17
 
 on:
   push:
@@ -28,12 +28,12 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive `
-            -Path artifacts/Comote-1.6.0-preview.16/Manager/* `
-            -DestinationPath artifacts/ComoteManager-1.6.0-preview.16-win-x64.zip `
+            -Path artifacts/Comote-1.6.0-preview.17/Manager/* `
+            -DestinationPath artifacts/ComoteManager-1.6.0-preview.17-win-x64.zip `
             -CompressionLevel Optimal
           Compress-Archive `
-            -Path artifacts/Comote-1.6.0-preview.16/Client/* `
-            -DestinationPath artifacts/ComoteClient-1.6.0-preview.16-win-x64.zip `
+            -Path artifacts/Comote-1.6.0-preview.17/Client/* `
+            -DestinationPath artifacts/ComoteClient-1.6.0-preview.17-win-x64.zip `
             -CompressionLevel Optimal
 
       - name: Publish GitHub Release
@@ -43,17 +43,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $assets = @(
-            "artifacts/ComoteManager-1.6.0-preview.16-win-x64.zip",
-            "artifacts/ComoteClient-1.6.0-preview.16-win-x64.zip",
-            "artifacts/Comote-1.6.0-preview.16-win-x64.zip"
+            "artifacts/ComoteManager-1.6.0-preview.17-win-x64.zip",
+            "artifacts/ComoteClient-1.6.0-preview.17-win-x64.zip",
+            "artifacts/Comote-1.6.0-preview.17-win-x64.zip"
           )
 
-          if (gh release view "v1.6.0-preview.16" 2>$null) {
-            gh release upload "v1.6.0-preview.16" $assets --clobber
+          if (gh release view "v1.6.0-preview.17" 2>$null) {
+            gh release upload "v1.6.0-preview.17" $assets --clobber
           } else {
-            gh release create "v1.6.0-preview.16" $assets `
+            gh release create "v1.6.0-preview.17" $assets `
               --target "${{ github.sha }}" `
-              --title "Comote 1.6.0 Preview 16" `
+              --title "Comote 1.6.0 Preview 17" `
               --prerelease `
-              --notes "Prepares up to four online Clients at low bandwidth for fast PC switching, mutes inactive sessions, and reuses warm WebRTC connections. FakerInput mode is now enabled only when its HID control device can actually be opened; otherwise the saved mode is corrected to SendInput. Includes the signed FakerInput v0.1.1 installer. Virtual input compatibility with every game or anti-cheat is not guaranteed."
+              --notes "Fixes FakerInput false negatives by probing HID metadata without read access and opening the control collection with write-only access. Adds clear diagnostics for missing devices, unavailable control interfaces, and Windows access errors through the Client tray menu and setup screen. Includes the signed FakerInput v0.1.1 installer. Virtual input compatibility with every game or anti-cheat is not guaranteed."
           }

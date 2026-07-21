@@ -49,7 +49,7 @@ export default function HomePage() {
         <div className="steps">{steps.map(([number, title, body]) => <div key={number}><span>{number}</span><h3>{title}</h3><p>{body}</p></div>)}</div>
       </section>
       <section id="docs" className="cta section">
-        <div><p className="eyebrow">READY TO TEST</p><h2>Preview 16를 사용해 보세요.</h2><p>설치와 연결, 가상 HID, 운영 전 필수 보안 설정을 문서에서 확인할 수 있습니다.</p></div>
+        <div><p className="eyebrow">READY TO TEST</p><h2>Preview 17를 사용해 보세요.</h2><p>설치와 연결, 가상 HID, 운영 전 필수 보안 설정을 문서에서 확인할 수 있습니다.</p></div>
         <div className="actions"><a className="primary" href={managerUrl}>Manager 받기</a><a className="secondary" href="https://github.com/In-Duck/Comote#readme">사용 설명서</a></div>
       </section>
       <footer><Link href="/" className="brand"><span>C</span>Comote</Link><p>Remote Windows management for small teams.</p><small>© 2026 Comote</small></footer>

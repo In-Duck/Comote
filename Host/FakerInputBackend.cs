@@ -20,7 +20,6 @@ namespace Host
         private const int ControlReportSize = 0x41;
         private const uint DigcfPresent = 0x00000002;
         private const uint DigcfDeviceInterface = 0x00000010;
-        private const uint GenericRead = 0x80000000;
         private const uint GenericWrite = 0x40000000;
         private const uint FileShareRead = 0x00000001;
         private const uint FileShareWrite = 0x00000002;
@@ -62,16 +61,22 @@ namespace Host
         }
 
         public static bool IsDriverAvailable()
+            => TryGetDriverStatus(out _);
+
+        public static bool TryGetDriverStatus(out string status)
         {
             try
             {
                 var (handle, stream) = OpenControlDevice();
                 stream.Dispose();
                 handle.Dispose();
+                status = "FakerInput 가상 HID 장치가 정상적으로 연결되었습니다.";
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                status = ex.Message;
+                Console.WriteLine($"[Input] FakerInput probe failed: {ex.Message}");
                 return false;
             }
         }
@@ -305,6 +310,9 @@ namespace Host
             if (deviceInfo == new IntPtr(-1))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
 
+            var fakerDeviceSeen = false;
+            var controlCollectionSeen = false;
+            var lastOpenError = 0;
             try
             {
                 for (uint index = 0; ; index++)
@@ -336,17 +344,25 @@ namespace Host
                         var path = Marshal.PtrToStringUni(
                             detail + (IntPtr.Size == 8 ? 8 : 4));
                         if (string.IsNullOrWhiteSpace(path)) continue;
-                        var handle = CreateFile(
+                        if (path.Contains(
+                            "vid_fe0f&pid_00ff",
+                            StringComparison.OrdinalIgnoreCase))
+                            fakerDeviceSeen = true;
+
+                        // HID metadata does not require read/write access. Opening a
+                        // zero-access probe first avoids falsely reporting FakerInput
+                        // as missing when its collection ACL denies GENERIC_READ.
+                        using var probeHandle = CreateFile(
                             path,
-                            GenericRead | GenericWrite,
+                            0,
                             FileShareRead | FileShareWrite,
                             IntPtr.Zero,
                             OpenExisting,
                             0,
                             IntPtr.Zero);
-                        if (handle.IsInvalid)
+                        if (probeHandle.IsInvalid)
                         {
-                            handle.Dispose();
+                            lastOpenError = Marshal.GetLastWin32Error();
                             continue;
                         }
 
@@ -354,19 +370,38 @@ namespace Host
                         {
                             Size = Marshal.SizeOf<HiddAttributes>(),
                         };
-                        if (HidD_GetAttributes(handle, ref attributes) &&
-                            attributes.VendorId == FakerVid &&
-                            attributes.ProductId == FakerPid &&
-                            IsControlCollection(handle))
+                        if (!HidD_GetAttributes(probeHandle, ref attributes) ||
+                            attributes.VendorId != FakerVid ||
+                            attributes.ProductId != FakerPid)
+                            continue;
+
+                        fakerDeviceSeen = true;
+                        if (!IsControlCollection(probeHandle))
+                            continue;
+
+                        controlCollectionSeen = true;
+                        // FakerInput receives output reports only. Requiring read
+                        // access can fail even though the installed device is usable.
+                        var handle = CreateFile(
+                            path,
+                            GenericWrite,
+                            FileShareRead | FileShareWrite,
+                            IntPtr.Zero,
+                            OpenExisting,
+                            0,
+                            IntPtr.Zero);
+                        if (!handle.IsInvalid)
                         {
                             return (
                                 handle,
                                 new FileStream(
                                     handle,
-                                    FileAccess.ReadWrite,
+                                    FileAccess.Write,
                                     ControlReportSize,
                                     false));
                         }
+
+                        lastOpenError = Marshal.GetLastWin32Error();
                         handle.Dispose();
                     }
                     finally
@@ -380,8 +415,25 @@ namespace Host
                 SetupDiDestroyDeviceInfoList(deviceInfo);
             }
 
+            if (controlCollectionSeen)
+            {
+                var suffix = lastOpenError == 0
+                    ? string.Empty
+                    : $" (Windows 오류 {lastOpenError}: {new Win32Exception(lastOpenError).Message})";
+                throw new InvalidOperationException(
+                    "FakerInput은 설치되어 있지만 제어 장치를 열 수 없습니다" + suffix +
+                    ". Client를 완전히 종료한 뒤 다시 실행하거나 장치 관리자에서 FakerInput Device 상태를 확인해 주세요.");
+            }
+
+            if (fakerDeviceSeen)
+            {
+                throw new InvalidOperationException(
+                    "FakerInput 장치는 보이지만 가상 HID 제어 인터페이스가 준비되지 않았습니다. " +
+                    "장치 관리자에서 FakerInput Device의 오류 여부를 확인한 뒤 드라이버를 복구 설치해 주세요.");
+            }
+
             throw new InvalidOperationException(
-                "FakerInput 드라이버가 설치되지 않았거나 제어 장치를 열 수 없습니다.");
+                "FakerInput 가상 HID 장치를 찾지 못했습니다. 장치 관리자 > 시스템 장치에서 FakerInput Device가 정상인지 확인해 주세요.");
         }
 
         private static bool IsControlCollection(SafeFileHandle handle)

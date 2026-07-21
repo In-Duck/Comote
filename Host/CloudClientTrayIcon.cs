@@ -34,6 +34,7 @@ namespace Host
             menu.Items.Add(new ToolStripMenuItem($"연결됨 · {hostName}") { Enabled = false });
             menu.Items.Add(new ToolStripMenuItem(inputMode == InputBackendMode.VirtualHid ? "입력 · 가상 HID" : "입력 · SendInput") { Enabled = false });
             menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("가상 HID 상태 확인", null, (_, _) => ShowVirtualHidStatus());
             menu.Items.Add("고급 설정", null, (_, _) => RestartWithSetup());
             menu.Items.Add("로그아웃", null, (_, _) => LogOut());
             menu.Items.Add("종료", null, (_, _) => Environment.Exit(0));
@@ -50,6 +51,15 @@ namespace Host
             Application.Run(_context);
         }
 
+        private static void ShowVirtualHidStatus()
+        {
+            var ready = FakerInputBackend.TryGetDriverStatus(out var status);
+            MessageBox.Show(
+                status,
+                "Comote · FakerInput 상태",
+                MessageBoxButtons.OK,
+                ready ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+        }
         private static void RestartWithSetup()
         {
             var executable = Environment.ProcessPath;

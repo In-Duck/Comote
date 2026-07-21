@@ -183,7 +183,7 @@ namespace Host
             };
             _inputCombo.Items.Add("FakerInput 가상 HID (모드 2 · 게임 정책 확인)");
             _inputCombo.Items.Add("Windows SendInput (호환 모드)");
-            var isVirtualHidReady = FakerInputBackend.IsDriverAvailable();
+            var isVirtualHidReady = FakerInputBackend.TryGetDriverStatus(out var driverStatus);
             _inputCombo.SelectedIndex =
                 inputBackendMode == InputBackendMode.VirtualHid && isVirtualHidReady
                     ? 0
@@ -194,9 +194,10 @@ namespace Host
             {
                 Text = isVirtualHidReady
                     ? "FakerInput 드라이버 준비됨"
-                    : "모드 2 선택 시 서명된 FakerInput 설치 안내가 표시됩니다.",
+                    : driverStatus,
                 Location = new Point(20, 314),
-                AutoSize = true,
+                Size = new Size(360, 42),
+                AutoEllipsis = true,
                 ForeColor = isVirtualHidReady
                     ? Color.FromArgb(34, 197, 94)
                     : Color.FromArgb(251, 191, 36)
