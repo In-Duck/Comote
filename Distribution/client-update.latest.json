@@ -1,7 +1,7 @@
 {
-    "version":  "1.6.0.22",
-    "client_package_url":  "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.22/ComoteClient-1.6.0-preview.22-win-x64.zip",
-    "client_package_sha256":  "D522DDE7BD851E84EDD785118EEAB08660CAC0D153E2941DD1706825B3786C3C",
+    "version":  "1.6.0.23",
+    "client_package_url":  "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.23/ComoteClient-1.6.0-preview.23-win-x64.zip",
+    "client_package_sha256":  "AA310686FD0ACEA7C03CDB12B33134F2AEEA46B12CF47BE35BB28D03B6C26C1F",
     "minimum_version":  "1.6.0.19",
-    "release_notes":  "Update download, verification, and installation preparation now show live progress."
+    "release_notes":  "The thumbnail tab now shows up to four live low-bandwidth previews at 2 FPS."
 }

@@ -5,13 +5,13 @@ export const dynamic = "force-static";
 export async function GET() {
   return NextResponse.json(
     {
-      version: "1.6.0.22",
+      version: "1.6.0.23",
       client_package_url:
-        "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.22/ComoteClient-1.6.0-preview.22-win-x64.zip",
-      client_package_sha256: "D522DDE7BD851E84EDD785118EEAB08660CAC0D153E2941DD1706825B3786C3C",
+        "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.23/ComoteClient-1.6.0-preview.23-win-x64.zip",
+      client_package_sha256: "AA310686FD0ACEA7C03CDB12B33134F2AEEA46B12CF47BE35BB28D03B6C26C1F",
       minimum_version: "1.6.0.19",
       release_notes:
-        "업데이트 다운로드·검증·설치 준비 과정을 퍼센트 게이지로 표시합니다.",
+        "The thumbnail tab now shows up to four live low-bandwidth previews at 2 FPS.",
     },
     {
       headers: {

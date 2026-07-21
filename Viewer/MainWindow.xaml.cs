@@ -182,6 +182,7 @@ namespace Viewer
             
             // 포커스 관리
             Activated += (s, e) => UpdateInputCaptureState();
+            StateChanged += (_, _) => UpdateLiveThumbnailStreaming();
             Deactivated += (s, e) =>
             {
                 ReleaseRemoteInputs();
@@ -812,6 +813,7 @@ namespace Viewer
 
                 _gridTabBtn.Background = new SolidColorBrush(showList ? Colors.Transparent : Color.FromRgb(56, 189, 248));
                 _gridTabBtn.Foreground = new SolidColorBrush(showList ? Color.FromRgb(56, 189, 248) : Colors.Black);
+                UpdateLiveThumbnailStreaming();
             }
             catch (Exception ex)
             {
@@ -822,6 +824,23 @@ namespace Viewer
         // ==========================================================
         // 호스트 목록 업데이트 (로비)
         // ==========================================================
+        private bool ShouldStreamLiveThumbnails()
+        {
+            return _mainContent != null &&
+                   _gridTab != null &&
+                   ReferenceEquals(_mainContent.Content, _gridTab) &&
+                   _lobbyGrid != null &&
+                   _lobbyGrid.Visibility == Visibility.Visible &&
+                   IsVisible &&
+                   WindowState != WindowState.Minimized;
+        }
+
+        private void UpdateLiveThumbnailStreaming()
+        {
+            var enabled = ShouldStreamLiveThumbnails();
+            foreach (var receiver in _receiverPool.Values)
+                receiver.SetThumbnailStreaming(enabled);
+        }
         private void UpdateLobbyUI(List<HostInfo> hosts)
         {
             // 장치 ID 기준으로만 중복 제거: 같은 표시 이름의 PC는 모두 유지
@@ -1916,6 +1935,7 @@ namespace Viewer
             if (presentationActive)
                 _receiver = receiver;
             receiver.SetPresentationActive(presentationActive);
+            receiver.SetThumbnailStreaming(ShouldStreamLiveThumbnails());
 
             // 시그널 전송
             receiver.OnSignalReady += async (signal) =>
@@ -1943,6 +1963,17 @@ namespace Viewer
             {
                 Dispatcher.Invoke(() =>
                 {
+                    if (receiver.VideoBitmap != null &&
+                        _liveThumbnailImages.TryGetValue(hostId, out var thumbnailImage))
+                    {
+                        if (!ReferenceEquals(thumbnailImage.Source, receiver.VideoBitmap))
+                            thumbnailImage.Source = receiver.VideoBitmap;
+                        if (thumbnailImage.Tag is UIElement placeholder)
+                            placeholder.Visibility = Visibility.Collapsed;
+                        if (_persistentHosts.TryGetValue(hostId, out var thumbnailHost))
+                            thumbnailHost.LastSeen = DateTime.UtcNow;
+                    }
+
                     if (ReferenceEquals(_receiver, receiver) &&
                         receiver.VideoBitmap != null)
                     {

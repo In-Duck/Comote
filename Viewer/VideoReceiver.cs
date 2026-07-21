@@ -39,6 +39,7 @@ namespace Viewer
         private readonly Stopwatch _pingStopwatch = new();
         private Timer? _statsTimer;
         private volatile bool _presentationActive;
+        private volatile bool _thumbnailStreaming;
 
         /// <summary>최근 1초간 디코딩된 FPS</summary>
         public int CurrentFps { get; private set; }
@@ -620,12 +621,19 @@ namespace Viewer
             ApplyPresentationSettings();
         }
 
+        public void SetThumbnailStreaming(bool active)
+        {
+            if (_thumbnailStreaming == active) return;
+            _thumbnailStreaming = active;
+            ApplyPresentationSettings();
+        }
+
         private void ApplyPresentationSettings()
         {
             if (!InputChannelReady) return;
             if (!_presentationActive)
             {
-                SendSettings(0, 0);
+                SendSettings(_thumbnailStreaming ? 2 : 0, 0);
                 return;
             }
 

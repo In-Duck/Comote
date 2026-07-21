@@ -365,6 +365,8 @@ namespace Host
                     case 1: targetBitrate = EncoderConfig.BitrateMedium; break;
                     case 0: targetBitrate = EncoderConfig.BitrateLow; break;
                 }
+                if (fps is > 0 and <= 2)
+                    targetBitrate = Math.Min(targetBitrate, 350_000);
 
                 Console.WriteLine($"[WebRTC] Updating Encoder Settings -> FPS: {fps}, Bitrate: {targetBitrate / 1_000_000.0:F1}Mbps");
 
