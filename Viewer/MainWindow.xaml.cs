@@ -87,6 +87,8 @@ namespace Viewer
         private readonly bool _isDemoMode;
         private readonly bool _isOfflineMode;
         private System.Windows.Threading.DispatcherTimer? _pollTimer;
+        private int _pollInProgress;
+        private readonly DateTime _fastPollingUntil = DateTime.UtcNow.AddSeconds(30);
         
         // === 영구 호스트 저장소 ===
         private HostRepository? _hostRepo;
@@ -179,7 +181,7 @@ namespace Viewer
                 ReleaseRemoteInputs();
                 UpdateInputCaptureState();
             };
-            Closed += (s, e) => _keyboardHook.Dispose();
+            Closed += (s, e) => _keyboardHook?.Dispose();
         }
 
         // ==========================================================
@@ -665,7 +667,7 @@ namespace Viewer
                             _ = Task.Run(async () =>
                             {
                                 await Task.Delay(3000);
-                                Dispatcher.BeginInvoke(() =>
+                                _ = Dispatcher.BeginInvoke(() =>
                                     _fileProgressOverlay.Visibility = Visibility.Collapsed);
                             });
                         });
@@ -1435,6 +1437,9 @@ namespace Viewer
         }
         protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
         {
+            _pollTimer?.Stop();
+            _hostRepo?.Dispose();
+
             if (_settings.RememberWindowSize)
             {
                 _settings.WindowWidth = Width;
@@ -1543,7 +1548,7 @@ namespace Viewer
         // ==========================================================
         private async Task PollHostsFromSupabaseAsync()
         {
-            if (_hostRepo == null) return;
+            if (_hostRepo == null || Interlocked.Exchange(ref _pollInProgress, 1) != 0) return;
             try
             {
                 var hosts = await _hostRepo.GetHostsAsync();
@@ -1603,6 +1608,16 @@ namespace Viewer
             catch (Exception ex)
             {
                 Console.WriteLine($"[Poll] Error polling hosts: {ex.Message}");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _pollInProgress, 0);
+                if (_pollTimer != null)
+                {
+                    _pollTimer.Interval = DateTime.UtcNow < _fastPollingUntil
+                        ? TimeSpan.FromSeconds(2)
+                        : TimeSpan.FromSeconds(10);
+                }
             }
         }
 
@@ -1695,9 +1710,11 @@ namespace Viewer
                     // 최초 로드
                     await PollHostsFromSupabaseAsync();
 
-                    // 10초마다 폴링 타이머 (DispatcherTimer 사용으로 스레드 안정성 확보)
-                    _pollTimer = new System.Windows.Threading.DispatcherTimer();
-                    _pollTimer.Interval = TimeSpan.FromSeconds(10);
+                    // Discover newly signed-in clients quickly, then return to a low-cost interval.
+                    _pollTimer = new System.Windows.Threading.DispatcherTimer
+                    {
+                        Interval = TimeSpan.FromSeconds(2),
+                    };
                     _pollTimer.Tick += async (s, ev) => await PollHostsFromSupabaseAsync();
                     _pollTimer.Start();
                 }

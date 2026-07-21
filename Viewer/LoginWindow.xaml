@@ -1,76 +1,76 @@
-﻿<Window x:Class="Viewer.LoginWindow"
+<Window x:Class="Viewer.LoginWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Comote Manager 로그인"
-        Width="460" Height="590"
+        Title="Comote Manager"
+        Width="410" Height="510"
         WindowStartupLocation="CenterScreen"
         ResizeMode="NoResize"
-        Background="#0B1220"
-        Foreground="#F8FAFC"
+        Background="#F7F7F5"
+        Foreground="#1C1C1A"
         FontFamily="Segoe UI, Malgun Gothic">
-    <Grid>
+    <Window.Resources>
+        <Style TargetType="TextBox">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="Foreground" Value="#1C1C1A"/>
+            <Setter Property="BorderBrush" Value="#D6D6D1"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="11,9"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style TargetType="PasswordBox">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="Foreground" Value="#1C1C1A"/>
+            <Setter Property="BorderBrush" Value="#D6D6D1"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="11,9"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+    </Window.Resources>
+    <Grid Margin="38,30,38,28">
         <Grid.RowDefinitions>
-            <RowDefinition Height="7"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="26"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
-        <Border Background="#38BDF8"/>
-        <Grid Grid.Row="1" Margin="42,30,42,34">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="28"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="20"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-            <StackPanel>
-                <StackPanel Orientation="Horizontal">
-                    <Border Width="46" Height="46" CornerRadius="14" Background="#22D3EE">
-                        <TextBlock Text="C" Foreground="#082F49" FontSize="22" FontWeight="Bold"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
-                    <StackPanel Margin="13,1,0,0">
-                        <TextBlock Text="Comote Manager" FontSize="19" FontWeight="SemiBold"/>
-                        <TextBlock Text="여러 PC를 한곳에서 안전하게 관리하세요"
-                                   Foreground="#94A3B8" FontSize="12" Margin="0,3,0,0"/>
-                    </StackPanel>
-                </StackPanel>
-            </StackPanel>
-            <Border Grid.Row="2" Padding="28" CornerRadius="20"
-                    Background="#111C2E" BorderBrush="#2A3952" BorderThickness="1">
-                <StackPanel>
-                    <TextBlock Text="계정 로그인" FontSize="25" FontWeight="Bold"/>
-                    <TextBlock Text="Client에 등록한 것과 동일한 계정을 입력하세요."
-                               Foreground="#94A3B8" FontSize="13" Margin="0,7,0,24"/>
-                    <TextBlock Text="ID" FontWeight="SemiBold" Foreground="#CBD5E1" Margin="0,0,0,8"/>
-                    <TextBox x:Name="txtEmail" Height="46" FontSize="14"
-                             AutomationProperties.Name="ID"
-                             ToolTip="Comote account ID"/>
-                    <TextBlock Text="비밀번호" FontWeight="SemiBold"
-                               Foreground="#CBD5E1" Margin="0,18,0,8"/>
-                    <PasswordBox x:Name="txtPassword" Height="46" FontSize="14"
-                                 AutomationProperties.Name="비밀번호"
-                                 ToolTip="8자 이상의 계정 비밀번호"/>
-                    <Grid Margin="0,14,0,0">
-                        <CheckBox x:Name="chkSave" Content="이 PC에 로그인 정보 저장"
-                                  Foreground="#CBD5E1" VerticalAlignment="Center"/>
-                        <Button Content="계정 만들기"
-                                Style="{StaticResource SecondaryButtonStyle}"
-                                HorizontalAlignment="Right" Padding="10,5" FontSize="12"
-                                Click="CreateAccount_Click"/>
-                    </Grid>
-                    <Border x:Name="statusPanel" Visibility="Collapsed"
-                            Background="#1E293B" CornerRadius="8" Padding="12,9"
-                            Margin="0,14,0,0">
-                        <TextBlock x:Name="lblStatus" Foreground="#FCA5A5"
-                                   FontSize="12" TextWrapping="Wrap"/>
-                    </Border>
-                    <Button x:Name="btnLogin" Content="로그인" Height="48"
-                            Margin="0,18,0,0" FontSize="15" IsDefault="True"
-                            Click="btnLogin_Click"/>
-                </StackPanel>
+
+        <StackPanel>
+            <TextBlock Text="Comote Manager" FontSize="25" FontWeight="SemiBold"/>
+            <TextBlock Text="같은 계정의 PC가 자동으로 표시됩니다."
+                       Margin="0,8,0,0" Foreground="#62625D" FontSize="13"/>
+        </StackPanel>
+
+        <StackPanel Grid.Row="2">
+            <TextBlock Text="아이디 또는 이메일" Foreground="#494945" Margin="0,0,0,7"/>
+            <TextBox x:Name="txtEmail" Height="44" FontSize="14"
+                     AutomationProperties.Name="아이디 또는 이메일"/>
+
+            <TextBlock Text="비밀번호" Foreground="#494945" Margin="0,18,0,7"/>
+            <PasswordBox x:Name="txtPassword" Height="44" FontSize="14"
+                         AutomationProperties.Name="비밀번호"/>
+
+            <Grid Margin="0,14,0,0">
+                <CheckBox x:Name="chkSave" Content="로그인 정보 저장"
+                          Foreground="#494945" VerticalAlignment="Center"/>
+                <Button Content="계정 만들기" HorizontalAlignment="Right"
+                        Padding="8,4" Background="Transparent" BorderThickness="0"
+                        Foreground="#234984" Cursor="Hand" Click="CreateAccount_Click"/>
+            </Grid>
+
+            <Border x:Name="statusPanel" Visibility="Collapsed"
+                    Background="#ECECE8" Padding="11,8" Margin="0,14,0,0">
+                <TextBlock x:Name="lblStatus" Foreground="#B02626"
+                           FontSize="12" TextWrapping="Wrap"/>
             </Border>
-            <TextBlock Grid.Row="4" Text="Comote Remote Fleet · Preview 13"
-                       Foreground="#64748B" FontSize="11" HorizontalAlignment="Center"/>
-        </Grid>
+
+            <Button x:Name="btnLogin" Content="로그인" Height="44"
+                    Margin="0,18,0,0" Background="#1F2937" Foreground="White"
+                    BorderThickness="0" FontSize="14" FontWeight="SemiBold"
+                    Cursor="Hand" IsDefault="True" Click="btnLogin_Click"/>
+        </StackPanel>
+
+        <TextBlock Grid.Row="3" Text="VPN 주소나 별도 접속 암호가 필요하지 않습니다."
+                   VerticalAlignment="Bottom" HorizontalAlignment="Center"
+                   Foreground="#7A7A74" FontSize="11"/>
     </Grid>
 </Window>

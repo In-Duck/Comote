@@ -5,9 +5,9 @@
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
     <StartupObject>Viewer.Program</StartupObject>
-    <AssemblyVersion>1.6.0.13</AssemblyVersion>
-    <FileVersion>1.6.0.13</FileVersion>
-    <Version>1.6.0-preview.13</Version>
+    <AssemblyVersion>1.6.0.14</AssemblyVersion>
+    <FileVersion>1.6.0.14</FileVersion>
+    <Version>1.6.0-preview.14</Version>
     <ApplicationIcon>Kymote.ico</ApplicationIcon>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
@@ -25,6 +25,8 @@
 
   <ItemGroup>
     <Resource Include="Kymote.ico" />
+    <Compile Include="..\Shared\AccountIdentity.cs" Link="AccountIdentity.cs" />
+    <Compile Include="..\Shared\IceServerConfiguration.cs" Link="IceServerConfiguration.cs" />
   </ItemGroup>
 
   <!-- FFmpeg DLL을 EXE에 임베디드 (단일 파일 배포용) -->

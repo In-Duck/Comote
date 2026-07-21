@@ -7,9 +7,9 @@
     <CETCompat>false</CETCompat>
     <UseWindowsForms>true</UseWindowsForms>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <AssemblyVersion>1.6.0.13</AssemblyVersion>
-    <FileVersion>1.6.0.13</FileVersion>
-    <Version>1.6.0-preview.13</Version>
+    <AssemblyVersion>1.6.0.14</AssemblyVersion>
+    <FileVersion>1.6.0.14</FileVersion>
+    <Version>1.6.0-preview.14</Version>
     <ApplicationIcon>Kymote.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
@@ -30,6 +30,8 @@
 
   <ItemGroup>
     <Resource Include="Kymote.ico" />
+    <Compile Include="..\Shared\AccountIdentity.cs" Link="AccountIdentity.cs" />
+    <Compile Include="..\Shared\IceServerConfiguration.cs" Link="IceServerConfiguration.cs" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,4 +1,4 @@
-name: Release Preview 13
+name: Release Preview 14
 
 on:
   push:
@@ -28,12 +28,12 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive `
-            -Path artifacts/Comote-1.6.0-preview.13/Manager/* `
-            -DestinationPath artifacts/ComoteManager-1.6.0-preview.13-win-x64.zip `
+            -Path artifacts/Comote-1.6.0-preview.14/Manager/* `
+            -DestinationPath artifacts/ComoteManager-1.6.0-preview.14-win-x64.zip `
             -CompressionLevel Optimal
           Compress-Archive `
-            -Path artifacts/Comote-1.6.0-preview.13/Client/* `
-            -DestinationPath artifacts/ComoteClient-1.6.0-preview.13-win-x64.zip `
+            -Path artifacts/Comote-1.6.0-preview.14/Client/* `
+            -DestinationPath artifacts/ComoteClient-1.6.0-preview.14-win-x64.zip `
             -CompressionLevel Optimal
 
       - name: Publish GitHub Release
@@ -43,16 +43,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $assets = @(
-            "artifacts/ComoteManager-1.6.0-preview.13-win-x64.zip",
-            "artifacts/ComoteClient-1.6.0-preview.13-win-x64.zip",
-            "artifacts/Comote-1.6.0-preview.13-win-x64.zip"
+            "artifacts/ComoteManager-1.6.0-preview.14-win-x64.zip",
+            "artifacts/ComoteClient-1.6.0-preview.14-win-x64.zip",
+            "artifacts/Comote-1.6.0-preview.14-win-x64.zip"
           )
 
-          if (gh release view "v1.6.0-preview.13" 2>$null) {
-            gh release upload "v1.6.0-preview.13" $assets --clobber
+          if (gh release view "v1.6.0-preview.14" 2>$null) {
+            gh release upload "v1.6.0-preview.14" $assets --clobber
           } else {
-            gh release create "v1.6.0-preview.13" $assets `
+            gh release create "v1.6.0-preview.14" $assets `
               --target "${{ github.sha }}" `
-              --title "Comote 1.6.0 Preview 13" `
+              --title "Comote 1.6.0 Preview 14" `
               --notes "Uses the official signed FakerInput v0.1.1 package with pinned SHA-256 verification, safe SendInput fallback, bounded verified file transfer, and hardened input cleanup."
           }

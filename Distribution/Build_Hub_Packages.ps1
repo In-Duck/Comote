@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$version = "1.6.0-preview.13"
+$version = "1.6.0-preview.14"
 $artifacts = Join-Path $root "artifacts"
 $stage = Join-Path $artifacts "Comote-$version"
 $managerOut = Join-Path $stage "Manager"
@@ -71,12 +71,9 @@ Rename-Item -LiteralPath (Join-Path $managerOut "Viewer.exe") `
 Rename-Item -LiteralPath (Join-Path $clientOut "Host.exe") `
     -NewName "ComoteClient.exe"
 
+
 Copy-Item -LiteralPath `
-    (Join-Path $root "Distribution\Open_Comote_Manager_Hub_Port_45820.cmd") `
-    -Destination `
-    (Join-Path $managerOut "Open Manager Hub Firewall as Administrator.cmd")
-Copy-Item -LiteralPath `
-    (Join-Path $root "docs\HUB_CONNECTION_TEST_GUIDE.md") `
+    (Join-Path $root "docs\ACCOUNT_CONNECTION_GUIDE.md") `
     -Destination (Join-Path $stage "README.md")
 
 Copy-Item -LiteralPath `
@@ -105,7 +102,7 @@ Compress-Archive `
     -CompressionLevel Optimal
 
 $updateManifest = [ordered]@{
-    version = "1.6.0.13"
+    version = "1.6.0.14"
     client_package_url = "REPLACE_WITH_HTTPS_PACKAGE_URL"
     client_package_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash
 }

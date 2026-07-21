@@ -20,7 +20,7 @@ namespace Host
         // 소켓 고갈 방지를 위해 static HttpClient 사용 (앱 수명 동안 재사용)
         private static readonly HttpClient _httpClient = new HttpClient();
 
-        private Pusher _pusher;
+        private Pusher _pusher = null!;
         private string _appKey;
         private string _cluster;
         private string _hostId;
@@ -40,7 +40,7 @@ namespace Host
         private int _signalingReconnectStarted;
         private ScreenCapture? _capture;
 
-        public event Action<string, object> OnSignalReceived;
+        public event Action<string, object>? OnSignalReceived;
 
         public SignalingClient(string appKey, string cluster, string webAuthUrl, string accessToken,
             string hostId, string? hostName = null, string? resolution = null,
@@ -68,6 +68,11 @@ namespace Host
 
         public async Task ConnectAsync()
         {
+            if (HasHeartbeatConfiguration())
+            {
+                // Register ownership before Pusher authorizes private-control-{hostId}.
+                await SendHeartbeatAsync();
+            }
             StartHeartbeat();
 
             try
@@ -117,19 +122,23 @@ namespace Host
             privateChannel.Bind("signal", (PusherEvent eventData) =>
             {
                 try {
-                    var data = JsonConvert.DeserializeObject<dynamic>(eventData.Data);
-                    string from = data.from;
-                    object signal = data.signal;
-                    OnSignalReceived?.Invoke(from, signal);
+                    var data = Newtonsoft.Json.Linq.JObject.Parse(eventData.Data);
+                    var from = data.Value<string>("from");
+                    var signal = data["signal"]?.ToObject<object>();
+                    if (!string.IsNullOrWhiteSpace(from) && signal != null)
+                        OnSignalReceived?.Invoke(from, signal);
                 } catch(Exception ex) { Console.WriteLine("[Signaling] Signal parse error: " + ex.Message); }
             });
         }
 
+        private bool HasHeartbeatConfiguration() =>
+            !string.IsNullOrWhiteSpace(_supabaseUrl) &&
+            !string.IsNullOrWhiteSpace(_supabaseKey) &&
+            !string.IsNullOrWhiteSpace(_userId);
+
         private void StartHeartbeat()
         {
-            if (string.IsNullOrWhiteSpace(_supabaseUrl) ||
-                string.IsNullOrWhiteSpace(_supabaseKey) ||
-                string.IsNullOrWhiteSpace(_userId))
+            if (!HasHeartbeatConfiguration())
             {
                 Console.WriteLine(
                     "[Heartbeat] Supabase configuration is incomplete; " +
@@ -140,7 +149,7 @@ namespace Host
             if (Interlocked.Exchange(ref _heartbeatStarted, 1) != 0) return;
 
             _ = RunHeartbeatLoopAsync(_lifetimeCts.Token);
-            Console.WriteLine("[Heartbeat] Host registration started (30s interval)");
+            Console.WriteLine("[Heartbeat] Host registration started (20s interval)");
         }
 
         private void StartSignalingReconnectLoop()
@@ -183,8 +192,7 @@ namespace Host
         {
             try
             {
-                await SendHeartbeatAsync();
-                using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+                using var timer = new PeriodicTimer(TimeSpan.FromSeconds(20));
                 while (await timer.WaitForNextTickAsync(cancellationToken))
                 {
                     await SendHeartbeatAsync();

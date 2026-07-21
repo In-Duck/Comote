@@ -98,33 +98,30 @@ namespace Host
             var (accessToken, userId, userEmail) = auth.Value;
             Console.WriteLine($"[Auth] Authenticated: {userEmail}");
 
-            string hostName;
-            string? password;
-            int adapterIndex;
-            int outputIndex;
-            InputBackendMode inputBackendMode;
+            var hostName = appSettings.DefaultHostName ?? Environment.MachineName;
+            string? password = null;
+            var adapterIndex = 0;
+            var outputIndex = 0;
+            var inputBackendMode = appSettings.InputBackendMode;
+            var showAdvancedSetup = !isService && Array.Exists(
+                args,
+                argument => argument.Equals("--setup", StringComparison.OrdinalIgnoreCase));
 
-            if (isService)
+            if (showAdvancedSetup)
             {
-                hostName = appSettings.DefaultHostName ?? Environment.MachineName;
-                password = appSettings.DefaultPassword;
-                adapterIndex = 0;
-                outputIndex = 0;
-                inputBackendMode = appSettings.InputBackendMode;
-            }
-            else
-            {
-                using var setupForm = new SetupForm(
-                    appSettings.InputBackendMode);
+                using var setupForm = new SetupForm(appSettings.InputBackendMode);
                 if (setupForm.ShowDialog() != DialogResult.OK) return;
                 hostName = setupForm.HostName;
-                password = setupForm.Password;
                 adapterIndex = setupForm.SelectedAdapterIndex;
                 outputIndex = setupForm.SelectedOutputIndex;
                 inputBackendMode = setupForm.SelectedInputBackendMode;
+                appSettings.DefaultHostName = hostName;
                 appSettings.InputBackendMode = inputBackendMode;
                 appSettings.Save();
             }
+
+            Console.WriteLine(
+                "[Host] Cloud account mode enabled; no VPN address or connection password is required.");
 
             Console.OutputEncoding = Encoding.UTF8;
             var ffmpegPath = FFmpegExtractor.ExtractFFmpeg();
@@ -133,7 +130,7 @@ namespace Host
             var hostId = ResolveHostId(appSettings);
             Console.WriteLine($"[Host] ID: {hostId}");
 
-            var capture = new ScreenCapture(adapterIndex, outputIndex);
+            using var capture = new ScreenCapture(adapterIndex, outputIndex);
             var resolution = $"{capture.Width}x{capture.Height}";
             var signaling = new SignalingClient(
                 appSettings.Pusher.AppKey,
@@ -148,7 +145,7 @@ namespace Host
                 userId);
             var inputBackend = InputBackendFactory.Create(
                 inputBackendMode, capture);
-            var webRtc = new WebRTCManager(
+            using var webRtc = new WebRTCManager(
                 capture, password, inputBackend);
 
             signaling.OnSignalReceived +=
@@ -158,6 +155,9 @@ namespace Host
 
             await signaling.ConnectAsync();
             signaling.StartThumbnailReporting(capture);
+            using var tray = isService
+                ? null
+                : CloudClientTrayIcon.Start(hostName, inputBackendMode);
 
             await Task.Delay(Timeout.InfiniteTimeSpan);
         }

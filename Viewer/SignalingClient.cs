@@ -22,7 +22,7 @@ namespace Viewer
         private string _webAuthUrl;
         private string _accessToken;
 
-        public event Action<string, object> OnSignalReceived;
+        public event Action<string, object>? OnSignalReceived;
 
         public string ViewerId => _viewerId;
 
@@ -66,10 +66,11 @@ namespace Viewer
             myChannel.Bind("signal", (PusherEvent eventData) =>
             {
                 try {
-                    var data = JsonConvert.DeserializeObject<dynamic>(eventData.Data);
-                    string from = data.from;
-                    object signal = data.signal;
-                    OnSignalReceived?.Invoke(from, signal);
+                    var data = Newtonsoft.Json.Linq.JObject.Parse(eventData.Data);
+                    var from = data.Value<string>("from");
+                    var signal = data["signal"]?.ToObject<object>();
+                    if (!string.IsNullOrWhiteSpace(from) && signal != null)
+                        OnSignalReceived?.Invoke(from, signal);
                 } catch(Exception ex) { Console.WriteLine("[Signaling] Signal parse error: " + ex.Message); }
             });
 

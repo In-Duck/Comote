@@ -16,6 +16,7 @@ using NAudio.Wave;
 using Concentus.Structs;
 using Concentus.Enums;
 
+using Comote.Shared;
 namespace Viewer
 {
     public class VideoReceiver : IDisposable
@@ -86,23 +87,7 @@ namespace Viewer
             _pendingIceCandidates.Clear();
             var config = new RTCConfiguration
             {
-                iceServers = new List<RTCIceServer>
-                {
-                    new RTCIceServer { urls = "stun:stun.l.google.com:19302" },
-                    new RTCIceServer { urls = "stun:openrelay.metered.ca:80" },
-                    new RTCIceServer
-                    {
-                        urls = "turn:openrelay.metered.ca:80",
-                        username = "openrelayproject",
-                        credential = "openrelayproject"
-                    },
-                    new RTCIceServer
-                    {
-                        urls = "turn:openrelay.metered.ca:443?transport=tcp",
-                        username = "openrelayproject",
-                        credential = "openrelayproject"
-                    }
-                }
+                iceServers = IceServerConfiguration.Create()
             };
 
             _peerConnection = new RTCPeerConnection(config);
