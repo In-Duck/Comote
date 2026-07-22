@@ -1,4 +1,4 @@
-name: Release Preview 18
+name: Validate Preview Packages
 
 on:
   push:
@@ -24,36 +24,55 @@ jobs:
         shell: pwsh
         run: ./Distribution/Build_Hub_Packages.ps1
 
-      - name: Create separate download packages
+      - name: Resolve release metadata
+        id: release_metadata
         shell: pwsh
         run: |
-          Compress-Archive `
-            -Path artifacts/Comote-1.6.0-preview.18/Manager/* `
-            -DestinationPath artifacts/ComoteManager-1.6.0-preview.18-win-x64.zip `
-            -CompressionLevel Optimal
-          Compress-Archive `
-            -Path artifacts/Comote-1.6.0-preview.18/Client/* `
-            -DestinationPath artifacts/ComoteClient-1.6.0-preview.18-win-x64.zip `
-            -CompressionLevel Optimal
+          [xml]$project = Get-Content Host/Host.csproj
+          $version = [string]$project.Project.PropertyGroup.Version
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Host project version is missing."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Verify release packages
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.release_metadata.outputs.version }}
+        run: |
+          $assets = @(
+            "artifacts/ComoteManager-$env:VERSION-win-x64.zip",
+            "artifacts/ComoteClient-$env:VERSION-win-x64.zip",
+            "artifacts/Comote-$env:VERSION-win-x64.zip"
+          )
+          foreach ($asset in $assets) {
+            if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) {
+              throw "Release package is missing: $asset"
+            }
+            $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $asset
+            Write-Host "$($hash.Hash)  $asset"
+          }
 
       - name: Publish GitHub Release
-        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/agent/complete-comote-prototype'
+        if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release_metadata.outputs.version }}
         run: |
           $assets = @(
-            "artifacts/ComoteManager-1.6.0-preview.18-win-x64.zip",
-            "artifacts/ComoteClient-1.6.0-preview.18-win-x64.zip",
-            "artifacts/Comote-1.6.0-preview.18-win-x64.zip"
+            "artifacts/ComoteManager-$env:VERSION-win-x64.zip",
+            "artifacts/ComoteClient-$env:VERSION-win-x64.zip",
+            "artifacts/Comote-$env:VERSION-win-x64.zip"
           )
+          $tag = "v$env:VERSION"
 
-          if (gh release view "v1.6.0-preview.18" 2>$null) {
-            gh release upload "v1.6.0-preview.18" $assets --clobber
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag $assets --clobber
           } else {
-            gh release create "v1.6.0-preview.18" $assets `
+            gh release create $tag $assets `
               --target "${{ github.sha }}" `
-              --title "Comote 1.6.0 Preview 18" `
+              --title "Comote $env:VERSION" `
               --prerelease `
-              --notes "Fixes FakerInput detection on 64-bit Windows by reading SP_DEVICE_INTERFACE_DETAIL_DATA.DevicePath from its correct 4-byte offset while retaining the architecture-specific cbSize. Separately detects the official FakerInput root interface so diagnostics distinguish a loaded root driver from a missing HID control collection. Includes the signed FakerInput v0.1.1 installer. Virtual input compatibility with every game or anti-cheat is not guaranteed."
+              --generate-notes
           }
