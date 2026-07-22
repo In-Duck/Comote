@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -40,6 +41,11 @@ namespace Viewer
         private Timer? _statsTimer;
         private volatile bool _presentationActive;
         private volatile bool _thumbnailStreaming;
+        private MonitoringProfile _thumbnailProfile =
+            MonitoringProfile.CreateAutomatic(100);
+        private readonly object _audioSync = new();
+        private PendingVideoFrame? _pendingThumbnailFrame;
+        private int _thumbnailRenderScheduled;
 
         /// <summary>최근 1초간 디코딩된 FPS</summary>
         public int CurrentFps { get; private set; }
@@ -98,56 +104,6 @@ namespace Viewer
             _decoder = new FFmpegVideoEncoder();
 
             // Concentus Opus 디코더 초기화 (48kHz, 스테레오)
-            _opusDecoder = new OpusDecoder(48000, 2);
-            Console.WriteLine("[Audio] Opus decoder initialized: 48000Hz, 2ch");
-
-            // 오디오 재생기 초기화 (Opus 48kHz, 스테레오)
-            // 오디오 재생기 초기화 (Opus 48kHz, 스테레오)
-            _waveProvider = new BufferedWaveProvider(new WaveFormat(48000, 16, 2))
-            {
-                BufferDuration = TimeSpan.FromSeconds(3), // 버퍼 여유 확보 (3초)
-                DiscardOnBufferOverflow = true
-            };
-
-            // [Stability] Smart Buffering Logic (Drift Correction)
-            // _waveProvider의 버퍼가 너무 쌓이면(지연 발생) 일부를 버려서 최신 상태 유지
-            Task.Run(async () =>
-            {
-                // [Stability] Smart Buffering Logic
-                while (_peerConnection != null && _peerConnection.connectionState == RTCPeerConnectionState.connected)
-                {
-                    if (_waveProvider != null && _waveProvider.BufferedDuration.TotalMilliseconds > 1000)
-                    {
-                        // 1초 이상 지연 시 0.5초 분량 삭제 (Catch-up)
-                        _waveProvider.ClearBuffer();
-                        Console.WriteLine("[Audio] Buffer too large (>1000ms). Cleared to catch up.");
-                    }
-                    await Task.Delay(1000);
-                }
-            });
-
-            // [Fix] WaveOutEvent 대신 WasapiOut 사용 (지연 시간/안정성 개선)
-            // 지연 시간 50ms, Shared 모드
-            try
-            {
-                var wasapiOut = new NAudio.Wave.WasapiOut(
-                    NAudio.CoreAudioApi.AudioClientShareMode.Shared, 50);
-                wasapiOut.Init(_waveProvider);
-                wasapiOut.Play();
-                _waveOut = wasapiOut;
-                Console.WriteLine("[Audio] Initialized WasapiOut (50ms latency)");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[Audio] WasapiOut failed ({ex.Message}), falling back to WaveOutEvent");
-                var waveOut = new WaveOutEvent { DesiredLatency = 100 }; // 100ms
-                waveOut.Init(_waveProvider);
-                waveOut.Play();
-                _waveOut = waveOut;
-            }
-
-            // H.264 수신 전용 트랙 추가
-            // 비디오 수신 트랙 추가 (H.264, H.265, AV1)
             var supportedFormats = new List<VideoFormat>
             {
                 new VideoFormat(VideoCodecsEnum.H265, 100, 90000, null),
@@ -237,7 +193,9 @@ namespace Viewer
 
                         // Concentus로 Opus 디코딩 (20ms = 960 samples per channel, 스테레오 = 1920)
                         short[] pcmOutput = new short[960 * 2];
-                        int decodedSamples = _opusDecoder!.Decode(rtpPacket.Payload, 0, rtpPacket.Payload.Length, pcmOutput, 0, 960, false);
+                        var decoder = _opusDecoder;
+                        if (decoder == null) return;
+                        int decodedSamples = decoder.Decode(rtpPacket.Payload, 0, rtpPacket.Payload.Length, pcmOutput, 0, 960, false);
 
                         if (decodedSamples > 0 && _waveProvider != null)
                         {
@@ -264,25 +222,60 @@ namespace Viewer
 
         private void RenderFrame(VideoSample decoded)
         {
+            var width = (int)decoded.Width;
+            var height = (int)decoded.Height;
+            if (_presentationActive)
+            {
+                RenderFrameOnUi(width, height, decoded.Sample);
+                return;
+            }
+
+            // Ignore the initial full-resolution frames while the Host is
+            // switching into its negotiated monitoring profile.
+            if (width > 640 || height > 360) return;
+            var sample = decoded.Sample.ToArray();
+            Interlocked.Exchange(
+                ref _pendingThumbnailFrame,
+                new PendingVideoFrame(width, height, sample));
+            if (Interlocked.CompareExchange(
+                    ref _thumbnailRenderScheduled, 1, 0) != 0)
+                return;
+
+            Application.Current?.Dispatcher.BeginInvoke(
+                RenderLatestThumbnailFrame);
+        }
+
+        private void RenderLatestThumbnailFrame()
+        {
+            while (true)
+            {
+                var frame = Interlocked.Exchange(
+                    ref _pendingThumbnailFrame, null);
+                if (frame != null)
+                    RenderFrameOnUi(
+                        frame.Width,
+                        frame.Height,
+                        frame.Sample);
+
+                Interlocked.Exchange(ref _thumbnailRenderScheduled, 0);
+                if (Volatile.Read(ref _pendingThumbnailFrame) == null ||
+                    Interlocked.CompareExchange(
+                        ref _thumbnailRenderScheduled, 1, 0) != 0)
+                    return;
+            }
+        }
+
+        private void RenderFrameOnUi(int width, int height, byte[] sample)
+        {
             try
             {
-                int width = (int)decoded.Width;
-                int height = (int)decoded.Height;
-                byte[] sample = decoded.Sample;
-                int stride = width * 3;
-
-                if (_frameCount % 30 == 1)
+                void Render()
                 {
-                    Console.WriteLine($"[VideoReceiver] SUCCESS: Decoded {width}x{height}, sample={sample.Length} bytes");
-                }
-
-                Application.Current?.Dispatcher.Invoke(() =>
-                {
+                    var stride = width * 3;
                     if (VideoBitmap == null ||
                         VideoBitmap.PixelWidth != width ||
                         VideoBitmap.PixelHeight != height)
                     {
-                        Console.WriteLine($"[VideoReceiver] Creating bitmap: {width}x{height}");
                         VideoBitmap = new WriteableBitmap(
                             width, height, 96, 96,
                             PixelFormats.Rgb24, null);
@@ -291,35 +284,45 @@ namespace Viewer
                     VideoBitmap.Lock();
                     try
                     {
-                        int bmpStride = VideoBitmap.BackBufferStride;
-                        int copyStride = Math.Min(stride, bmpStride);
-
-                        for (int y = 0; y < height; y++)
+                        var copyStride = Math.Min(
+                            stride, VideoBitmap.BackBufferStride);
+                        for (var y = 0; y < height; y++)
                         {
-                            int srcOffset = y * stride;
-                            IntPtr dstPtr = VideoBitmap.BackBuffer + (y * bmpStride);
-
-                            if (srcOffset + copyStride <= sample.Length)
-                            {
-                                Marshal.Copy(sample, srcOffset, dstPtr, copyStride);
-                            }
+                            var sourceOffset = y * stride;
+                            if (sourceOffset + copyStride > sample.Length)
+                                break;
+                            Marshal.Copy(
+                                sample,
+                                sourceOffset,
+                                VideoBitmap.BackBuffer +
+                                    y * VideoBitmap.BackBufferStride,
+                                copyStride);
                         }
-
-                        VideoBitmap.AddDirtyRect(new Int32Rect(0, 0, width, height));
+                        VideoBitmap.AddDirtyRect(
+                            new Int32Rect(0, 0, width, height));
                     }
                     finally
                     {
                         VideoBitmap.Unlock();
                     }
-
                     OnFrameReady?.Invoke();
-                });
+                }
+
+                var dispatcher = Application.Current?.Dispatcher;
+                if (dispatcher == null || dispatcher.CheckAccess()) Render();
+                else dispatcher.Invoke(Render);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[VideoReceiver] Frame render error: {ex}");
+                Console.WriteLine(
+                    $"[VideoReceiver] Frame render error: {ex.Message}");
             }
         }
+
+        private sealed record PendingVideoFrame(
+            int Width,
+            int Height,
+            byte[] Sample);
 
         // ===========================================
         // FPS/RTT 통계 보고
@@ -603,14 +606,18 @@ namespace Viewer
         public void SetPresentationActive(bool active)
         {
             _presentationActive = active;
+            if (active)
+                Interlocked.Exchange(ref _pendingThumbnailFrame, null);
             try
             {
                 if (active)
+                {
+                    EnsureAudioPlayback();
                     _waveOut?.Play();
+                }
                 else
                 {
-                    _waveOut?.Pause();
-                    _waveProvider?.ClearBuffer();
+                    ReleaseAudioPlayback();
                 }
             }
             catch (Exception ex)
@@ -621,10 +628,15 @@ namespace Viewer
             ApplyPresentationSettings();
         }
 
-        public void SetThumbnailStreaming(bool active)
+        public void SetThumbnailStreaming(
+            bool active,
+            MonitoringProfile? profile = null)
         {
-            if (_thumbnailStreaming == active) return;
+            var nextProfile = profile ?? _thumbnailProfile;
+            if (_thumbnailStreaming == active &&
+                _thumbnailProfile.Equals(nextProfile)) return;
             _thumbnailStreaming = active;
+            _thumbnailProfile = nextProfile;
             ApplyPresentationSettings();
         }
 
@@ -633,7 +645,13 @@ namespace Viewer
             if (!InputChannelReady) return;
             if (!_presentationActive)
             {
-                SendSettings(_thumbnailStreaming ? 2 : 0, 0);
+                if (_thumbnailStreaming)
+                    SendSettings(
+                        _thumbnailProfile.FramesPerSecond,
+                        0,
+                        _thumbnailProfile);
+                else
+                    SendSettings(0, 0);
                 return;
             }
 
@@ -654,15 +672,73 @@ namespace Viewer
                 Console.WriteLine($"[VideoReceiver] Failed to apply presentation settings: {ex.Message}");
             }
         }
-        public void SendSettings(int fps, int qualityLevel)
+        public void SendSettings(
+            int fps,
+            int qualityLevel,
+            MonitoringProfile? profile = null)
         {
             if (_inputChannel?.readyState == RTCDataChannelState.open)
             {
-                // MSG_SETTINGS_UPDATE (0x07)
-                // Format: [Type][FPS][QualityLevel]
-                byte[] msg = new byte[] { 0x07, (byte)fps, (byte)qualityLevel };
+                byte[] msg = profile == null ? new byte[3] : new byte[11];
+                msg[0] = 0x07;
+                msg[1] = (byte)Math.Clamp(fps, 0, 60);
+                msg[2] = (byte)Math.Clamp(qualityLevel, 0, 3);
+                if (profile is { } monitoring)
+                {
+                    BinaryPrimitives.WriteUInt16BigEndian(
+                        msg.AsSpan(3, 2), monitoring.Width);
+                    BinaryPrimitives.WriteUInt16BigEndian(
+                        msg.AsSpan(5, 2), monitoring.Height);
+                    BinaryPrimitives.WriteInt32BigEndian(
+                        msg.AsSpan(7, 4),
+                        monitoring.TargetBitrateBitsPerSecond);
+                }
                 _inputChannel.send(msg);
-                Console.WriteLine($"[Settings] Sent update: FPS={fps}, Quality={qualityLevel}");
+                Console.WriteLine(
+                    $"[Settings] FPS={fps}, Quality={qualityLevel}, " +
+                    $"Size={profile?.Width ?? 0}x{profile?.Height ?? 0}");
+            }
+        }
+
+        private void EnsureAudioPlayback()
+        {
+            lock (_audioSync)
+            {
+                if (_waveOut != null) return;
+                _opusDecoder = new OpusDecoder(48000, 2);
+                _waveProvider = new BufferedWaveProvider(
+                    new WaveFormat(48000, 16, 2))
+                {
+                    BufferDuration = TimeSpan.FromSeconds(1),
+                    DiscardOnBufferOverflow = true,
+                };
+                try
+                {
+                    var wasapiOut = new NAudio.Wave.WasapiOut(
+                        NAudio.CoreAudioApi.AudioClientShareMode.Shared, 50);
+                    wasapiOut.Init(_waveProvider);
+                    _waveOut = wasapiOut;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(
+                        $"[Audio] WASAPI unavailable ({ex.Message}); using WaveOut.");
+                    var waveOut = new WaveOutEvent { DesiredLatency = 100 };
+                    waveOut.Init(_waveProvider);
+                    _waveOut = waveOut;
+                }
+            }
+        }
+
+        private void ReleaseAudioPlayback()
+        {
+            lock (_audioSync)
+            {
+                try { _waveOut?.Stop(); } catch { }
+                _waveOut?.Dispose();
+                _waveOut = null;
+                _waveProvider = null;
+                _opusDecoder = null;
             }
         }
 
@@ -739,8 +815,7 @@ namespace Viewer
             _inputChannel?.close();
             _peerConnection?.Close("disposed");
             _decoder?.Dispose();
-            _waveOut?.Stop();
-            _waveOut?.Dispose();
+            ReleaseAudioPlayback();
         }
 
     }

@@ -1,5 +1,6 @@
 using System;
 using System.Text;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Threading;
@@ -65,6 +66,14 @@ namespace Host
         private int _viewerFps = 0;
         private int _targetFps = EncoderConfig.DefaultFps;
         private volatile bool _standby;
+        private int _requestedEncoderWidth;
+        private int _requestedEncoderHeight;
+        private long _requestedEncoderBitrate = 6_000_000;
+        private int _encoderSettingsVersion;
+        private int _appliedEncoderSettingsVersion;
+        private int _encoderWidth;
+        private int _encoderHeight;
+        private byte[]? _scaledFrameBuffer;
         private string? _password;
 
         // Encoder Configuration Class
@@ -123,6 +132,7 @@ namespace Host
                 _peerConnection.close();
                 _peerConnection.Dispose();
                 _peerConnection = null;
+                _videoEncoder?.Dispose();
                 _videoEncoder = null;
             }
 
@@ -135,7 +145,6 @@ namespace Host
             };
 
             _peerConnection = new RTCPeerConnection(config);
-            _videoEncoder = new FFmpegVideoEncoder();
 
             // 오디오 트랙 설정 (Opus 48kHz)
             var audioFormat = new AudioFormat(111, "opus", 48000);
@@ -144,29 +153,21 @@ namespace Host
 
             // 최적의 비디오 인코더 선택 (GPU 가속 우선)
             // 최적의 비디오 인코더 선택 (HEVC > H264 > Software)
-            var (codecId, encoderName, encoderOpts) = SelectBestVideoEncoder();
-            Console.WriteLine($"[Video] Selected Encoder: {encoderName} (CodecID: {codecId})");
-
-            try
-            {
-                _videoEncoder.SetCodec(codecId, encoderName, encoderOpts);
-                _videoEncoder.InitialiseEncoder(codecId, _capture.Width, _capture.Height, 20);
-
-                // 비트레이트 설정 (H.265/AV1은 압축 효율이 좋으므로 H.264와 동일 비트레이트에서도 화질 우수)
-                _videoEncoder?.SetBitrate(6_000_000, null, null, null);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[Video] Failed to init {encoderName}: {ex.Message}. Falling back to libx264.");
-                var fallbackOpts = new System.Collections.Generic.Dictionary<string, string> {
-                    { "preset", "ultrafast" },
-                    { "tune", "zerolatency" },
-                    { "crf", "18" }
-                };
-                _videoEncoder.SetCodec(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, "libx264", fallbackOpts);
-                _videoEncoder.InitialiseEncoder(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, _capture.Width, _capture.Height, 20);
-            }
-
+            var (configuredEncoder, codecId, encoderName) =
+                CreateVideoEncoder(
+                    _capture.Width,
+                    _capture.Height,
+                    6_000_000);
+            _videoEncoder = configuredEncoder;
+            _encoderWidth = _capture.Width;
+            _encoderHeight = _capture.Height;
+            _requestedEncoderWidth = _capture.Width;
+            _requestedEncoderHeight = _capture.Height;
+            _requestedEncoderBitrate = 6_000_000;
+            _appliedEncoderSettingsVersion = _encoderSettingsVersion;
+            Console.WriteLine(
+                $"[Video] Encoder ready: {encoderName}, " +
+                $"{_encoderWidth}x{_encoderHeight}");
             // SDP에 전송 코덱 명시 (SIPSorcery의 VideoFormat은 H264, VP8, VP9 만 기본 지원하므로 커스텀 페이로드 필요할 수 있음)
             // 현재 SIPSorceryMedia.FFmpeg 구현상 VideoCodecsEnum으로 변환하는 과정이 있어 H264 외 사용이 까다로움.
             // 일단 AV_CODEC_ID_HEVC로 인코딩하더라도 트랙 포맷은 H264라고 속이거나(위험), Custom VideoFormat을 써야 함.
@@ -213,7 +214,6 @@ namespace Host
                     _isStreaming = true;
                     _ = Task.Run(SendVideoLoop);
                     StartClipboardMonitoring();
-                    StartAudioCapture();
                 }
                 else if (state == RTCPeerConnectionState.failed ||
                          state == RTCPeerConnectionState.closed)
@@ -294,7 +294,7 @@ namespace Host
                 case 0x07: // MSG_SETTINGS_UPDATE
                     if (data.Length >= 3)
                     {
-                        UpdateEncoderSettings(data[1], data[2]);
+                        UpdateEncoderSettings(data);
                     }
                     break;
                 case MSG_PING:
@@ -349,42 +349,64 @@ namespace Host
             }
         }
 
-        private void UpdateEncoderSettings(int fps, int qualityLevel)
+        private void UpdateEncoderSettings(byte[] data)
         {
             try
             {
-                // Quality Multiplier
-                // 3: 20Mbps (Ultra), 2: 10Mbps (High/Default), 1: 5Mbps (Medium), 0: 2Mbps (Low)
-                long baseBitrate = 10_000_000;
-                long targetBitrate = baseBitrate;
-
-                switch (qualityLevel)
+                var fps = Math.Clamp((int)data[1], 0, 60);
+                var qualityLevel = Math.Clamp((int)data[2], 0, 3);
+                long targetBitrate = qualityLevel switch
                 {
-                    case 3: targetBitrate = EncoderConfig.BitrateUltra; break;
-                    case 2: targetBitrate = EncoderConfig.BitrateHigh; break;
-                    case 1: targetBitrate = EncoderConfig.BitrateMedium; break;
-                    case 0: targetBitrate = EncoderConfig.BitrateLow; break;
+                    3 => EncoderConfig.BitrateUltra,
+                    2 => EncoderConfig.BitrateHigh,
+                    1 => EncoderConfig.BitrateMedium,
+                    _ => EncoderConfig.BitrateLow,
+                };
+                var width = _capture.Width;
+                var height = _capture.Height;
+                if (data.Length is > 3 and < 11)
+                    throw new InvalidDataException(
+                        "Encoder settings message is truncated.");
+                if (data.Length >= 11)
+                {
+                    width = BinaryPrimitives.ReadUInt16BigEndian(
+                        data.AsSpan(3, 2));
+                    height = BinaryPrimitives.ReadUInt16BigEndian(
+                        data.AsSpan(5, 2));
+                    targetBitrate = BinaryPrimitives.ReadInt32BigEndian(
+                        data.AsSpan(7, 4));
+                    if (width is < 64 or > 3840 ||
+                        height is < 36 or > 2160 ||
+                        (width & 1) != 0 || (height & 1) != 0 ||
+                        targetBitrate is < 50_000 or > 20_000_000)
+                        throw new InvalidDataException(
+                            "Monitoring encoder profile is outside safe limits.");
                 }
-                if (fps is > 0 and <= 2)
+                else if (fps is > 0 and <= 2)
+                {
                     targetBitrate = Math.Min(targetBitrate, 350_000);
+                }
 
-                Console.WriteLine($"[WebRTC] Updating Encoder Settings -> FPS: {fps}, Bitrate: {targetBitrate / 1_000_000.0:F1}Mbps");
-
-                // 비트레이트 적용
-                _videoEncoder?.SetBitrate(targetBitrate, null, null, null);
-
-                // FPS 적용 (ChangeFps 메서드가 인코더 래퍼에 있다고 가정하거나, 캡처 루프 딜레이 조절 필요)
-                // 만약 ChangeFps가 없다면 InitialiseEncoder 재호출은 너무 무거움.
-                // 여기서는 비트레이트 변경에 집중하고 FPS는 인코더 내부 제어 혹은 캡처 딜레이 변수(_targetFps)를 둬야 함.
-                // 일단 _targetFps 변수를 필드로 만들고 캡처 루프에서 참조하도록 수정 필요.
+                Volatile.Write(ref _requestedEncoderWidth, width);
+                Volatile.Write(ref _requestedEncoderHeight, height);
+                Volatile.Write(ref _requestedEncoderBitrate, targetBitrate);
+                Interlocked.Increment(ref _encoderSettingsVersion);
                 _standby = fps == 0;
                 _targetFps = fps;
+                if (data.Length >= 11 || fps == 0)
+                    StopAudioCapture();
+                else
+                    StartAudioCapture();
+                Console.WriteLine(
+                    $"[WebRTC] Encoder profile requested: " +
+                    $"{width}x{height}, {fps} FPS, " +
+                    $"{targetBitrate / 1000} Kbps");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[WebRTC] Failed to update settings: {ex.Message}");
+                Console.WriteLine(
+                    $"[WebRTC] Rejected encoder settings: {ex.Message}");
             }
-
         }
 
         private void HandleFileMessage(RTCDataChannel dc, byte[] data)
@@ -548,6 +570,128 @@ namespace Host
             }
         }
 
+        private (FFmpegVideoEncoder Encoder, FFmpeg.AutoGen.AVCodecID CodecId, string Name)
+            CreateVideoEncoder(
+                int width,
+                int height,
+                long bitrate,
+                bool allowHardware = true)
+        {
+            var (codecId, encoderName, encoderOptions) = allowHardware
+                ? SelectBestVideoEncoder()
+                : (
+                    FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264,
+                    "libx264",
+                    new Dictionary<string, string>
+                    {
+                        ["preset"] = "ultrafast",
+                        ["tune"] = "zerolatency",
+                        ["rc-lookahead"] = "0",
+                        ["bf"] = "0",
+                    });
+            var encoder = new FFmpegVideoEncoder();
+            try
+            {
+                encoder.SetCodec(codecId, encoderName, encoderOptions);
+                encoder.InitialiseEncoder(codecId, width, height, 20);
+                encoder.SetBitrate(bitrate, null, null, null);
+                return (encoder, codecId, encoderName);
+            }
+            catch (Exception ex)
+            {
+                encoder.Dispose();
+                Console.WriteLine(
+                    $"[Video] {encoderName} unavailable ({ex.Message}); " +
+                    "using software H.264.");
+                var fallback = new FFmpegVideoEncoder();
+                var fallbackOptions = new Dictionary<string, string>
+                {
+                    ["preset"] = "ultrafast",
+                    ["tune"] = "zerolatency",
+                    ["rc-lookahead"] = "0",
+                    ["bf"] = "0",
+                };
+                fallback.SetCodec(
+                    FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264,
+                    "libx264",
+                    fallbackOptions);
+                fallback.InitialiseEncoder(
+                    FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264,
+                    width,
+                    height,
+                    20);
+                fallback.SetBitrate(bitrate, null, null, null);
+                return (
+                    fallback,
+                    FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264,
+                    "libx264");
+            }
+        }
+
+        private void ApplyPendingEncoderSettings()
+        {
+            var version = Volatile.Read(ref _encoderSettingsVersion);
+            if (version == _appliedEncoderSettingsVersion) return;
+
+            var width = Volatile.Read(ref _requestedEncoderWidth);
+            var height = Volatile.Read(ref _requestedEncoderHeight);
+            var bitrate = Volatile.Read(ref _requestedEncoderBitrate);
+            if (width != _encoderWidth || height != _encoderHeight)
+            {
+                var (replacement, _, name) =
+                    CreateVideoEncoder(width, height, bitrate);
+                var previous = _videoEncoder;
+                _videoEncoder = replacement;
+                replacement.ForceKeyFrame();
+                _frameCount = 0;
+                _encoderWidth = width;
+                _encoderHeight = height;
+                _scaledFrameBuffer = null;
+                previous?.Dispose();
+                Console.WriteLine(
+                    $"[Video] Switched encoder profile: " +
+                    $"{name}, {width}x{height}, {bitrate / 1000} Kbps");
+            }
+            else
+            {
+                _videoEncoder?.SetBitrate(bitrate, null, null, null);
+            }
+            _appliedEncoderSettingsVersion = version;
+        }
+
+        private unsafe byte[] ScaleFrame(
+            byte[] source,
+            int sourceWidth,
+            int sourceHeight,
+            int targetWidth,
+            int targetHeight)
+        {
+            var required = checked(targetWidth * targetHeight * 4);
+            if (_scaledFrameBuffer == null ||
+                _scaledFrameBuffer.Length != required)
+                _scaledFrameBuffer = new byte[required];
+
+            fixed (byte* sourceBytes = source)
+            fixed (byte* targetBytes = _scaledFrameBuffer)
+            {
+                var sourcePixels = (uint*)sourceBytes;
+                var targetPixels = (uint*)targetBytes;
+                for (var targetY = 0; targetY < targetHeight; targetY++)
+                {
+                    var sourceY = targetY * sourceHeight / targetHeight;
+                    var sourceRow = sourceY * sourceWidth;
+                    var targetRow = targetY * targetWidth;
+                    for (var targetX = 0; targetX < targetWidth; targetX++)
+                    {
+                        var sourceX = targetX * sourceWidth / targetWidth;
+                        targetPixels[targetRow + targetX] =
+                            sourcePixels[sourceRow + sourceX];
+                    }
+                }
+            }
+            return _scaledFrameBuffer;
+        }
+
         private unsafe (FFmpeg.AutoGen.AVCodecID, string, System.Collections.Generic.Dictionary<string, string>) SelectBestVideoEncoder()
         {
             // 우선순위: AV1 (최고 효율) > HEVC (고효율) > H264 (호환성)
@@ -601,6 +745,7 @@ namespace Host
 
         private void StartAudioCapture()
         {
+            if (_audioCapture != null) return;
             try
             {
                 _audioCapture = new WasapiLoopbackCapture();
@@ -712,6 +857,7 @@ namespace Host
                         loopWatch.Restart();
                         continue;
                     }
+                    ApplyPendingEncoderSettings();
                     var rawFrame = _capture.Capture();
                     if (rawFrame != null)
                     {
@@ -722,12 +868,26 @@ namespace Host
                     {
                         try
                         {
-                            // 1) BGRA 프레임을 H.264로 인코딩
-                            if (_frameCount % 30 == 0) _videoEncoder.ForceKeyFrame();
+                            var encoder = _videoEncoder;
+                            if (encoder == null) break;
+                            var frameWidth = _encoderWidth;
+                            var frameHeight = _encoderHeight;
+                            var frame = frameWidth == _capture.Width &&
+                                        frameHeight == _capture.Height
+                                ? _lastRawFrame
+                                : ScaleFrame(
+                                    _lastRawFrame,
+                                    _capture.Width,
+                                    _capture.Height,
+                                    frameWidth,
+                                    frameHeight);
+                            var keyFrameInterval = Math.Max(1, _targetFps * 2);
+                            if (_frameCount % keyFrameInterval == 0)
+                                encoder.ForceKeyFrame();
 
-                            var encodedFrame = _videoEncoder.EncodeVideo(
-                                _capture.Width, _capture.Height,
-                                _lastRawFrame,
+                            var encodedFrame = encoder.EncodeVideo(
+                                frameWidth, frameHeight,
+                                frame,
                                 VideoPixelFormatsEnum.Bgra,
                                 VideoCodecsEnum.H264);
 
@@ -735,7 +895,8 @@ namespace Host
                             {
                                 encodeFailCount = 0; // 성공 시 카운터 리셋
                                 // 2) 인코딩된 데이터를 WebRTC로 전송
-                                uint duration = 3000;
+                                uint duration = (uint)Math.Max(
+                                    1, 90_000 / Math.Max(1, _targetFps));
                                 try
                                 {
                                     _peerConnection.SendVideo(duration, encodedFrame);
@@ -769,22 +930,26 @@ namespace Host
                                 Console.WriteLine("[Video] GPU encoder failed 3 times. Switching to libx264 (software)...");
                                 try
                                 {
-                                    _videoEncoder = new FFmpegVideoEncoder();
-                                    var fallbackOpts = new System.Collections.Generic.Dictionary<string, string>
-                                    {
-                                        { "preset", "ultrafast" },
-                                        { "tune", "zerolatency" },
-                                        { "rc-lookahead", "0" },
-                                        { "bf", "0" }
-                                    };
-                                    _videoEncoder.SetCodec(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, "libx264", fallbackOpts);
-                                    _videoEncoder.InitialiseEncoder(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, _capture.Width, _capture.Height, 20);
-                                    Console.WriteLine("[Video] Successfully switched to libx264!");
+                                    var bitrate = Volatile.Read(
+                                        ref _requestedEncoderBitrate);
+                                    var (replacement, _, name) =
+                                        CreateVideoEncoder(
+                                            _encoderWidth,
+                                            _encoderHeight,
+                                            bitrate,
+                                            allowHardware: false);
+                                    var failed = _videoEncoder;
+                                    _videoEncoder = replacement;
+                                    failed?.Dispose();
+                                    Console.WriteLine(
+                                        $"[Video] Encoder recovered with {name}.");
                                     encodeFailCount = 0;
                                 }
                                 catch (Exception fallbackEx)
                                 {
-                                    Console.WriteLine($"[Video] Fallback to libx264 also failed: {fallbackEx.Message}");
+                                    Console.WriteLine(
+                                        $"[Video] Encoder recovery failed: " +
+                                        fallbackEx.Message);
                                 }
                             }
                         }

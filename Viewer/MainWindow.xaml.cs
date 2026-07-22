@@ -25,7 +25,7 @@ namespace Viewer
         private SignalingClient? _signaling;
         private VideoReceiver? _receiver;
         private readonly ConcurrentDictionary<string, VideoReceiver> _receiverPool = new(StringComparer.OrdinalIgnoreCase);
-        private const int MaxWarmConnections = 4;
+        private const int MaxWarmConnections = 150;
         private string? _connectedHostId;
         private KeyboardHook? _keyboardHook;
         private Timer? _statsDisplayTimer;
@@ -838,8 +838,12 @@ namespace Viewer
         private void UpdateLiveThumbnailStreaming()
         {
             var enabled = ShouldStreamLiveThumbnails();
+            var onlineCount = Math.Max(
+                1,
+                _persistentHosts.Values.Count(host => host.IsOnline));
+            var profile = MonitoringProfile.CreateAutomatic(onlineCount);
             foreach (var receiver in _receiverPool.Values)
-                receiver.SetThumbnailStreaming(enabled);
+                receiver.SetThumbnailStreaming(enabled, profile);
         }
         private void UpdateLobbyUI(List<HostInfo> hosts)
         {
@@ -1685,6 +1689,11 @@ namespace Viewer
                         }
                     }
 
+                    var onlineHostIds = _persistentHosts.Values
+                        .Where(host => host.IsOnline)
+                        .Select(host => host.Id)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    PruneInactiveReceivers(onlineHostIds);
                     UpdateLobbyUI(_persistentHosts.Values.ToList());
                     _ = WarmOnlineHostsAsync(
                         _persistentHosts.Values
@@ -1870,6 +1879,27 @@ namespace Viewer
             }
         }
 
+        private void PruneInactiveReceivers(
+            IReadOnlySet<string> onlineHostIds)
+        {
+            foreach (var entry in _receiverPool.ToArray())
+            {
+                if (onlineHostIds.Contains(entry.Key) ||
+                    string.Equals(
+                        entry.Key,
+                        _connectedHostId,
+                        StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (_receiverPool.TryRemove(entry.Key, out var receiver))
+                {
+                    receiver.SetPresentationActive(false);
+                    DisposeReceiverSafely(receiver);
+                    Console.WriteLine(
+                        $"[UI] Released inactive preview: {entry.Key}");
+                }
+            }
+        }
         private async Task WarmOnlineHostsAsync(IEnumerable<string> hostIds)
         {
             if (_signaling == null || _isHubMode || _isLanMode) return;
@@ -1887,6 +1917,7 @@ namespace Viewer
                     receiver = InitializeReceiver(hostId, presentationActive: false);
                     await receiver.StartAsync(null);
                     Console.WriteLine($"[UI] Warm connection requested for {hostId}");
+                    await Task.Delay(25);
                 }
                 catch (Exception ex)
                 {
@@ -1935,7 +1966,11 @@ namespace Viewer
             if (presentationActive)
                 _receiver = receiver;
             receiver.SetPresentationActive(presentationActive);
-            receiver.SetThumbnailStreaming(ShouldStreamLiveThumbnails());
+            receiver.SetThumbnailStreaming(
+                ShouldStreamLiveThumbnails(),
+                MonitoringProfile.CreateAutomatic(Math.Max(
+                    1,
+                    _persistentHosts.Values.Count(host => host.IsOnline))));
 
             // 시그널 전송
             receiver.OnSignalReady += async (signal) =>
