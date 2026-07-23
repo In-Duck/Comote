@@ -1,6 +1,8 @@
 const downloads = {
-  manager: "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.23/ComoteManager-1.6.0-preview.23-win-x64.zip",
-  client: "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.23/ComoteClient-1.6.0-preview.23-win-x64.zip",
+  manager:
+    "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.25/ComoteManager-1.6.0-preview.25-win-x64.zip",
+  client:
+    "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.25/ComoteClient-1.6.0-preview.25-win-x64.zip",
 } as const;
 
 export async function GET(
@@ -11,5 +13,8 @@ export async function GET(
   if (!(kind in downloads)) {
     return Response.json({ error: "Unknown package" }, { status: 404 });
   }
-  return Response.redirect(downloads[kind as keyof typeof downloads], 307);
+  return Response.redirect(
+    downloads[kind as keyof typeof downloads],
+    307,
+  );
 }
