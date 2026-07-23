@@ -134,6 +134,10 @@ namespace Host
 
         private async Task<(string AccessToken, string RefreshToken, string UserId)?> SignInWithEmailPassword(string accountId, string password)
         {
+            var normalizedAccount = accountId.Trim();
+            if (!normalizedAccount.Contains('@'))
+                return await SignInWithAccountId(normalizedAccount, password);
+
             if (!AccountIdentity.TryNormalize(accountId, out var accountEmail)) return null;
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
             var url = $"{_settings.SupabaseUrl.TrimEnd('/')}/auth/v1/token?grant_type=password";
@@ -147,6 +151,30 @@ namespace Host
             var refreshToken = json.Value<string>("refresh_token");
             var userId = json["user"]?.Value<string>("id");
             return !string.IsNullOrWhiteSpace(accessToken) && !string.IsNullOrWhiteSpace(refreshToken) && !string.IsNullOrWhiteSpace(userId)
+                ? (accessToken, refreshToken, userId) : null;
+        }
+
+        private static async Task<(string AccessToken, string RefreshToken, string UserId)?> SignInWithAccountId(
+            string accountId,
+            string password)
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            using var content = new StringContent(
+                JsonConvert.SerializeObject(new { account = accountId, password }),
+                Encoding.UTF8,
+                "application/json");
+            using var response = await client.PostAsync(
+                "https://comote-remote.dopum54.chatgpt.site/api/auth/desktop-login",
+                content);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+            var accessToken = json.Value<string>("access_token");
+            var refreshToken = json.Value<string>("refresh_token");
+            var userId = json.Value<string>("user_id");
+            return !string.IsNullOrWhiteSpace(accessToken) &&
+                   !string.IsNullOrWhiteSpace(refreshToken) &&
+                   !string.IsNullOrWhiteSpace(userId)
                 ? (accessToken, refreshToken, userId) : null;
         }
     }
