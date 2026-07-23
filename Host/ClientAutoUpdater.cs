@@ -179,14 +179,32 @@ namespace Host
         {
             var scriptPath = Path.Combine(
                 Path.GetTempPath(), $"comote-apply-update-{Guid.NewGuid():N}.cmd");
+            var backupDirectory = Path.Combine(stageDirectory, "backup");
+            var executableName = Path.GetFileName(executablePath);
             var restartCommandLine = string.Join(" ", restartArguments.Select(Quote));
             var script = string.Join(Environment.NewLine, new[]
             {
                 "@echo off", "setlocal", "timeout /t 2 /nobreak >nul",
+                $"mkdir {Quote(backupDirectory)} >nul 2>&1",
+                $"robocopy {Quote(installDirectory)} {Quote(backupDirectory)} /E /R:3 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
+                "if errorlevel 8 goto failed",
                 $"robocopy {Quote(packageRoot)} {Quote(installDirectory)} /E /R:10 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
-                "if errorlevel 8 exit /b %errorlevel%",
+                "if errorlevel 8 goto rollback",
                 $"start \"\" {Quote(executablePath)} {restartCommandLine}",
-                $"rmdir /s /q {Quote(stageDirectory)}", "del /q \"%~f0\"",
+                "timeout /t 20 /nobreak >nul",
+                $"tasklist.exe /FI \"IMAGENAME eq {executableName}\" | find /I {Quote(executableName)} >nul",
+                "if errorlevel 1 goto rollback",
+                "goto cleanup",
+                ":rollback",
+                $"taskkill.exe /F /IM {Quote(executableName)} >nul 2>&1",
+                $"robocopy {Quote(backupDirectory)} {Quote(installDirectory)} /MIR /R:3 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
+                $"start \"\" {Quote(executablePath)} {restartCommandLine}",
+                "goto cleanup",
+                ":failed",
+                "exit /b 8",
+                ":cleanup",
+                $"rmdir /s /q {Quote(stageDirectory)}",
+                "del /q \"%~f0\"",
             });
             File.WriteAllText(scriptPath, script);
             Process.Start(new ProcessStartInfo
@@ -207,21 +225,31 @@ namespace Host
         {
             var taskName = $"ComoteUpdate-{Guid.NewGuid():N}";
             var scriptPath = Path.Combine(stageDirectory, "apply-service-update.cmd");
-            var backupPath = executablePath + ".update-backup";
+            var backupDirectory = Path.Combine(stageDirectory, "backup");
             var script = string.Join(Environment.NewLine, new[]
             {
                 "@echo off", "setlocal",
                 $"sc.exe stop {SecureDesktopService.ServiceName} >nul 2>&1",
                 $":waitstop", $"sc.exe query {SecureDesktopService.ServiceName} | find \"STOPPED\" >nul",
                 "if errorlevel 1 (timeout /t 1 /nobreak >nul & goto waitstop)",
-                $"copy /y {Quote(executablePath)} {Quote(backupPath)} >nul",
+                $"mkdir {Quote(backupDirectory)} >nul 2>&1",
+                $"robocopy {Quote(installDirectory)} {Quote(backupDirectory)} /E /R:3 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
+                "if errorlevel 8 goto cleanup",
                 $"robocopy {Quote(packageRoot)} {Quote(installDirectory)} /E /R:10 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
-                "if errorlevel 8 goto rollback", $"sc.exe start {SecureDesktopService.ServiceName} >nul 2>&1",
-                $"del /q {Quote(backupPath)} >nul 2>&1", "goto cleanup",
-                ":rollback", $"copy /y {Quote(backupPath)} {Quote(executablePath)} >nul",
+                "if errorlevel 8 goto rollback",
                 $"sc.exe start {SecureDesktopService.ServiceName} >nul 2>&1",
-                ":cleanup", $"schtasks.exe /Delete /TN {Quote(taskName)} /F >nul 2>&1",
-                $"rmdir /s /q {Quote(stageDirectory)}", "exit /b 0",
+                "timeout /t 20 /nobreak >nul",
+                $"sc.exe query {SecureDesktopService.ServiceName} | find \"RUNNING\" >nul",
+                "if errorlevel 1 goto rollback",
+                "goto cleanup",
+                ":rollback",
+                $"sc.exe stop {SecureDesktopService.ServiceName} >nul 2>&1",
+                $"robocopy {Quote(backupDirectory)} {Quote(installDirectory)} /MIR /R:3 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
+                $"sc.exe start {SecureDesktopService.ServiceName} >nul 2>&1",
+                ":cleanup",
+                $"schtasks.exe /Delete /TN {Quote(taskName)} /F >nul 2>&1",
+                $"rmdir /s /q {Quote(stageDirectory)}",
+                "exit /b 0",
             });
             File.WriteAllText(scriptPath, script);
 

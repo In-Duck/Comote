@@ -12,6 +12,7 @@ using Newtonsoft.Json;
 using System.Text;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using Comote.Shared;
 
 namespace Host
 {
@@ -68,6 +69,10 @@ namespace Host
 
         public async Task ConnectAsync()
         {
+            await IceServerConfiguration.RefreshManagedCredentialsAsync(
+                _webAuthUrl,
+                _accessToken,
+                _lifetimeCts.Token);
             if (HasHeartbeatConfiguration())
             {
                 // Register ownership before Pusher authorizes private-control-{hostId}.
