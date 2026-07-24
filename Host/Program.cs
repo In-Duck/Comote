@@ -103,9 +103,13 @@ namespace Host
                 return;
             }
 
+            // Keep offline clients recoverable: update checks must run before
+            // authentication, signaling, and heartbeat startup.
+            if (await TryApplyStartupUpdateAsync(args))
+                return;
             var auth = isService
                 ? await AuthenticateServiceAsync(appSettings)
-                : AuthenticateInteractive(appSettings);
+                : await AuthenticateInteractiveAsync(appSettings);
             if (auth == null) return;
 
             var (accessToken, userId, userEmail) = auth.Value;
@@ -232,11 +236,72 @@ namespace Host
             await Task.Delay(Timeout.InfiniteTimeSpan);
         }
 
-        private static (string AccessToken, string UserId, string UserEmail)?
-            AuthenticateInteractive(AppSettings settings)
+        private static async Task<bool> TryApplyStartupUpdateAsync(
+            string[] restartArguments)
+        {
+            try
+            {
+                using var timeout =
+                    new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                var update = await ClientAutoUpdater.CheckForUpdateAsync(
+                    ProductUpdateSettings.ClientManifestUrl,
+                    timeout.Token);
+                if (update == null) return false;
+                return await ClientAutoUpdater.StageUpdateAsync(
+                    update,
+                    restartArguments);
+            }
+            catch (OperationCanceledException)
+            {
+                Console.WriteLine("[Updater] Startup update check timed out.");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[Updater] Startup update check failed: {ex.Message}");
+                return false;
+            }
+        }
+        private static async Task<(
+            string AccessToken,
+            string UserId,
+            string UserEmail)?> AuthenticateInteractiveAsync(
+            AppSettings settings)
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+
+            // Updates and ordinary restarts should remain unattended.
+            var storedSession = await AuthenticateServiceAsync(settings);
+            if (storedSession != null) return storedSession;
+
+            // Older installations may only have the DPAPI-protected account
+            // and password. Use them once to obtain a fresh refresh token.
+            if (UserCredentialStore.TryLoad(
+                    out var storedAccount,
+                    out var storedPassword))
+            {
+                try
+                {
+                    var result = await LoginForm.SignInWithEmailPassword(
+                        settings, storedAccount, storedPassword);
+                    if (result != null)
+                    {
+                        ServiceCredentialStore.Save(
+                            result.Value.RefreshToken);
+                        return (
+                            result.Value.AccessToken,
+                            result.Value.UserId,
+                            storedAccount);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(
+                        $"[Auth] Saved login could not be refreshed: {ex.Message}");
+                }
+            }
             using var loginForm = new LoginForm(settings);
             if (loginForm.ShowDialog() != DialogResult.OK) return null;
 

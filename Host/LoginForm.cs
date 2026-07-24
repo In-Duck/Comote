@@ -49,7 +49,7 @@ namespace Host
             _passwordBox.UseSystemPasswordChar = true;
             Controls.Add(_passwordBox);
 
-            _rememberBox = new CheckBox { Text = "로그인 정보 저장", Location = new Point(38, 275), AutoSize = true, BackColor = Color.Transparent, ForeColor = Color.FromArgb(73, 73, 68) };
+            _rememberBox = new CheckBox { Text = "로그인 정보 저장", Checked = true, Location = new Point(38, 275), AutoSize = true, BackColor = Color.Transparent, ForeColor = Color.FromArgb(73, 73, 68) };
             Controls.Add(_rememberBox);
             var accountLink = new LinkLabel { Text = "계정 만들기", Location = new Point(283, 275), AutoSize = true, LinkColor = Color.FromArgb(35, 73, 132), ActiveLinkColor = Color.FromArgb(23, 52, 94) };
             accountLink.LinkClicked += (_, _) => OpenAccountPage();
@@ -115,7 +115,7 @@ namespace Host
             ShowStatus("계정을 확인하고 있습니다.", false);
             try
             {
-                var result = await SignInWithEmailPassword(account, password);
+                var result = await SignInWithEmailPassword(_settings, account, password);
                 if (result == null) { ShowStatus("아이디 또는 비밀번호가 올바르지 않습니다.", true); return; }
                 AccessToken = result.Value.AccessToken;
                 RefreshToken = result.Value.RefreshToken;
@@ -132,7 +132,11 @@ namespace Host
             finally { _loginButton.Text = "로그인"; _loginButton.Enabled = true; }
         }
 
-        private async Task<(string AccessToken, string RefreshToken, string UserId)?> SignInWithEmailPassword(string accountId, string password)
+        internal static async Task<(
+            string AccessToken,
+            string RefreshToken,
+            string UserId)?> SignInWithEmailPassword(
+            AppSettings settings, string accountId, string password)
         {
             var normalizedAccount = accountId.Trim();
             if (!normalizedAccount.Contains('@'))
@@ -140,9 +144,9 @@ namespace Host
 
             if (!AccountIdentity.TryNormalize(accountId, out var accountEmail)) return null;
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-            var url = $"{_settings.SupabaseUrl.TrimEnd('/')}/auth/v1/token?grant_type=password";
+            var url = $"{settings.SupabaseUrl.TrimEnd('/')}/auth/v1/token?grant_type=password";
             using var content = new StringContent(JsonConvert.SerializeObject(new { email = accountEmail, password }), Encoding.UTF8, "application/json");
-            client.DefaultRequestHeaders.Add("apikey", _settings.SupabaseAnonKey);
+            client.DefaultRequestHeaders.Add("apikey", settings.SupabaseAnonKey);
             using var response = await client.PostAsync(url, content);
             var responseBody = await response.Content.ReadAsStringAsync();
             if (!response.IsSuccessStatusCode) { Console.WriteLine($"[Login] Supabase returned {response.StatusCode}"); return null; }

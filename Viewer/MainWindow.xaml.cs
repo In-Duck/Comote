@@ -175,7 +175,7 @@ namespace Viewer
             // [무인 업데이트] 시작 시 최신 버전 체크
             if (!_isDemoMode && !_isOfflineMode)
             {
-                _ = AutoUpdater.CheckAndApplyUpdate();
+                _ = ManagerAutoUpdater.CheckAndApplyAsync();
             }
             SourceInitialized += MainWindow_SourceInitialized;
             Loaded += MainWindow_Loaded;
@@ -239,6 +239,26 @@ namespace Viewer
                 Color = Color.FromRgb(56, 189, 248), BlurRadius = 10, ShadowDepth = 0, Opacity = 0.5 
             };
             menuPanel.Children.Add(logoBlock);
+
+            _managerUpdateButton = new Button
+            {
+                Content = $"v{ManagerAutoUpdater.CurrentVersion} · 업데이트",
+                Padding = new Thickness(10, 5, 10, 5),
+                Margin = new Thickness(16, 0, 0, 0),
+                FontSize = 12,
+                Cursor = Cursors.Hand,
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = new SolidColorBrush(Color.FromRgb(17, 28, 46)),
+                Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(71, 85, 105)),
+                BorderThickness = new Thickness(1),
+            };
+            _managerUpdateButton.Click +=
+                async (_, _) => await CheckManagerUpdateAsync();
+            WindowChrome.SetIsHitTestVisibleInChrome(
+                _managerUpdateButton,
+                true);
+            menuPanel.Children.Add(_managerUpdateButton);
 
             // ⚙ 설정 버튼 (우측 정렬)
             var settingsBtn = new Button
@@ -346,6 +366,7 @@ namespace Viewer
                 FontSize = 14,
                 FontFamily = new FontFamily("Segoe UI, Malgun Gothic")
             };
+            _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "마지막 응답", Binding = new Binding("LastSeenText"), Width = 105 });
             // 컬럼 정의 (한글화)
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "상태", Binding = new Binding("StatusText"), Width = 60 });
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "식별명", Binding = new Binding("Name"), Width = 150 });
@@ -889,6 +910,7 @@ namespace Viewer
                 {
                     StatusText = host.IsOnline ? "ON" : "OFF", // DataGrid에서는 심플하게
                     Name = host.Name,
+                    LastSeenText = FormatLastSeen(host.LastSeen),
                     Ip = host.Ip,
                     CpuText = $"{host.Cpu}%",
                     VersionText = host.HasClientUpdate
@@ -916,6 +938,23 @@ namespace Viewer
             _statusBarText.Text = onlineCount > 0 ? "접속 가능" : "대기 중";
         }
 
+        private static string FormatLastSeen(DateTime lastSeen)
+        {
+            if (lastSeen == DateTime.MinValue)
+                return "응답 없음";
+
+            var utc = lastSeen.Kind == DateTimeKind.Utc
+                ? lastSeen
+                : DateTime.SpecifyKind(lastSeen, DateTimeKind.Utc);
+            var elapsed = DateTime.UtcNow - utc;
+            if (elapsed < TimeSpan.Zero || elapsed < TimeSpan.FromMinutes(1))
+                return "방금";
+            if (elapsed < TimeSpan.FromHours(1))
+                return $"{Math.Max(1, (int)elapsed.TotalMinutes)}분 전";
+            if (elapsed < TimeSpan.FromDays(1))
+                return $"{Math.Max(1, (int)elapsed.TotalHours)}시간 전";
+            return $"{Math.Max(1, (int)elapsed.TotalDays)}일 전";
+        }
         private Border CreateHostCard(HostInfo host, int index)
         {
             // === 카드 스타일 Mono Vintage ===
@@ -2201,6 +2240,7 @@ namespace Viewer
     public class HostDisplayItem
     {
         public string StatusText { get; set; } = "";
+        public string LastSeenText { get; set; } = "";
         public string Name { get; set; } = "";
         public string Ip { get; set; } = "";
         public string CpuText { get; set; } = "";

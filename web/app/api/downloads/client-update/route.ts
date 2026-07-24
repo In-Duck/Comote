@@ -5,14 +5,14 @@ export const dynamic = "force-static";
 export async function GET() {
   return NextResponse.json(
     {
-      version: "1.6.0.26",
+      version: "1.6.0.27",
       client_package_url:
-        "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.26/ComoteClient-1.6.0-preview.26-win-x64.zip",
+        "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.27/ComoteClient-1.6.0-preview.27-win-x64.zip",
       client_package_sha256:
-        "4481A7FED470582A2509CC6BDD529D4F0A44A6A17C46F70D06ED4647BCE0D04A",
+        "96806C71E87932E99F8B772E1F93F0A905F711AB44120F2C6268948C6B8F86B3",
       minimum_version: "1.6.0.19",
       release_notes:
-        "Tray input controls, stable host ordering, and signaling readiness fixes.",
+        "Automatic login after updates, saved login by default, and online-state recovery.",
     },
     {
       headers: {
