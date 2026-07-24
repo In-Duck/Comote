@@ -24,6 +24,10 @@ jobs:
         shell: pwsh
         run: ./Distribution/Build_Hub_Packages.ps1
 
+      - name: Build small online installers
+        shell: pwsh
+        run: ./Installer/Build_Web_Installers.ps1 -UseLocalPackages
+
       - name: Resolve release metadata
         id: release_metadata
         shell: pwsh
@@ -43,7 +47,9 @@ jobs:
           $assets = @(
             "artifacts/ComoteManager-$env:VERSION-win-x64.zip",
             "artifacts/ComoteClient-$env:VERSION-win-x64.zip",
-            "artifacts/Comote-$env:VERSION-win-x64.zip"
+            "artifacts/Comote-$env:VERSION-win-x64.zip",
+            "artifacts/installers/ComoteManager_Setup.exe",
+            "artifacts/installers/ComoteClient_Setup.exe"
           )
           foreach ($asset in $assets) {
             if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) {
@@ -63,7 +69,9 @@ jobs:
           $assets = @(
             "artifacts/ComoteManager-$env:VERSION-win-x64.zip",
             "artifacts/ComoteClient-$env:VERSION-win-x64.zip",
-            "artifacts/Comote-$env:VERSION-win-x64.zip"
+            "artifacts/Comote-$env:VERSION-win-x64.zip",
+            "artifacts/installers/ComoteManager_Setup.exe",
+            "artifacts/installers/ComoteClient_Setup.exe"
           )
           $tag = "v$env:VERSION"
 
