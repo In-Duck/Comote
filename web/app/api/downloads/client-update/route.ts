@@ -9,10 +9,10 @@ export async function GET() {
       client_package_url:
         "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.26/ComoteClient-1.6.0-preview.26-win-x64.zip",
       client_package_sha256:
-        "AFB6E8EE806A2A76389E271C4D4DF7AC77C45442C5CB2B28C3A9D2A9204F2182",
+        "4481A7FED470582A2509CC6BDD529D4F0A44A6A17C46F70D06ED4647BCE0D04A",
       minimum_version: "1.6.0.19",
       release_notes:
-        "Managed TURN failover, distributed reconnect recovery, operations telemetry, and automatic update rollback.",
+        "Tray input controls, stable host ordering, and signaling readiness fixes.",
     },
     {
       headers: {

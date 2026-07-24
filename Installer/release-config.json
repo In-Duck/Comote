@@ -3,12 +3,12 @@
   "assembly_version": "1.6.0.26",
   "client": {
     "url": "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.26/ComoteClient-1.6.0-preview.26-win-x64.zip",
-    "sha256": "AFB6E8EE806A2A76389E271C4D4DF7AC77C45442C5CB2B28C3A9D2A9204F2182",
-    "bytes": 123998594
+    "sha256": "4481A7FED470582A2509CC6BDD529D4F0A44A6A17C46F70D06ED4647BCE0D04A",
+    "bytes": 120772335
   },
   "manager": {
     "url": "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.26/ComoteManager-1.6.0-preview.26-win-x64.zip",
-    "sha256": "16678E83BEF0EBAF3706AC036B43B5DA7C7717974A85464BA3FC49EB1724DF1E",
-    "bytes": 147111324
+    "sha256": "2A68C8E0FD796D9FA105DE3B2B4510573FD591DE38E8D2E4E0FE80BD24662D42",
+    "bytes": 143169174
   }
 }
