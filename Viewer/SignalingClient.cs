@@ -287,6 +287,7 @@ namespace Viewer
         public string Uptime { get; set; } = "N/A";
         public bool IsOnline { get; set; }
         public DateTime LastSeen { get; set; } = DateTime.MinValue;
+        public DateTime CreatedAt { get; set; } = DateTime.MaxValue;
         public string AgentVersion { get; set; } = "";
         public bool HasClientUpdate
         {

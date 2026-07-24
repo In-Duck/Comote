@@ -407,6 +407,7 @@ namespace Viewer
 
         private void EnsureHostOrder()
         {
+            MarkHostOrderCustomized();
             if (_settings.HostOrder.Count != _currentHosts.Count ||
                 _currentHosts.Any(
                     host => !_settings.HostOrder.Contains(host.Id)))

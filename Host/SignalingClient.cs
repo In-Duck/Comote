@@ -57,7 +57,7 @@ namespace Host
             _supabaseUrl = supabaseUrl ?? "";
             _supabaseKey = supabaseKey ?? "";
             _userId = userId ?? "";
-            
+
             // 시스템 정보 수집
             try
             {
@@ -76,7 +76,7 @@ namespace Host
             if (HasHeartbeatConfiguration())
             {
                 // Register ownership before Pusher authorizes private-control-{hostId}.
-                await SendHeartbeatAsync();
+                await SendHeartbeatAsync(advertiseOnline: false);
             }
             StartHeartbeat();
 
@@ -107,13 +107,16 @@ namespace Host
                 }
             });
 
-            _pusher.Connected += (s) => {
+            _pusher.Connected += (s) =>
+            {
                 Console.WriteLine("[Signaling] Pusher Connected (Private Channel Only)");
             };
-            _pusher.Error += (s, e) => {
+            _pusher.Error += (s, e) =>
+            {
                 Console.WriteLine($"[Signaling] Pusher Connection Error: {e.Message}");
             };
-            _pusher.ConnectionStateChanged += (s, state) => {
+            _pusher.ConnectionStateChanged += (s, state) =>
+            {
                 Console.WriteLine($"[Signaling] Connection State: {state}");
             };
 
@@ -121,19 +124,23 @@ namespace Host
 
             Console.WriteLine($"[Signaling] Subscribing to private-control-{_hostId}...");
             var privateChannel = await _pusher.SubscribeAsync($"private-control-{_hostId}");
-            privateChannel.Bind("pusher:subscription_succeeded", (PusherEvent eventData) => {
+            privateChannel.Bind("pusher:subscription_succeeded", (PusherEvent eventData) =>
+            {
                 Console.WriteLine($"[Signaling] Subscribed to private-control-{_hostId} successfully");
             });
             privateChannel.Bind("signal", (PusherEvent eventData) =>
             {
-                try {
+                try
+                {
                     var data = Newtonsoft.Json.Linq.JObject.Parse(eventData.Data);
                     var from = data.Value<string>("from");
                     var signal = data["signal"]?.ToObject<object>();
                     if (!string.IsNullOrWhiteSpace(from) && signal != null)
                         OnSignalReceived?.Invoke(from, signal);
-                } catch(Exception ex) { Console.WriteLine("[Signaling] Signal parse error: " + ex.Message); }
+                }
+                catch (Exception ex) { Console.WriteLine("[Signaling] Signal parse error: " + ex.Message); }
             });
+            await SendHeartbeatAsync(advertiseOnline: true);
         }
 
         private bool HasHeartbeatConfiguration() =>
@@ -200,7 +207,8 @@ namespace Host
                 using var timer = new PeriodicTimer(TimeSpan.FromSeconds(20));
                 while (await timer.WaitForNextTickAsync(cancellationToken))
                 {
-                    await SendHeartbeatAsync();
+                    await SendHeartbeatAsync(
+                        _pusher?.State == ConnectionState.Connected);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -213,7 +221,7 @@ namespace Host
         /// Supabase hosts 테이블에 시스템 정보 + last_seen을 UPSERT합니다.
         /// Presence 채널을 완전히 대체합니다.
         /// </summary>
-        private async Task SendHeartbeatAsync()
+        private async Task SendHeartbeatAsync(bool advertiseOnline)
         {
             try
             {
@@ -232,7 +240,10 @@ namespace Host
                     mac_address = (string?)((dynamic)info).mac_address ?? "",
                     agent_version = typeof(SignalingClient).Assembly
                         .GetName().Version?.ToString() ?? "unknown",
-                    last_seen = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+                    last_seen = (advertiseOnline
+                        ? DateTime.UtcNow
+                        : DateTime.UtcNow.AddMinutes(-5))
+                        .ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
                 };
 
                 var baseUrl = _supabaseUrl.TrimEnd('/');
@@ -427,16 +438,21 @@ namespace Host
 
             // MAC Address
             var mac = "";
-            try {
-                foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()) {
-                    if (nic.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up && 
-                        nic.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Loopback) {
+            try
+            {
+                foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (nic.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up &&
+                        nic.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Loopback)
+                    {
                         mac = nic.GetPhysicalAddress().ToString();
-                        if (!string.IsNullOrEmpty(mac)) {
+                        if (!string.IsNullOrEmpty(mac))
+                        {
                             // Format: XX:XX:XX:XX:XX:XX
                             var sb = new System.Text.StringBuilder();
-                            for(int i=0; i<mac.Length; i++) {
-                                if (i>0 && i%2==0) sb.Append(":");
+                            for (int i = 0; i < mac.Length; i++)
+                            {
+                                if (i > 0 && i % 2 == 0) sb.Append(":");
                                 sb.Append(mac[i]);
                             }
                             mac = sb.ToString();
@@ -444,7 +460,8 @@ namespace Host
                         }
                     }
                 }
-            } catch {}
+            }
+            catch { }
 
             return new
             {
@@ -480,7 +497,7 @@ namespace Host
             }
             catch (Exception ex)
             {
-                 Console.WriteLine($"[Signaling] SendSignal Error: {ex.Message}");
+                Console.WriteLine($"[Signaling] SendSignal Error: {ex.Message}");
             }
         }
     }

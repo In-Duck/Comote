@@ -992,6 +992,11 @@ namespace Host
                     // offer 수신 시에만 PeerConnection 재초기화 (재연결 지원)
                     if (type == RTCSdpType.offer)
                     {
+                        OnSignalReady?.Invoke(from, new
+                        {
+                            type = "comote-client-ready",
+                        });
+
                         // 비밀번호 검증
                         if (_password != null)
                         {

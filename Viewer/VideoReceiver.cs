@@ -80,6 +80,7 @@ namespace Viewer
 
         public RTCPeerConnectionState ConnectionState =>
             _peerConnection?.connectionState ?? RTCPeerConnectionState.closed;
+        public bool HasRemoteResponse { get; private set; }
 
         public VideoReceiver()
         {
@@ -395,6 +396,16 @@ namespace Viewer
             try
             {
                 var jobj = JObject.FromObject(signal);
+                if (jobj.ContainsKey("sdp") ||
+                    jobj.ContainsKey("ice") ||
+                    jobj.ContainsKey("rejected") ||
+                    string.Equals(
+                        jobj.Value<string>("type"),
+                        "comote-client-ready",
+                        StringComparison.OrdinalIgnoreCase))
+                    HasRemoteResponse = true;
+                if (jobj.Value<string>("type") == "comote-client-ready")
+                    return;
 
                 // Host가 비밀번호 불일치로 거절한 경우
                 if (jobj.ContainsKey("rejected"))
@@ -479,6 +490,7 @@ namespace Viewer
             _frameCount = 0;
             CurrentFps = 0;
             RttMs = -1;
+            HasRemoteResponse = false;
 
             InitializePeerConnection();
         }

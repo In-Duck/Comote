@@ -6,7 +6,7 @@ using Comote.Shared;
 
 namespace Host
 {
-    internal sealed class CloudClientTrayIcon : IDisposable
+    internal sealed partial class CloudClientTrayIcon : IDisposable
     {
         private readonly Thread _thread;
         private readonly ManualResetEventSlim _ready = new(false);
@@ -47,6 +47,7 @@ namespace Host
                     ? "입력 · 가상 HID"
                     : "입력 · SendInput") { Enabled = false });
             menu.Items.Add(new ToolStripSeparator());
+            AddInputControls(menu, inputMode);
 
             _updateItem = new ToolStripMenuItem(
                 $"업데이트 확인 · {ClientAutoUpdater.CurrentVersion}");
@@ -57,13 +58,19 @@ namespace Host
             if (!systemAgent)
             {
                 menu.Items.Add("고급 설정", null, (_, _) => RestartWithSetup());
-                menu.Items.Add("보안 화면 서비스 설치/복구", null, (_, _) => InstallSecureDesktopService());
+                if (!SecureDesktopService.IsInstalled())
+                {
+                    menu.Items.Add(
+                        "UAC·로그온 화면 지원 켜기",
+                        null,
+                        (_, _) => InstallSecureDesktopService());
+                }
                 menu.Items.Add("로그아웃", null, (_, _) => LogOut());
                 menu.Items.Add("종료", null, (_, _) => Environment.Exit(0));
             }
             else
             {
-                menu.Items.Add("서비스 다시 시작", null, (_, _) => SecureDesktopService.Restart());
+                menu.Items.Add("Client 다시 시작", null, (_, _) => Environment.Exit(0));
             }
 
             _context = new ApplicationContext();

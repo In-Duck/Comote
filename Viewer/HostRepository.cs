@@ -21,6 +21,9 @@ namespace Viewer
 
         [JsonProperty("last_seen")]
         public DateTime LastSeen { get; set; }
+        [JsonProperty("created_at")]
+        public DateTime CreatedAt { get; set; }
+
 
         [JsonProperty("ip")]
         public string Ip { get; set; } = "unknown";

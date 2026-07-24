@@ -871,6 +871,8 @@ namespace Viewer
                 _currentHosts = uniqueHosts;
             }
 
+            // Never move cards when heartbeat timestamps or online state change.
+            _currentHosts = BuildStableHostOrder(hosts);
             int onlineCount = 0;
 
             var displayList = new List<HostDisplayItem>();
@@ -1353,6 +1355,7 @@ namespace Viewer
 
         private void MoveHost(int direction)
         {
+            MarkHostOrderCustomized();
             if (_hostDataGrid.SelectedItem is HostDisplayItem item)
             {
                 var hostId = item.HostId;
@@ -1666,6 +1669,7 @@ namespace Viewer
                             existing.Hdd = h.Hdd ?? existing.Hdd;
                             existing.Uptime = h.Uptime ?? existing.Uptime;
                             existing.LastSeen = h.LastSeen;
+                            existing.CreatedAt = h.CreatedAt;
                             existing.AgentVersion = h.AgentVersion ?? "";
                             existing.ThumbnailUrl = h.ThumbnailUrl;
                         }
@@ -1684,6 +1688,7 @@ namespace Viewer
                                 Uptime = h.Uptime ?? "N/A",
                                 LastSeen = h.LastSeen,
                                 AgentVersion = h.AgentVersion ?? "",
+                                CreatedAt = h.CreatedAt,
                                 ThumbnailUrl = h.ThumbnailUrl
                             };
                         }
@@ -2116,8 +2121,11 @@ namespace Viewer
             {
                 Dispatcher.Invoke(() =>
                 {
-                    _statusText.Text =
-                        "\uC5F0\uACB0\uC774 \uC9C0\uC5F0\uB418\uACE0 \uC788\uC2B5\uB2C8\uB2E4. Client \uC0C1\uD0DC\uC640 TURN \uC124\uC815\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694.";
+                    _statusText.Text = !receiver.HasRemoteResponse
+                        ? "Client signaling is not responding. Check whether Client is running."
+                        : !IceServerConfiguration.HasManagedTurn
+                            ? "Client responded, but the direct route is blocked. TURN is required across restricted networks."
+                            : "Client responded, but the relay route is delayed. Comote will keep reconnecting.";
                     _statusText.Foreground = Brushes.OrangeRed;
                     _statusText.Visibility = Visibility.Visible;
                 });
