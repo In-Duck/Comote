@@ -5,13 +5,13 @@ export const dynamic = "force-static";
 export async function GET() {
   return NextResponse.json(
     {
-      version: "1.6.0.27",
+      version: "1.6.0.28",
       manager_setup_url:
-        "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.27/ComoteManager_Setup.exe",
+        "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.28/ComoteManager_Setup.exe",
       manager_setup_sha256:
-        "A0E5079BF55A3FE43F0D678BDA99BC3BFC477A495F5B91B4CA36174B62EE1D61",
+        "60760C6812ADEE28F7BBC02A8981B1F572D88FE3D2411B3C1C0CE66BCF41D5A3",
       release_notes:
-        "Manager update controls, Client automatic login, and online-state recovery.",
+        "Fleet-wide Client update controls with online and offline target reporting.",
     },
     {
       headers: {

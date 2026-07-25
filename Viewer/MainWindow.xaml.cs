@@ -260,6 +260,25 @@ namespace Viewer
                 true);
             menuPanel.Children.Add(_managerUpdateButton);
 
+            _fleetUpdateButton = new Button
+            {
+                Content = "전체 Client 업데이트",
+                Padding = new Thickness(10, 5, 10, 5),
+                Margin = new Thickness(8, 0, 0, 0),
+                FontSize = 12,
+                Cursor = Cursors.Hand,
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = new SolidColorBrush(Color.FromRgb(17, 28, 46)),
+                Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(71, 85, 105)),
+                BorderThickness = new Thickness(1),
+            };
+            _fleetUpdateButton.Click +=
+                async (_, _) => await RequestAllClientUpdatesAsync();
+            WindowChrome.SetIsHitTestVisibleInChrome(
+                _fleetUpdateButton,
+                true);
+            menuPanel.Children.Add(_fleetUpdateButton);
             // ⚙ 설정 버튼 (우측 정렬)
             var settingsBtn = new Button
             {
@@ -935,7 +954,16 @@ namespace Viewer
             UpdateThumbnailSelectionVisuals();
             _hostDataGrid.ItemsSource = displayList;
             _hostCountText.Text = $"PC {onlineCount}/{_currentHosts.Count} 온라인";
+            if (_fleetUpdateButton != null)
+            {
+                var updateCount = _currentHosts.Count(host =>
+                    host.HasClientUpdate && host.SupportsManagedUpdate);
+                _fleetUpdateButton.Content = updateCount > 0
+                    ? $"전체 Client 업데이트 · {updateCount}"
+                    : "전체 Client 최신";
+            }
             _statusBarText.Text = onlineCount > 0 ? "접속 가능" : "대기 중";
+            _ = DispatchPendingClientUpdatesAsync();
         }
 
         private static string FormatLastSeen(DateTime lastSeen)
@@ -1873,6 +1901,10 @@ namespace Viewer
                             _updateProgressBar.Visibility = ok
                                 ? Visibility.Visible
                                 : Visibility.Collapsed;
+                            if (ok)
+                                ClearPendingClientUpdates(new[] { from });
+                            else
+                                MarkPendingClientUpdateFailed(from);
                         });
                         if (ok)
                         {

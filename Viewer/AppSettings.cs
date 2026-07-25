@@ -19,6 +19,7 @@ namespace Viewer
         public double WindowHeight { get; set; } = 800;
         public List<string> HostOrder { get; set; } = new();
         public bool? HostOrderCustomized { get; set; }
+        public List<string> PendingClientUpdateHostIds { get; set; } = new();
 
         public string PusherAppKey { get; set; } = "50ef3c55ccd8c468f604";
         public string PusherCluster { get; set; } = "ap3";

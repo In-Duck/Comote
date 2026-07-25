@@ -83,6 +83,11 @@ namespace Viewer
                     : $"({updateTargets.Count}개) Client 업데이트",
                 updateTargets.Count > 0 && !_isDemoMode,
                 async (_, _) => await RequestClientUpdatesAsync(updateTargets));
+            AddMenuItem(
+                menu,
+                "등록된 전체 Client 업데이트",
+                _currentHosts.Count > 0 && !_isDemoMode,
+                async (_, _) => await RequestAllClientUpdatesAsync());
 
             AddMenuItem(
                 menu,
@@ -132,39 +137,7 @@ namespace Viewer
                     MessageBoxImage.Question) != MessageBoxResult.Yes)
                 return;
 
-            var sent = 0;
-            foreach (var host in targets)
-            {
-                try
-                {
-                    if (_isHubMode && _hubServer != null)
-                    {
-                        await _hubServer.SendCommandAsync(
-                            host.Id,
-                            "update",
-                            "Comote Client 업데이트",
-                            "",
-                            ProductUpdateSettings.ClientManifestUrl);
-                    }
-                    else if (_signaling != null)
-                    {
-                        await _signaling.SendSignalAsync(host.Id, new
-                        {
-                            type = "comote-command",
-                            action = "update",
-                        });
-                    }
-                    else
-                    {
-                        continue;
-                    }
-                    sent++;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[Updater] Request failed for {host.Name}: {ex.Message}");
-                }
-            }
+            var sent = await SendClientUpdateRequestsAsync(targets);
             _statusBarText.Text = $"Client 업데이트 요청 전송 · {sent}/{targets.Count}";
         }
         private static void AddMenuItem(
