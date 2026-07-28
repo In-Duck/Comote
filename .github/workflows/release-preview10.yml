@@ -20,6 +20,10 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Verify Phase 1 driver safety boundary
+        shell: pwsh
+        run: ./Driver/ComoteVirtualHid/Test-Phase1Boundary.ps1
+
       - name: Build manager and client
         shell: pwsh
         run: ./Distribution/Build_Hub_Packages.ps1

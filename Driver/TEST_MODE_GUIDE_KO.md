@@ -2,6 +2,10 @@
 
 이 패키지는 Comote 팀 내부 시험용입니다. Windows 테스트 모드를 사용하며, 공개 배포나 일반 사용자 설치용이 아닙니다.
 
+> 현재 저장소의 `ComoteVirtualHid`는 입력 제출과 Client 연결이 비활성화된
+> Phase 1 안전 골격입니다. Windows WDK 빌드·INF 검증·Driver Verifier 및
+> 반복 설치/제거 시험이 끝나기 전에는 이 설치 절차를 사용하지 마세요.
+
 ## 설치
 
 1. 압축을 완전히 풉니다.
