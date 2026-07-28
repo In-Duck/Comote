@@ -41,6 +41,18 @@ The wrapper refuses unrecognized physical machines, Windows Server, non-Windows
 Release driver, and performs INF validation. It does not enable test mode,
 create a certificate, sign a package, or install the driver.
 
+## Background CI build
+
+GitHub Actions runs `.github/workflows/virtual-hid-phase1.yml` on the pinned
+`windows-2025-vs2026` image. The workflow restores the pinned WDK NuGet
+packages, compiles the driver, runs static analysis, validates the INF, creates
+an unsigned catalog, and records SHA-256 hashes.
+
+`Build-Phase1Ci.ps1` refuses to run unless `GITHUB_ACTIONS=true`. The CI
+workflow never changes test mode, creates a certificate, signs a file, installs
+a driver, loads a driver, or runs Driver Verifier. Its unsigned artifact is
+retained for seven days for inspection only.
+
 ## Required gates before input submission is added
 
 1. Release build completes with warnings treated as errors.

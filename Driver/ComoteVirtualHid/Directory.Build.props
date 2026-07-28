@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <PropertyGroup>
+    <ComoteWdkPackageVersion>10.0.28000.2526</ComoteWdkPackageVersion>
+    <ComotePackagesRoot>$(MSBuildThisFileDirectory)packages\</ComotePackagesRoot>
+  </PropertyGroup>
+
+  <Import
+    Project="$(ComotePackagesRoot)Microsoft.Windows.WDK.x64.$(ComoteWdkPackageVersion)\build\native\Microsoft.Windows.WDK.x64.props"
+    Condition="Exists('$(ComotePackagesRoot)Microsoft.Windows.WDK.x64.$(ComoteWdkPackageVersion)\build\native\Microsoft.Windows.WDK.x64.props') and '$(Platform)' == 'x64'" />
+  <Import
+    Project="$(ComotePackagesRoot)Microsoft.Windows.SDK.CPP.x64.$(ComoteWdkPackageVersion)\build\native\Microsoft.Windows.SDK.cpp.x64.props"
+    Condition="Exists('$(ComotePackagesRoot)Microsoft.Windows.SDK.CPP.x64.$(ComoteWdkPackageVersion)\build\native\Microsoft.Windows.SDK.cpp.x64.props') and '$(Platform)' == 'x64'" />
+  <Import
+    Project="$(ComotePackagesRoot)Microsoft.Windows.SDK.CPP.$(ComoteWdkPackageVersion)\build\native\Microsoft.Windows.SDK.cpp.props"
+    Condition="Exists('$(ComotePackagesRoot)Microsoft.Windows.SDK.CPP.$(ComoteWdkPackageVersion)\build\native\Microsoft.Windows.SDK.cpp.props')" />
+</Project>

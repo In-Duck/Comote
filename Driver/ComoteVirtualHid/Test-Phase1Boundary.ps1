@@ -11,6 +11,10 @@ $projectPath = Join-Path $PSScriptRoot "ComoteVirtualHid.vcxproj"
 $infPath = Join-Path $PSScriptRoot "ComoteVirtualHid.inf"
 $buildPath = Join-Path $PSScriptRoot "Build-Phase1.ps1"
 $vmBuildPath = Join-Path $PSScriptRoot "Invoke-Phase1VmBuild.ps1"
+$ciBuildPath = Join-Path $PSScriptRoot "Build-Phase1Ci.ps1"
+$ciWorkflowPath = Join-Path `
+    (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) `
+    ".github\workflows\virtual-hid-phase1.yml"
 
 foreach ($path in @(
     $sourcePath,
@@ -18,7 +22,9 @@ foreach ($path in @(
     $projectPath,
     $infPath,
     $buildPath,
-    $vmBuildPath
+    $vmBuildPath,
+    $ciBuildPath,
+    $ciWorkflowPath
 )) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required Phase 1 source file is missing: $path"
@@ -72,6 +78,8 @@ foreach ($token in $requiredTokens) {
 $buildScripts = @(
     (Get-Content -LiteralPath $buildPath -Raw)
     (Get-Content -LiteralPath $vmBuildPath -Raw)
+    (Get-Content -LiteralPath $ciBuildPath -Raw)
+    (Get-Content -LiteralPath $ciWorkflowPath -Raw)
 ) -join "`n"
 
 foreach ($token in @(
@@ -81,12 +89,45 @@ foreach ($token in @(
     "New-SelfSignedCertificate",
     "certutil",
     "signtool",
-    "verifier.exe"
+    "verifier.exe",
+    "sc.exe",
+    "dism.exe",
+    "Add-WindowsDriver",
+    "New-Service",
+    "Start-Service"
 )) {
     if ($buildScripts.IndexOf(
             $token,
             [StringComparison]::OrdinalIgnoreCase) -ge 0) {
         throw "Phase 1 build script must not sign, install, or change boot state: $token"
+    }
+}
+
+$ciBuild = Get-Content -LiteralPath $ciBuildPath -Raw
+foreach ($requiredCiText in @(
+    'GetEnvironmentVariable("GITHUB_ACTIONS")',
+    "nuget",
+    "InfVerif.exe",
+    "Inf2Cat.exe"
+)) {
+    if ($ciBuild.IndexOf(
+            $requiredCiText,
+            [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+        throw "Required Phase 1 CI gate is missing: $requiredCiText"
+    }
+}
+
+$ciWorkflow = Get-Content -LiteralPath $ciWorkflowPath -Raw
+foreach ($requiredWorkflowText in @(
+    "windows-2025-vs2026",
+    "permissions:",
+    "contents: read",
+    "Build-Phase1Ci.ps1"
+)) {
+    if ($ciWorkflow.IndexOf(
+            $requiredWorkflowText,
+            [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+        throw "Required Phase 1 workflow boundary is missing: $requiredWorkflowText"
     }
 }
 
