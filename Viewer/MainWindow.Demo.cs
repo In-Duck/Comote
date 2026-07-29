@@ -1,10 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using Comote.Shared;
 
 namespace Viewer
 {
@@ -62,196 +63,83 @@ namespace Viewer
             menu.Items.Clear();
             var selected = GetSelectedHosts();
             var count = selected.Count;
-            var prefix = $"({count}개) ";
+            var prefix = $"({count}\uAC1C) ";
 
             AddMenuItem(
                 menu,
                 count == 1
-                    ? $"{selected[0].Name} - 컨트롤 창 열기"
-                    : $"{prefix}컨트롤 창 열기",
-                count > 0,
+                    ? $"{selected[0].Name} - \uC6D0\uACA9 \uC81C\uC5B4 \uC5F4\uAE30"
+                    : $"{prefix}\uC6D0\uACA9 \uC81C\uC5B4 \uC5F4\uAE30",
+                count == 1 && selected[0].IsOnline,
                 (_, _) => OpenControlWindows(selected));
+
+            var updateTargets = selected
+                .Where(host => host.IsOnline && host.HasClientUpdate && host.SupportsManagedUpdate)
+                .ToList();
+            AddMenuItem(
+                menu,
+                updateTargets.Count == 1
+                    ? $"{updateTargets[0].Name} - Client 업데이트"
+                    : $"({updateTargets.Count}개) Client 업데이트",
+                updateTargets.Count > 0 && !_isDemoMode,
+                async (_, _) => await RequestClientUpdatesAsync(updateTargets));
+            AddMenuItem(
+                menu,
+                "등록된 전체 Client 업데이트",
+                _currentHosts.Count > 0 && !_isDemoMode,
+                async (_, _) => await RequestAllClientUpdatesAsync());
 
             AddMenuItem(
                 menu,
-                "전체 선택",
+                "\uC804\uCCB4 \uC120\uD0DD",
                 _hostDataGrid.Items.Count > 0,
                 (_, _) => _hostDataGrid.SelectAll(),
                 "Ctrl+A");
 
             menu.Items.Add(new Separator());
-
             AddMenuItem(
                 menu,
-                $"{prefix}새 그룹으로",
-                count > 0,
-                (_, _) => CreateDemoGroup(selected));
-
-            var existingGroups = new MenuItem
-            {
-                Header = $"{prefix}기존 그룹으로 이동",
-                IsEnabled = count > 0 && _demoGroups.Count > 0,
-            };
-            foreach (var groupName in _demoGroups.Keys.OrderBy(name => name))
-            {
-                var targetGroup = groupName;
-                AddMenuItem(
-                    existingGroups,
-                    targetGroup,
-                    true,
-                    (_, _) => MoveToDemoGroup(selected, targetGroup));
-            }
-            menu.Items.Add(existingGroups);
-
-            AddMenuItem(
-                menu,
-                "이름/메모 변경",
-                count == 1,
-                (_, _) => RenameAndMemo(selected[0]),
-                "F2");
-
-            AddMenuItem(
-                menu,
-                "순서 변경: 앞으로",
+                "\uC21C\uC11C \uBCC0\uACBD: \uC55E\uC73C\uB85C",
                 count > 0,
                 (_, _) => MoveSelectedHosts(selected, -1));
             AddMenuItem(
                 menu,
-                "순서 변경: 뒤로",
+                "\uC21C\uC11C \uBCC0\uACBD: \uB4A4\uB85C",
                 count > 0,
                 (_, _) => MoveSelectedHosts(selected, 1));
             AddMenuItem(
                 menu,
-                "순서 변경: 원하는 위치로...",
+                "\uC21C\uC11C \uBCC0\uACBD: \uC6D0\uD558\uB294 \uC704\uCE58\uB85C...",
                 count > 0,
                 (_, _) => MoveSelectedHostsToPosition(selected));
 
             menu.Items.Add(new Separator());
-
             AddMenuItem(
                 menu,
-                $"{prefix}삭제",
+                "\uD30C\uC77C \uC804\uC1A1",
                 count > 0,
-                (_, _) => DeleteSelectedHosts(selected));
+                OnMultiFileTransferClick);
             AddMenuItem(
                 menu,
-                $"{prefix}로그아웃",
-                count > 0,
-                (_, _) => SimulateFleetCommand(
-                    "클라이언트 계정 등록 해제",
-                    selected,
-                    true));
-
-            var inputMode = new MenuItem
-            {
-                Header = $"{prefix}입력제어 전환",
-                IsEnabled = count > 0,
-            };
-            for (var mode = 1; mode <= 3; mode++)
-            {
-                var selectedMode = mode;
-                AddMenuItem(
-                    inputMode,
-                    $"모드{mode}",
-                    true,
-                    (_, _) => SetDemoInputMode(selected, selectedMode));
-            }
-            menu.Items.Add(inputMode);
-
-            var driverDelete = new MenuItem
-            {
-                Header = $"{prefix}드라이버 삭제",
-                IsEnabled = count > 0,
-            };
-            foreach (var driver in new[] { "구버전", "모드2", "모드3" })
-            {
-                var selectedDriver = driver;
-                AddMenuItem(
-                    driverDelete,
-                    selectedDriver,
-                    true,
-                    (_, _) => SimulateFleetCommand(
-                        $"드라이버 삭제: {selectedDriver}",
-                        selected,
-                        true));
-            }
-            menu.Items.Add(driverDelete);
-
-            var driverInstall = new MenuItem
-            {
-                Header = $"{prefix}드라이버 설치",
-                IsEnabled = count > 0,
-            };
-            foreach (var driver in new[] { "모드2", "모드3" })
-            {
-                var selectedDriver = driver;
-                AddMenuItem(
-                    driverInstall,
-                    selectedDriver,
-                    true,
-                    (_, _) => SimulateFleetCommand(
-                        $"드라이버 설치: {selectedDriver}",
-                        selected,
-                        true));
-            }
-            menu.Items.Add(driverInstall);
-
-            menu.Items.Add(new Separator());
-
-            AddMenuItem(
-                menu,
-                $"{prefix}원격 프로그램 재실행 (업데이트)",
-                count > 0,
-                (_, _) => SimulateFleetCommand(
-                    "Host 재실행 및 업데이트",
-                    selected,
-                    true));
-            AddMenuItem(
-                menu,
-                $"{prefix}원격 윈도우 재부팅",
-                count > 0,
-                (_, _) => SimulateFleetCommand(
-                    "Windows 재부팅",
-                    selected,
-                    true));
-            AddMenuItem(
-                menu,
-                $"{prefix}원격 윈도우 시스템종료",
-                count > 0,
-                (_, _) => SimulateFleetCommand(
-                    "Windows 시스템 종료",
-                    selected,
-                    true));
-            AddMenuItem(
-                menu,
-                $"{prefix}외부원격 실행",
-                count > 0,
-                (_, _) => SimulateFleetCommand(
-                    "외부 원격 Adapter 실행",
-                    selected,
-                    false));
-
-            menu.Items.Add(new Separator());
-            AddMenuItem(
-                menu,
-                "파일 전송",
-                count > 0,
-                _isDemoMode
-                    ? (_, _) => SimulateFleetCommand(
-                        "파일 전송",
-                        selected,
-                        false)
-                    : OnMultiFileTransferClick);
-            AddMenuItem(
-                menu,
-                "Wake Up (WoL)",
-                count > 0,
-                (_, _) => SimulateFleetCommand(
-                    "Wake-on-LAN",
-                    selected,
-                    false));
+                "\uBAA9\uB85D\uC5D0\uC11C \uC0AD\uC81C",
+                count == 1,
+                OnDeleteHostClick);
         }
 
+        private async Task RequestClientUpdatesAsync(IReadOnlyList<HostInfo> targets)
+        {
+            if (targets.Count == 0) return;
+            var names = string.Join(", ", targets.Select(host => host.Name));
+            if (MessageBox.Show(
+                    $"다음 Client에 {ClientUpdateCatalog.LatestVersion} 업데이트를 요청할까요?\n\n{names}",
+                    "Comote Client 업데이트",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return;
+
+            var sent = await SendClientUpdateRequestsAsync(targets);
+            _statusBarText.Text = $"Client 업데이트 요청 전송 · {sent}/{targets.Count}";
+        }
         private static void AddMenuItem(
             ItemsControl parent,
             string header,
@@ -492,6 +380,7 @@ namespace Viewer
 
         private void EnsureHostOrder()
         {
+            MarkHostOrderCustomized();
             if (_settings.HostOrder.Count != _currentHosts.Count ||
                 _currentHosts.Any(
                     host => !_settings.HostOrder.Contains(host.Id)))
@@ -642,4 +531,3 @@ namespace Viewer
         }
     }
 }
-

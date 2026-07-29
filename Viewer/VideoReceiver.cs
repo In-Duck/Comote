@@ -1,6 +1,8 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,6 +17,7 @@ using NAudio.Wave;
 using Concentus.Structs;
 using Concentus.Enums;
 
+using Comote.Shared;
 namespace Viewer
 {
     public class VideoReceiver : IDisposable
@@ -22,6 +25,8 @@ namespace Viewer
         private RTCPeerConnection? _peerConnection;
         private RTCDataChannel? _inputChannel;
         private RTCDataChannel? _fileChannel; // File Transfer ONLY
+        private readonly ConcurrentQueue<RTCIceCandidateInit> _pendingIceCandidates = new();
+        private bool _remoteDescriptionSet;
         private FFmpegVideoEncoder? _decoder;
         private OpusDecoder? _opusDecoder;
         private IWavePlayer? _waveOut;
@@ -34,6 +39,13 @@ namespace Viewer
         private readonly Stopwatch _fpsStopwatch = new();
         private readonly Stopwatch _pingStopwatch = new();
         private Timer? _statsTimer;
+        private volatile bool _presentationActive;
+        private volatile bool _thumbnailStreaming;
+        private MonitoringProfile _thumbnailProfile =
+            MonitoringProfile.CreateAutomatic(100);
+        private readonly object _audioSync = new();
+        private PendingVideoFrame? _pendingThumbnailFrame;
+        private int _thumbnailRenderScheduled;
 
         /// <summary>최근 1초간 디코딩된 FPS</summary>
         public int CurrentFps { get; private set; }
@@ -60,6 +72,7 @@ namespace Viewer
         public event Action<object>? OnSignalReady;
         public event Action? OnFrameReady;
         public event Action<RTCPeerConnectionState>? OnConnectionStateChanged;
+        public event Action<bool>? OnInputReadyChanged;
         public event Action<string>? OnRejected;
         public event Action<string>? OnClipboardReceived;
         public event Action<int>? OnFileProgress;     // 0~100%
@@ -67,6 +80,7 @@ namespace Viewer
 
         public RTCPeerConnectionState ConnectionState =>
             _peerConnection?.connectionState ?? RTCPeerConnectionState.closed;
+        public bool HasRemoteResponse { get; private set; }
 
         public VideoReceiver()
         {
@@ -78,12 +92,11 @@ namespace Viewer
         /// </summary>
         private void InitializePeerConnection()
         {
+            _remoteDescriptionSet = false;
+            _pendingIceCandidates.Clear();
             var config = new RTCConfiguration
             {
-                iceServers = new List<RTCIceServer>
-                {
-                    new RTCIceServer { urls = "stun:stun.l.google.com:19302" }
-                }
+                iceServers = IceServerConfiguration.Create()
             };
 
             _peerConnection = new RTCPeerConnection(config);
@@ -92,56 +105,6 @@ namespace Viewer
             _decoder = new FFmpegVideoEncoder();
 
             // Concentus Opus 디코더 초기화 (48kHz, 스테레오)
-            _opusDecoder = new OpusDecoder(48000, 2);
-            Console.WriteLine("[Audio] Opus decoder initialized: 48000Hz, 2ch");
-
-            // 오디오 재생기 초기화 (Opus 48kHz, 스테레오)
-            // 오디오 재생기 초기화 (Opus 48kHz, 스테레오)
-            _waveProvider = new BufferedWaveProvider(new WaveFormat(48000, 16, 2))
-            {
-                BufferDuration = TimeSpan.FromSeconds(3), // 버퍼 여유 확보 (3초)
-                DiscardOnBufferOverflow = true
-            };
-            
-            // [Stability] Smart Buffering Logic (Drift Correction)
-            // _waveProvider의 버퍼가 너무 쌓이면(지연 발생) 일부를 버려서 최신 상태 유지
-            Task.Run(async () => 
-            {
-                // [Stability] Smart Buffering Logic
-                while (_peerConnection != null && _peerConnection.connectionState == RTCPeerConnectionState.connected)
-                {
-                    if (_waveProvider != null && _waveProvider.BufferedDuration.TotalMilliseconds > 1000)
-                    {
-                        // 1초 이상 지연 시 0.5초 분량 삭제 (Catch-up)
-                        _waveProvider.ClearBuffer(); 
-                        Console.WriteLine("[Audio] Buffer too large (>1000ms). Cleared to catch up.");
-                    }
-                    await Task.Delay(1000);
-                }
-            });
-
-            // [Fix] WaveOutEvent 대신 WasapiOut 사용 (지연 시간/안정성 개선)
-            // 지연 시간 50ms, Shared 모드
-            try 
-            {
-                var wasapiOut = new NAudio.Wave.WasapiOut(
-                    NAudio.CoreAudioApi.AudioClientShareMode.Shared, 50);
-                wasapiOut.Init(_waveProvider);
-                wasapiOut.Play();
-                _waveOut = wasapiOut;
-                Console.WriteLine("[Audio] Initialized WasapiOut (50ms latency)");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[Audio] WasapiOut failed ({ex.Message}), falling back to WaveOutEvent");
-                var waveOut = new WaveOutEvent { DesiredLatency = 100 }; // 100ms
-                waveOut.Init(_waveProvider);
-                waveOut.Play();
-                _waveOut = waveOut;
-            }
-
-            // H.264 수신 전용 트랙 추가
-            // 비디오 수신 트랙 추가 (H.264, H.265, AV1)
             var supportedFormats = new List<VideoFormat>
             {
                 new VideoFormat(VideoCodecsEnum.H265, 100, 90000, null),
@@ -220,7 +183,7 @@ namespace Viewer
             int _audioFrameCount = 0;
             _peerConnection.OnRtpPacketReceived += (rep, media, rtpPacket) =>
             {
-                if (media == SDPMediaTypesEnum.audio)
+                if (media == SDPMediaTypesEnum.audio && _presentationActive)
                 {
                     try
                     {
@@ -231,7 +194,9 @@ namespace Viewer
 
                         // Concentus로 Opus 디코딩 (20ms = 960 samples per channel, 스테레오 = 1920)
                         short[] pcmOutput = new short[960 * 2];
-                        int decodedSamples = _opusDecoder!.Decode(rtpPacket.Payload, 0, rtpPacket.Payload.Length, pcmOutput, 0, 960, false);
+                        var decoder = _opusDecoder;
+                        if (decoder == null) return;
+                        int decodedSamples = decoder.Decode(rtpPacket.Payload, 0, rtpPacket.Payload.Length, pcmOutput, 0, 960, false);
 
                         if (decodedSamples > 0 && _waveProvider != null)
                         {
@@ -239,7 +204,7 @@ namespace Viewer
                             int totalSamples = decodedSamples * 2; // 스테레오
                             byte[] byteData = new byte[totalSamples * 2]; // 16bit = 2bytes per sample
                             Buffer.BlockCopy(pcmOutput, 0, byteData, 0, byteData.Length);
-                            
+
                             // [Stability] Jitter Buffer 처리 (너무 적으면 무시? 아니면 Silence 삽입?)
                             // 여기서는 단순 추가하지만, 위쪽 Task에서 과다 버퍼링 제어
                             _waveProvider.AddSamples(byteData, 0, byteData.Length);
@@ -258,25 +223,60 @@ namespace Viewer
 
         private void RenderFrame(VideoSample decoded)
         {
+            var width = (int)decoded.Width;
+            var height = (int)decoded.Height;
+            if (_presentationActive)
+            {
+                RenderFrameOnUi(width, height, decoded.Sample);
+                return;
+            }
+
+            // Ignore the initial full-resolution frames while the Host is
+            // switching into its negotiated monitoring profile.
+            if (width > 640 || height > 360) return;
+            var sample = decoded.Sample.ToArray();
+            Interlocked.Exchange(
+                ref _pendingThumbnailFrame,
+                new PendingVideoFrame(width, height, sample));
+            if (Interlocked.CompareExchange(
+                    ref _thumbnailRenderScheduled, 1, 0) != 0)
+                return;
+
+            Application.Current?.Dispatcher.BeginInvoke(
+                RenderLatestThumbnailFrame);
+        }
+
+        private void RenderLatestThumbnailFrame()
+        {
+            while (true)
+            {
+                var frame = Interlocked.Exchange(
+                    ref _pendingThumbnailFrame, null);
+                if (frame != null)
+                    RenderFrameOnUi(
+                        frame.Width,
+                        frame.Height,
+                        frame.Sample);
+
+                Interlocked.Exchange(ref _thumbnailRenderScheduled, 0);
+                if (Volatile.Read(ref _pendingThumbnailFrame) == null ||
+                    Interlocked.CompareExchange(
+                        ref _thumbnailRenderScheduled, 1, 0) != 0)
+                    return;
+            }
+        }
+
+        private void RenderFrameOnUi(int width, int height, byte[] sample)
+        {
             try
             {
-                int width = (int)decoded.Width;
-                int height = (int)decoded.Height;
-                byte[] sample = decoded.Sample;
-                int stride = width * 3;
-
-                if (_frameCount % 30 == 1)
+                void Render()
                 {
-                    Console.WriteLine($"[VideoReceiver] SUCCESS: Decoded {width}x{height}, sample={sample.Length} bytes");
-                }
-
-                Application.Current?.Dispatcher.Invoke(() =>
-                {
+                    var stride = width * 3;
                     if (VideoBitmap == null ||
                         VideoBitmap.PixelWidth != width ||
                         VideoBitmap.PixelHeight != height)
                     {
-                        Console.WriteLine($"[VideoReceiver] Creating bitmap: {width}x{height}");
                         VideoBitmap = new WriteableBitmap(
                             width, height, 96, 96,
                             PixelFormats.Rgb24, null);
@@ -285,35 +285,45 @@ namespace Viewer
                     VideoBitmap.Lock();
                     try
                     {
-                        int bmpStride = VideoBitmap.BackBufferStride;
-                        int copyStride = Math.Min(stride, bmpStride);
-
-                        for (int y = 0; y < height; y++)
+                        var copyStride = Math.Min(
+                            stride, VideoBitmap.BackBufferStride);
+                        for (var y = 0; y < height; y++)
                         {
-                            int srcOffset = y * stride;
-                            IntPtr dstPtr = VideoBitmap.BackBuffer + (y * bmpStride);
-
-                            if (srcOffset + copyStride <= sample.Length)
-                            {
-                                Marshal.Copy(sample, srcOffset, dstPtr, copyStride);
-                            }
+                            var sourceOffset = y * stride;
+                            if (sourceOffset + copyStride > sample.Length)
+                                break;
+                            Marshal.Copy(
+                                sample,
+                                sourceOffset,
+                                VideoBitmap.BackBuffer +
+                                    y * VideoBitmap.BackBufferStride,
+                                copyStride);
                         }
-
-                        VideoBitmap.AddDirtyRect(new Int32Rect(0, 0, width, height));
+                        VideoBitmap.AddDirtyRect(
+                            new Int32Rect(0, 0, width, height));
                     }
                     finally
                     {
                         VideoBitmap.Unlock();
                     }
-
                     OnFrameReady?.Invoke();
-                });
+                }
+
+                var dispatcher = Application.Current?.Dispatcher;
+                if (dispatcher == null || dispatcher.CheckAccess()) Render();
+                else dispatcher.Invoke(Render);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[VideoReceiver] Frame render error: {ex}");
+                Console.WriteLine(
+                    $"[VideoReceiver] Frame render error: {ex.Message}");
             }
         }
+
+        private sealed record PendingVideoFrame(
+            int Width,
+            int Height,
+            byte[] Sample);
 
         // ===========================================
         // FPS/RTT 통계 보고
@@ -386,6 +396,16 @@ namespace Viewer
             try
             {
                 var jobj = JObject.FromObject(signal);
+                if (jobj.ContainsKey("sdp") ||
+                    jobj.ContainsKey("ice") ||
+                    jobj.ContainsKey("rejected") ||
+                    string.Equals(
+                        jobj.Value<string>("type"),
+                        "comote-client-ready",
+                        StringComparison.OrdinalIgnoreCase))
+                    HasRemoteResponse = true;
+                if (jobj.Value<string>("type") == "comote-client-ready")
+                    return;
 
                 // Host가 비밀번호 불일치로 거절한 경우
                 if (jobj.ContainsKey("rejected"))
@@ -406,6 +426,12 @@ namespace Viewer
                         sdp = sdpStr
                     });
                     Console.WriteLine($"[VideoReceiver] Remote SDP set ({type}): {result}");
+                    if (result == SetDescriptionResultEnum.OK)
+                    {
+                        _remoteDescriptionSet = true;
+                        while (_pendingIceCandidates.TryDequeue(out var pending))
+                            _peerConnection.addIceCandidate(pending);
+                    }
 
                     if (type == RTCSdpType.offer)
                     {
@@ -422,16 +448,23 @@ namespace Viewer
                 }
                 else if (jobj.ContainsKey("ice"))
                 {
-                    var candidate = jobj["ice"]!["candidate"]!.ToString();
-                    var sdpMid = jobj["ice"]!["sdpMid"]?.ToString();
-                    var sdpMLineIndex = (ushort)(jobj["ice"]!["sdpMLineIndex"] ?? 0);
+                    var iceCandidate = new RTCIceCandidateInit
+                    {
+                        candidate = jobj["ice"]!["candidate"]!.ToString(),
+                        sdpMid = jobj["ice"]!["sdpMid"]?.ToString(),
+                        sdpMLineIndex = (ushort)(jobj["ice"]!["sdpMLineIndex"] ?? 0)
+                    };
 
-                    _peerConnection.addIceCandidate(new RTCIceCandidateInit {
-                        candidate = candidate,
-                        sdpMid = sdpMid,
-                        sdpMLineIndex = sdpMLineIndex
-                    });
-                    Console.WriteLine("[VideoReceiver] ICE candidate added");
+                    if (!_remoteDescriptionSet)
+                    {
+                        _pendingIceCandidates.Enqueue(iceCandidate);
+                        Console.WriteLine("[VideoReceiver] ICE candidate queued");
+                    }
+                    else
+                    {
+                        _peerConnection.addIceCandidate(iceCandidate);
+                        Console.WriteLine("[VideoReceiver] ICE candidate added");
+                    }
                 }
             }
             catch (Exception ex)
@@ -448,6 +481,7 @@ namespace Viewer
             Console.WriteLine("[VideoReceiver] Resetting for reconnect...");
             StopStatsReporting();
             _inputChannel = null;
+            OnInputReadyChanged?.Invoke(false);
             _peerConnection?.Close("reset");
             _peerConnection?.Dispose();
             _peerConnection = null;
@@ -456,6 +490,7 @@ namespace Viewer
             _frameCount = 0;
             CurrentFps = 0;
             RttMs = -1;
+            HasRemoteResponse = false;
 
             InitializePeerConnection();
         }
@@ -466,31 +501,17 @@ namespace Viewer
 
             // DataChannel 생성 (Viewer → Host 입력 전송용)
             _inputChannel = await _peerConnection.createDataChannel("input");
-            _inputChannel.onopen += () => 
+            _inputChannel.onopen += () =>
             {
                 Console.WriteLine("[VideoReceiver] Input DataChannel opened");
-                try 
-                {
-                    var settings = AppSettings.Load();
-                    int qLevel = 2;
-                    switch(settings.Quality) {
-                        case "최상": qLevel = 3; break;
-                        case "상": qLevel = 2; break;
-                        case "중": qLevel = 1; break;
-                        case "하": qLevel = 0; break;
-                    }
-                    SendSettings(settings.GetTargetFps(), qLevel);
-                } 
-                catch (Exception ex) 
-                {
-                    Console.WriteLine($"[VideoReceiver] Failed to send initial settings: {ex.Message}");
-                }
+                OnInputReadyChanged?.Invoke(true);
+                ApplyPresentationSettings();
             };
 
             // DataChannel 생성 (파일 전송용)
             _fileChannel = await _peerConnection.createDataChannel("file");
             _fileChannel.onopen += () => Console.WriteLine("[VideoReceiver] File DataChannel opened");
-            _fileChannel.onmessage += (dc, protocol, data) => 
+            _fileChannel.onmessage += (dc, protocol, data) =>
             {
                 if (data.Length > 0 && data[0] == MSG_FILE_ACK)
                 {
@@ -501,6 +522,7 @@ namespace Viewer
             _inputChannel.onclose += () =>
             {
                 Console.WriteLine("[VideoReceiver] Input DataChannel closed");
+                OnInputReadyChanged?.Invoke(false);
             };
             // Host에서 보낸 데이터 수신 (Pong, Clipboard 등)
             _inputChannel.onmessage += (dc, protocol, data) =>
@@ -593,15 +615,142 @@ namespace Viewer
             }
         }
 
-        public void SendSettings(int fps, int qualityLevel)
+        public void SetPresentationActive(bool active)
+        {
+            _presentationActive = active;
+            if (active)
+                Interlocked.Exchange(ref _pendingThumbnailFrame, null);
+            try
+            {
+                if (active)
+                {
+                    EnsureAudioPlayback();
+                    _waveOut?.Play();
+                }
+                else
+                {
+                    ReleaseAudioPlayback();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Audio] Presentation state warning: {ex.Message}");
+            }
+
+            ApplyPresentationSettings();
+        }
+
+        public void SetThumbnailStreaming(
+            bool active,
+            MonitoringProfile? profile = null)
+        {
+            var nextProfile = profile ?? _thumbnailProfile;
+            if (_thumbnailStreaming == active &&
+                _thumbnailProfile.Equals(nextProfile)) return;
+            _thumbnailStreaming = active;
+            _thumbnailProfile = nextProfile;
+            ApplyPresentationSettings();
+        }
+
+        private void ApplyPresentationSettings()
+        {
+            if (!InputChannelReady) return;
+            if (!_presentationActive)
+            {
+                if (_thumbnailStreaming)
+                    SendSettings(
+                        _thumbnailProfile.FramesPerSecond,
+                        0,
+                        _thumbnailProfile);
+                else
+                    SendSettings(0, 0);
+                return;
+            }
+
+            try
+            {
+                var settings = AppSettings.Load();
+                var qualityLevel = settings.Quality switch
+                {
+                    "최상" => 3,
+                    "중" => 1,
+                    "하" => 0,
+                    _ => 2,
+                };
+                SendSettings(settings.GetTargetFps(), qualityLevel);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[VideoReceiver] Failed to apply presentation settings: {ex.Message}");
+            }
+        }
+        public void SendSettings(
+            int fps,
+            int qualityLevel,
+            MonitoringProfile? profile = null)
         {
             if (_inputChannel?.readyState == RTCDataChannelState.open)
             {
-                // MSG_SETTINGS_UPDATE (0x07)
-                // Format: [Type][FPS][QualityLevel]
-                byte[] msg = new byte[] { 0x07, (byte)fps, (byte)qualityLevel };
+                byte[] msg = profile == null ? new byte[3] : new byte[11];
+                msg[0] = 0x07;
+                msg[1] = (byte)Math.Clamp(fps, 0, 60);
+                msg[2] = (byte)Math.Clamp(qualityLevel, 0, 3);
+                if (profile is { } monitoring)
+                {
+                    BinaryPrimitives.WriteUInt16BigEndian(
+                        msg.AsSpan(3, 2), monitoring.Width);
+                    BinaryPrimitives.WriteUInt16BigEndian(
+                        msg.AsSpan(5, 2), monitoring.Height);
+                    BinaryPrimitives.WriteInt32BigEndian(
+                        msg.AsSpan(7, 4),
+                        monitoring.TargetBitrateBitsPerSecond);
+                }
                 _inputChannel.send(msg);
-                Console.WriteLine($"[Settings] Sent update: FPS={fps}, Quality={qualityLevel}");
+                Console.WriteLine(
+                    $"[Settings] FPS={fps}, Quality={qualityLevel}, " +
+                    $"Size={profile?.Width ?? 0}x{profile?.Height ?? 0}");
+            }
+        }
+
+        private void EnsureAudioPlayback()
+        {
+            lock (_audioSync)
+            {
+                if (_waveOut != null) return;
+                _opusDecoder = new OpusDecoder(48000, 2);
+                _waveProvider = new BufferedWaveProvider(
+                    new WaveFormat(48000, 16, 2))
+                {
+                    BufferDuration = TimeSpan.FromSeconds(1),
+                    DiscardOnBufferOverflow = true,
+                };
+                try
+                {
+                    var wasapiOut = new NAudio.Wave.WasapiOut(
+                        NAudio.CoreAudioApi.AudioClientShareMode.Shared, 50);
+                    wasapiOut.Init(_waveProvider);
+                    _waveOut = wasapiOut;
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(
+                        $"[Audio] WASAPI unavailable ({ex.Message}); using WaveOut.");
+                    var waveOut = new WaveOutEvent { DesiredLatency = 100 };
+                    waveOut.Init(_waveProvider);
+                    _waveOut = waveOut;
+                }
+            }
+        }
+
+        private void ReleaseAudioPlayback()
+        {
+            lock (_audioSync)
+            {
+                try { _waveOut?.Stop(); } catch { }
+                _waveOut?.Dispose();
+                _waveOut = null;
+                _waveProvider = null;
+                _opusDecoder = null;
             }
         }
 
@@ -626,14 +775,23 @@ namespace Viewer
 
             string fileName = fileInfo.Name;
             long fileSize = fileInfo.Length;
+            const long maxFileSize = 256L * 1024 * 1024;
+            if (fileSize <= 0 || fileSize > maxFileSize)
+                throw new InvalidOperationException("Files must be between 1 byte and 256 MB.");
             Console.WriteLine($"[FileTransfer] Sending: {fileName} ({fileSize} bytes)");
 
-            // 1) FILE_START: {type, uint32 size, string name}
+            // 1) FILE_START: [type][uint32 size][UTF-8 name][SHA-256]
             byte[] nameBytes = System.Text.Encoding.UTF8.GetBytes(fileName);
-            byte[] startMsg = new byte[1 + 4 + nameBytes.Length];
+            if (nameBytes.Length is < 1 or > 1024)
+                throw new InvalidOperationException("File name is too long.");
+            byte[] hashBytes;
+            using (var hashStream = fileInfo.OpenRead())
+                hashBytes = await System.Security.Cryptography.SHA256.HashDataAsync(hashStream);
+            byte[] startMsg = new byte[1 + 4 + nameBytes.Length + hashBytes.Length];
             startMsg[0] = MSG_FILE_START;
             BitConverter.GetBytes((uint)fileSize).CopyTo(startMsg, 1);
             nameBytes.CopyTo(startMsg, 5);
+            hashBytes.CopyTo(startMsg, 5 + nameBytes.Length);
             _fileChannel.send(startMsg);
 
             // 2) FILE_CHUNK: 14KB 단위로 전송 (DataChannel SCTP 제한 고려)
@@ -669,49 +827,8 @@ namespace Viewer
             _inputChannel?.close();
             _peerConnection?.Close("disposed");
             _decoder?.Dispose();
-            _waveOut?.Stop();
-            _waveOut?.Dispose();
+            ReleaseAudioPlayback();
         }
 
-        public async Task HandleSignalAsync(string from, object signal)
-        {
-            if (_peerConnection == null) return;
-            try
-            {
-                var json = JObject.FromObject(signal);
-
-                if (json.ContainsKey("sdp"))
-                {
-                    var sdpObj = json["sdp"];
-                    var typeStr = sdpObj["type"].ToString();
-                    var sdpStr = sdpObj["sdp"].ToString();
-                    var type = typeStr == "offer" ? RTCSdpType.offer : RTCSdpType.answer;
-
-                    _peerConnection.setRemoteDescription(new RTCSessionDescriptionInit { type = type, sdp = sdpStr });
-
-                    if (type == RTCSdpType.offer)
-                    {
-                        var answer = _peerConnection.createAnswer(null);
-                        _peerConnection.setLocalDescription(answer);
-                        OnSignalReady?.Invoke(new { sdp = new { type = "answer", sdp = answer.sdp } });
-                    }
-                }
-                else if (json.ContainsKey("ice"))
-                {
-                    var iceObj = json["ice"];
-                    var candidate = new RTCIceCandidateInit
-                    {
-                        candidate = iceObj["candidate"]?.ToString() ?? "",
-                        sdpMid = iceObj["sdpMid"]?.ToString() ?? "",
-                        sdpMLineIndex = (ushort)(iceObj["sdpMLineIndex"]?.Value<int>() ?? 0)
-                    };
-                    _peerConnection.addIceCandidate(candidate);
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[VideoReceiver] HandleSignal Error: {ex.Message}");
-            }
-        }
     }
 }

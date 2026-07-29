@@ -1,4 +1,4 @@
-﻿# Visual Studio / .NET
+# Visual Studio / .NET
 .vs/
 bin/
 obj/
@@ -31,3 +31,5 @@ obj/
 artifacts/
 .site-deploy-source/
 
+
+packages/

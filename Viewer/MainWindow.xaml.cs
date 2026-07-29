@@ -1,6 +1,8 @@
-﻿using System;
+using System;
+using Comote.Shared;
 using System.IO;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,6 +15,7 @@ using System.Windows.Interop;
 using SIPSorcery.Net;
 using System.Windows.Shell;
 using System.Linq;
+using Newtonsoft.Json.Linq;
 
 namespace Viewer
 {
@@ -21,6 +24,8 @@ namespace Viewer
         // === 공용 필드 ===
         private SignalingClient? _signaling;
         private VideoReceiver? _receiver;
+        private readonly ConcurrentDictionary<string, VideoReceiver> _receiverPool = new(StringComparer.OrdinalIgnoreCase);
+        private const int MaxWarmConnections = 150;
         private string? _connectedHostId;
         private KeyboardHook? _keyboardHook;
         private Timer? _statsDisplayTimer;
@@ -40,6 +45,7 @@ namespace Viewer
         private Grid _listTab = null!;
         private ScrollViewer _gridTab = null!;
         private TextBlock _statusBarText = null!;
+        private ProgressBar _updateProgressBar = null!;
         private TextBlock _hostCountText = null!;
         private List<HostInfo> _currentHosts = new();
         private Button _listTabBtn = null!;
@@ -87,6 +93,8 @@ namespace Viewer
         private readonly bool _isDemoMode;
         private readonly bool _isOfflineMode;
         private System.Windows.Threading.DispatcherTimer? _pollTimer;
+        private int _pollInProgress;
+        private readonly DateTime _fastPollingUntil = DateTime.UtcNow.AddSeconds(30);
         
         // === 영구 호스트 저장소 ===
         private HostRepository? _hostRepo;
@@ -167,19 +175,24 @@ namespace Viewer
             // [무인 업데이트] 시작 시 최신 버전 체크
             if (!_isDemoMode && !_isOfflineMode)
             {
-                _ = AutoUpdater.CheckAndApplyUpdate();
+                _ = ManagerAutoUpdater.CheckAndApplyAsync();
             }
             SourceInitialized += MainWindow_SourceInitialized;
             Loaded += MainWindow_Loaded;
             
             // 포커스 관리
             Activated += (s, e) => UpdateInputCaptureState();
+            StateChanged += (_, _) => UpdateLiveThumbnailStreaming();
             Deactivated += (s, e) =>
             {
                 ReleaseRemoteInputs();
                 UpdateInputCaptureState();
             };
-            Closed += (s, e) => _keyboardHook.Dispose();
+            Closed += (_, _) =>
+            {
+                _keyboardHook?.Dispose();
+                DisposeAllReceivers();
+            };
         }
 
         // ==========================================================
@@ -227,6 +240,45 @@ namespace Viewer
             };
             menuPanel.Children.Add(logoBlock);
 
+            _managerUpdateButton = new Button
+            {
+                Content = $"v{ManagerAutoUpdater.CurrentVersion} · 업데이트",
+                Padding = new Thickness(10, 5, 10, 5),
+                Margin = new Thickness(16, 0, 0, 0),
+                FontSize = 12,
+                Cursor = Cursors.Hand,
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = new SolidColorBrush(Color.FromRgb(17, 28, 46)),
+                Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(71, 85, 105)),
+                BorderThickness = new Thickness(1),
+            };
+            _managerUpdateButton.Click +=
+                async (_, _) => await CheckManagerUpdateAsync();
+            WindowChrome.SetIsHitTestVisibleInChrome(
+                _managerUpdateButton,
+                true);
+            menuPanel.Children.Add(_managerUpdateButton);
+
+            _fleetUpdateButton = new Button
+            {
+                Content = "전체 Client 업데이트",
+                Padding = new Thickness(10, 5, 10, 5),
+                Margin = new Thickness(8, 0, 0, 0),
+                FontSize = 12,
+                Cursor = Cursors.Hand,
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = new SolidColorBrush(Color.FromRgb(17, 28, 46)),
+                Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(71, 85, 105)),
+                BorderThickness = new Thickness(1),
+            };
+            _fleetUpdateButton.Click +=
+                async (_, _) => await RequestAllClientUpdatesAsync();
+            WindowChrome.SetIsHitTestVisibleInChrome(
+                _fleetUpdateButton,
+                true);
+            menuPanel.Children.Add(_fleetUpdateButton);
             // ⚙ 설정 버튼 (우측 정렬)
             var settingsBtn = new Button
             {
@@ -333,11 +385,13 @@ namespace Viewer
                 FontSize = 14,
                 FontFamily = new FontFamily("Segoe UI, Malgun Gothic")
             };
+            _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "마지막 응답", Binding = new Binding("LastSeenText"), Width = 105 });
             // 컬럼 정의 (한글화)
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "상태", Binding = new Binding("StatusText"), Width = 60 });
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "식별명", Binding = new Binding("Name"), Width = 150 });
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "아이피", Binding = new Binding("Ip"), Width = 140 });
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "CPU", Binding = new Binding("CpuText"), Width = 80 });
+            _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "버전", Binding = new Binding("VersionText"), Width = 125 });
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "메모리", Binding = new Binding("Ram"), Width = 120 });
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "디스크", Binding = new Binding("Hdd"), Width = 120 });
             _hostDataGrid.Columns.Add(new DataGridTextColumn { Header = "해상도", Binding = new Binding("Resolution"), Width = 120 });
@@ -472,6 +526,18 @@ namespace Viewer
                 VerticalAlignment = VerticalAlignment.Center
             };
             statusPanel.Children.Add(_hostCountText);
+            _updateProgressBar = new ProgressBar
+            {
+                Minimum = 0,
+                Maximum = 100,
+                Value = 0,
+                Width = 180,
+                Height = 8,
+                Margin = new Thickness(14, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                Visibility = Visibility.Collapsed,
+            };
+            statusPanel.Children.Add(_updateProgressBar);
             statusBar.Child = statusPanel;
             Grid.SetRow(statusBar, 3);
             grid.Children.Add(statusBar);
@@ -640,7 +706,8 @@ namespace Viewer
             };
             grid.Drop += async (s, e) =>
             {
-                if (_receiver == null || _connectedHostId == null) return;
+                if (_receiver == null || _connectedHostId == null ||
+                    !IsRemoteInputActive()) return;
                 if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
                 string[]? files = e.Data.GetData(DataFormats.FileDrop) as string[];
                 if (files == null || files.Length == 0) return;
@@ -665,7 +732,7 @@ namespace Viewer
                             _ = Task.Run(async () =>
                             {
                                 await Task.Delay(3000);
-                                Dispatcher.BeginInvoke(() =>
+                                _ = Dispatcher.BeginInvoke(() =>
                                     _fileProgressOverlay.Visibility = Visibility.Collapsed);
                             });
                         });
@@ -786,6 +853,7 @@ namespace Viewer
 
                 _gridTabBtn.Background = new SolidColorBrush(showList ? Colors.Transparent : Color.FromRgb(56, 189, 248));
                 _gridTabBtn.Foreground = new SolidColorBrush(showList ? Color.FromRgb(56, 189, 248) : Colors.Black);
+                UpdateLiveThumbnailStreaming();
             }
             catch (Exception ex)
             {
@@ -796,6 +864,27 @@ namespace Viewer
         // ==========================================================
         // 호스트 목록 업데이트 (로비)
         // ==========================================================
+        private bool ShouldStreamLiveThumbnails()
+        {
+            return _mainContent != null &&
+                   _gridTab != null &&
+                   ReferenceEquals(_mainContent.Content, _gridTab) &&
+                   _lobbyGrid != null &&
+                   _lobbyGrid.Visibility == Visibility.Visible &&
+                   IsVisible &&
+                   WindowState != WindowState.Minimized;
+        }
+
+        private void UpdateLiveThumbnailStreaming()
+        {
+            var enabled = ShouldStreamLiveThumbnails();
+            var onlineCount = Math.Max(
+                1,
+                _persistentHosts.Values.Count(host => host.IsOnline));
+            var profile = MonitoringProfile.CreateAutomatic(onlineCount);
+            foreach (var receiver in _receiverPool.Values)
+                receiver.SetThumbnailStreaming(enabled, profile);
+        }
         private void UpdateLobbyUI(List<HostInfo> hosts)
         {
             // 장치 ID 기준으로만 중복 제거: 같은 표시 이름의 PC는 모두 유지
@@ -822,6 +911,8 @@ namespace Viewer
                 _currentHosts = uniqueHosts;
             }
 
+            // Never move cards when heartbeat timestamps or online state change.
+            _currentHosts = BuildStableHostOrder(hosts);
             int onlineCount = 0;
 
             var displayList = new List<HostDisplayItem>();
@@ -838,8 +929,14 @@ namespace Viewer
                 {
                     StatusText = host.IsOnline ? "ON" : "OFF", // DataGrid에서는 심플하게
                     Name = host.Name,
+                    LastSeenText = FormatLastSeen(host.LastSeen),
                     Ip = host.Ip,
                     CpuText = $"{host.Cpu}%",
+                    VersionText = host.HasClientUpdate
+                        ? host.SupportsManagedUpdate
+                            ? $"{host.AgentVersion} · 업데이트"
+                            : $"{host.AgentVersion} · 1회 수동 설치"
+                        : host.AgentVersion,
                     Ram = host.Ram,
                     Hdd = host.Hdd,
                     Resolution = host.Resolution,
@@ -857,9 +954,35 @@ namespace Viewer
             UpdateThumbnailSelectionVisuals();
             _hostDataGrid.ItemsSource = displayList;
             _hostCountText.Text = $"PC {onlineCount}/{_currentHosts.Count} 온라인";
+            if (_fleetUpdateButton != null)
+            {
+                var updateCount = _currentHosts.Count(host =>
+                    host.HasClientUpdate && host.SupportsManagedUpdate);
+                _fleetUpdateButton.Content = updateCount > 0
+                    ? $"전체 Client 업데이트 · {updateCount}"
+                    : "전체 Client 최신";
+            }
             _statusBarText.Text = onlineCount > 0 ? "접속 가능" : "대기 중";
+            _ = DispatchPendingClientUpdatesAsync();
         }
 
+        private static string FormatLastSeen(DateTime lastSeen)
+        {
+            if (lastSeen == DateTime.MinValue)
+                return "응답 없음";
+
+            var utc = lastSeen.Kind == DateTimeKind.Utc
+                ? lastSeen
+                : DateTime.SpecifyKind(lastSeen, DateTimeKind.Utc);
+            var elapsed = DateTime.UtcNow - utc;
+            if (elapsed < TimeSpan.Zero || elapsed < TimeSpan.FromMinutes(1))
+                return "방금";
+            if (elapsed < TimeSpan.FromHours(1))
+                return $"{Math.Max(1, (int)elapsed.TotalMinutes)}분 전";
+            if (elapsed < TimeSpan.FromDays(1))
+                return $"{Math.Max(1, (int)elapsed.TotalHours)}시간 전";
+            return $"{Math.Max(1, (int)elapsed.TotalDays)}일 전";
+        }
         private Border CreateHostCard(HostInfo host, int index)
         {
             // === 카드 스타일 Mono Vintage ===
@@ -917,6 +1040,18 @@ namespace Viewer
                 VerticalAlignment = VerticalAlignment.Center
             });
             headerStack.Children.Add(statusPanel);
+            if (host.HasClientUpdate)
+            {
+                headerStack.Children.Add(new TextBlock
+                {
+                    Text = host.SupportsManagedUpdate
+                        ? $"Client {ClientUpdateCatalog.LatestVersion} 업데이트 가능"
+                        : "Preview 20을 한 번 직접 설치해주세요.",
+                    Foreground = new SolidColorBrush(Color.FromRgb(250, 204, 21)),
+                    FontSize = 11,
+                    Margin = new Thickness(14, 3, 0, 0),
+                });
+            }
 
             // === 2. 썸네일 (Row 1) ===
             var thumbnailBorder = new Border
@@ -1078,10 +1213,8 @@ namespace Viewer
         {
             if (_keyboardHook == null) return;
             // 리모트 뷰가 보이고 + 창이 활성화 상태 + 패스워드 패널이 안 보일 때만 캡처
-            bool isPasswordInput = _passwordPanel != null && _passwordPanel.Visibility == Visibility.Visible;
-            bool remoteWindowActive = _remoteWindow?.IsActive ?? IsActive;
-            bool shouldCapture = (_remoteGrid.Visibility == Visibility.Visible) && remoteWindowActive && !isPasswordInput;
-            _keyboardHook.IsCapturing = shouldCapture;
+            _keyboardHook.IsCapturing = IsRemoteInputActive();
+
         }
 
         // ==========================================================
@@ -1097,31 +1230,58 @@ namespace Viewer
             }
 
             ReleaseRemoteInputs();
-            var previousReceiver = _receiver;
-            _receiver = null;
-            DisposeReceiverSafely(previousReceiver);
+            _receiver?.SetPresentationActive(false);
             _isReconnecting = false;
-
-
             _connectedHostId = hostId;
 
-            // 로비를 유지한 채 별도 원격 제어 창을 연다.
             ShowRemoteControlWindow(hostId);
-
-            _statusText.Text = "시스템 연결 시도 중...";
-            _statusText.Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248)); // Amber
+            _statusText.Foreground = new SolidColorBrush(Color.FromRgb(56, 189, 248));
             _statusText.Visibility = Visibility.Visible;
             _statsOverlay.Visibility = Visibility.Collapsed;
 
-            // 키보드 훅 활성화 (상태 업데이트)
-            UpdateInputCaptureState();
-
-            // 바로 연결 시도 (비밀번호 없이)
             try
             {
-                InitializeReceiver(hostId);
-                await _receiver!.StartAsync(null);
-                Console.WriteLine($"[UI] Connecting to {hostId} (no password)");
+                if (!_receiverPool.TryGetValue(hostId, out var receiver))
+                {
+                    receiver = InitializeReceiver(hostId, presentationActive: true);
+                    await receiver.StartAsync(null);
+                    _ = WatchConnectionAsync(receiver, hostId);
+                    _statusText.Text = "Client 응답을 확인하는 중...";
+                    Console.WriteLine($"[UI] Connecting to {hostId} (new session)");
+                }
+                else
+                {
+                    _receiver = receiver;
+                    receiver.SetPresentationActive(true);
+                    if (receiver.VideoBitmap != null)
+                        _videoDisplay.Source = receiver.VideoBitmap;
+
+                    if (receiver.ConnectionState == RTCPeerConnectionState.connected)
+                    {
+                        _statusText.Visibility = receiver.VideoBitmap == null
+                            ? Visibility.Visible
+                            : Visibility.Collapsed;
+                        if (receiver.VideoBitmap == null)
+                            _statusText.Text = "연결 준비 완료 · 첫 화면을 불러오는 중...";
+                        else
+                            _statsOverlay.Visibility = Visibility.Visible;
+                        Console.WriteLine($"[UI] Switched immediately to warm session {hostId}");
+                    }
+                    else if (receiver.ConnectionState == RTCPeerConnectionState.connecting)
+                    {
+                        _statusText.Text = "미리 준비한 연결을 마치는 중...";
+                        _ = WatchConnectionAsync(receiver, hostId);
+                    }
+                    else
+                    {
+                        receiver.Reset();
+                        await receiver.StartAsync(null);
+                        _statusText.Text = "Client 응답을 확인하는 중...";
+                        _ = WatchConnectionAsync(receiver, hostId);
+                    }
+                }
+
+                UpdateInputCaptureState();
             }
             catch (Exception ex)
             {
@@ -1166,11 +1326,9 @@ namespace Viewer
             // 키보드 훅 비활성화 (나중에 상태 업데이트로 처리)
             // VideoReceiver 정리
             ReleaseRemoteInputs();
-            var previousReceiver = _receiver;
+            _receiver?.SetPresentationActive(false);
             _receiver = null;
-            DisposeReceiverSafely(previousReceiver);
             _isReconnecting = false;
-
 
             _connectedHostId = null;
             _enteredPassword = null;
@@ -1264,6 +1422,7 @@ namespace Viewer
 
         private void MoveHost(int direction)
         {
+            MarkHostOrderCustomized();
             if (_hostDataGrid.SelectedItem is HostDisplayItem item)
             {
                 var hostId = item.HostId;
@@ -1304,7 +1463,8 @@ namespace Viewer
         {
             _videoDisplay.MouseMove += (s, e) =>
             {
-                if (_receiver == null || _connectedHostId == null) return;
+                if (_receiver == null || _connectedHostId == null ||
+                    !IsRemoteInputActive()) return;
                 if (!TryGetRemoteCoordinates(
                         e, false, out var nx, out var ny)) return;
 
@@ -1317,7 +1477,8 @@ namespace Viewer
 
             _videoDisplay.MouseDown += (s, e) =>
             {
-                if (_receiver == null || _connectedHostId == null) return;
+                if (_receiver == null || _connectedHostId == null ||
+                    !IsRemoteInputActive()) return;
                 if (!TryGetRemoteCoordinates(
                         e, false, out var nx, out var ny) ||
                     !TryGetMouseButton(e.ChangedButton, out var btn)) return;
@@ -1333,7 +1494,8 @@ namespace Viewer
 
             _videoDisplay.MouseUp += (s, e) =>
             {
-                if (_receiver == null || _connectedHostId == null) return;
+                if (_receiver == null || _connectedHostId == null ||
+                    !IsRemoteInputActive()) return;
                 _videoDisplay.ReleaseMouseCapture();
                 if (!TryGetRemoteCoordinates(
                         e, true, out var nx, out var ny) ||
@@ -1352,7 +1514,8 @@ namespace Viewer
 
             _videoDisplay.MouseWheel += (s, e) =>
             {
-                if (_receiver == null || _connectedHostId == null) return;
+                if (_receiver == null || _connectedHostId == null ||
+                    !IsRemoteInputActive()) return;
                 // 프로토콜: {type, int_delta} = 5바이트
                 var data = new byte[5];
                 data[0] = MSG_MOUSE_WHEEL;
@@ -1404,7 +1567,8 @@ namespace Viewer
         private string? _lastSentClipboardText = null;
         private void OnClipboardUpdated()
         {
-            if (_receiver == null || !_settings.AutoClipboard) return;
+            if (_receiver == null || !_settings.AutoClipboard ||
+                !IsRemoteInputActive()) return;
 
             try
             {
@@ -1427,6 +1591,9 @@ namespace Viewer
         }
         protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
         {
+            _pollTimer?.Stop();
+            _hostRepo?.Dispose();
+
             if (_settings.RememberWindowSize)
             {
                 _settings.WindowWidth = Width;
@@ -1441,6 +1608,7 @@ namespace Viewer
         // ==========================================================
         private void OnKeyHookEvent(ushort vk, bool isDown)
         {
+            if (!IsRemoteInputActive()) return;
             // Modifier 키 상태 추적 (로컬 단축키 판단용, Host로도 전달)
             if (vk == 0xA2 || vk == 0xA3) _ctrlPressed = isDown;
             if (vk == 0xA0 || vk == 0xA1) _shiftPressed = isDown;
@@ -1535,7 +1703,7 @@ namespace Viewer
         // ==========================================================
         private async Task PollHostsFromSupabaseAsync()
         {
-            if (_hostRepo == null) return;
+            if (_hostRepo == null || Interlocked.Exchange(ref _pollInProgress, 1) != 0) return;
             try
             {
                 var hosts = await _hostRepo.GetHostsAsync();
@@ -1568,6 +1736,8 @@ namespace Viewer
                             existing.Hdd = h.Hdd ?? existing.Hdd;
                             existing.Uptime = h.Uptime ?? existing.Uptime;
                             existing.LastSeen = h.LastSeen;
+                            existing.CreatedAt = h.CreatedAt;
+                            existing.AgentVersion = h.AgentVersion ?? "";
                             existing.ThumbnailUrl = h.ThumbnailUrl;
                         }
                         else
@@ -1584,17 +1754,40 @@ namespace Viewer
                                 Hdd = h.Hdd ?? "N/A",
                                 Uptime = h.Uptime ?? "N/A",
                                 LastSeen = h.LastSeen,
+                                AgentVersion = h.AgentVersion ?? "",
+                                CreatedAt = h.CreatedAt,
                                 ThumbnailUrl = h.ThumbnailUrl
                             };
                         }
                     }
 
+                    var onlineHostIds = _persistentHosts.Values
+                        .Where(host => host.IsOnline)
+                        .Select(host => host.Id)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    PruneInactiveReceivers(onlineHostIds);
                     UpdateLobbyUI(_persistentHosts.Values.ToList());
+                    _ = WarmOnlineHostsAsync(
+                        _persistentHosts.Values
+                            .Where(host => host.IsOnline)
+                            .OrderByDescending(host => host.LastSeen)
+                            .Select(host => host.Id)
+                            .ToList());
                 });
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[Poll] Error polling hosts: {ex.Message}");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _pollInProgress, 0);
+                if (_pollTimer != null)
+                {
+                    _pollTimer.Interval = DateTime.UtcNow < _fastPollingUntil
+                        ? TimeSpan.FromSeconds(2)
+                        : TimeSpan.FromSeconds(10);
+                }
             }
         }
 
@@ -1630,6 +1823,8 @@ namespace Viewer
         // ==========================================================
         private async void MainWindow_Loaded(object sender, RoutedEventArgs e)
         {
+            await ClientUpdateCatalog.RefreshAsync();
+
             if (_isDemoMode)
             {
                 LoadDemoFleet();
@@ -1670,9 +1865,66 @@ namespace Viewer
                 _signaling.OnSignalReceived += async (from, signal) =>
                 {
                     Console.WriteLine($"[Signaling] Signal from {from}: {signal}");
-                    if (_receiver != null)
+                    var token = JToken.FromObject(signal);
+                    if (token.Value<string>("type") == "comote-command-progress" &&
+                        token.Value<string>("action") == "update")
                     {
-                        await _receiver.HandleSignalAsync(from, signal);
+                        var percent = token.Value<int?>("percent");
+                        var status = token.Value<string>("status") ?? "업데이트 중…";
+                        Dispatcher.Invoke(() =>
+                        {
+                            var name = _persistentHosts.TryGetValue(from, out var host)
+                                ? host.Name
+                                : from;
+                            _statusBarText.Text = $"{name} · {status}";
+                            _updateProgressBar.Visibility = Visibility.Visible;
+                            _updateProgressBar.IsIndeterminate = percent == null;
+                            if (percent != null)
+                                _updateProgressBar.Value = Math.Clamp(percent.Value, 0, 100);
+                        });
+                        return;
+                    }
+                    if (token.Value<string>("type") == "comote-command-result" &&
+                        token.Value<string>("action") == "update")
+                    {
+                        var ok = token.Value<bool>("ok");
+                        Dispatcher.Invoke(() =>
+                        {
+                            var name = _persistentHosts.TryGetValue(from, out var host)
+                                ? host.Name
+                                : from;
+                            _statusBarText.Text = ok
+                                ? $"Client 업데이트 완료 · {name} · 재시작 중"
+                                : $"Client 업데이트 실패 · {name} · {token.Value<string>("message")}";
+                            _updateProgressBar.IsIndeterminate = false;
+                            _updateProgressBar.Value = ok ? 100 : 0;
+                            _updateProgressBar.Visibility = ok
+                                ? Visibility.Visible
+                                : Visibility.Collapsed;
+                            if (ok)
+                                ClearPendingClientUpdates(new[] { from });
+                            else
+                                MarkPendingClientUpdateFailed(from);
+                        });
+                        if (ok)
+                        {
+                            _ = Task.Run(async () =>
+                            {
+                                await Task.Delay(2500);
+                                Dispatcher.Invoke(() =>
+                                    _updateProgressBar.Visibility = Visibility.Collapsed);
+                            });
+                        }
+                        return;
+                    }
+                    if (_receiverPool.TryGetValue(from, out var receiver))
+                    {
+                        await receiver.HandleSignalAsync(signal);
+                    }
+                    else if (_receiver != null &&
+                             string.Equals(_connectedHostId, from, StringComparison.OrdinalIgnoreCase))
+                    {
+                        await _receiver.HandleSignalAsync(signal);
                     }
                 };
 
@@ -1687,9 +1939,11 @@ namespace Viewer
                     // 최초 로드
                     await PollHostsFromSupabaseAsync();
 
-                    // 10초마다 폴링 타이머 (DispatcherTimer 사용으로 스레드 안정성 확보)
-                    _pollTimer = new System.Windows.Threading.DispatcherTimer();
-                    _pollTimer.Interval = TimeSpan.FromSeconds(10);
+                    // Discover newly signed-in clients quickly, then return to a low-cost interval.
+                    _pollTimer = new System.Windows.Threading.DispatcherTimer
+                    {
+                        Interval = TimeSpan.FromSeconds(2),
+                    };
                     _pollTimer.Tick += async (s, ev) => await PollHostsFromSupabaseAsync();
                     _pollTimer.Start();
                 }
@@ -1701,18 +1955,102 @@ namespace Viewer
             }
         }
 
+        private void PruneInactiveReceivers(
+            IReadOnlySet<string> onlineHostIds)
+        {
+            foreach (var entry in _receiverPool.ToArray())
+            {
+                if (onlineHostIds.Contains(entry.Key) ||
+                    string.Equals(
+                        entry.Key,
+                        _connectedHostId,
+                        StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (_receiverPool.TryRemove(entry.Key, out var receiver))
+                {
+                    receiver.SetPresentationActive(false);
+                    DisposeReceiverSafely(receiver);
+                    Console.WriteLine(
+                        $"[UI] Released inactive preview: {entry.Key}");
+                }
+            }
+        }
+        private async Task WarmOnlineHostsAsync(IEnumerable<string> hostIds)
+        {
+            if (_signaling == null || _isHubMode || _isLanMode) return;
+
+            foreach (var hostId in hostIds
+                         .Where(id => !string.IsNullOrWhiteSpace(id))
+                         .Distinct(StringComparer.OrdinalIgnoreCase)
+                         .Take(MaxWarmConnections))
+            {
+                if (_receiverPool.ContainsKey(hostId)) continue;
+
+                VideoReceiver? receiver = null;
+                try
+                {
+                    receiver = InitializeReceiver(hostId, presentationActive: false);
+                    await receiver.StartAsync(null);
+                    Console.WriteLine($"[UI] Warm connection requested for {hostId}");
+                    await Task.Delay(25);
+                }
+                catch (Exception ex)
+                {
+                    _receiverPool.TryRemove(hostId, out _);
+                    DisposeReceiverSafely(receiver);
+                    Console.WriteLine(
+                        $"[UI] Warm connection failed for {hostId}: {ex.Message}");
+                }
+            }
+        }
+        private async Task RetryWarmConnectionAsync(
+            string hostId,
+            VideoReceiver receiver)
+        {
+            foreach (var delay in new[] { TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(7) })
+            {
+                await Task.Delay(delay);
+                if (!_receiverPool.TryGetValue(hostId, out var pooled) ||
+                    !ReferenceEquals(pooled, receiver) ||
+                    receiver.ConnectionState == RTCPeerConnectionState.connected ||
+                    ReferenceEquals(_receiver, receiver))
+                    return;
+
+                try
+                {
+                    receiver.Reset();
+                    await receiver.StartAsync(null);
+                    Console.WriteLine($"[UI] Warm connection retry sent for {hostId}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(
+                        $"[UI] Warm connection retry failed for {hostId}: {ex.Message}");
+                }
+            }
+        }
         // ==========================================================
         // VideoReceiver 초기화
         // ==========================================================
-        private void InitializeReceiver(string hostId)
+        private VideoReceiver InitializeReceiver(
+            string hostId,
+            bool presentationActive = true)
         {
             var receiver = new VideoReceiver();
-            _receiver = receiver;
+            _receiverPool[hostId] = receiver;
+            if (presentationActive)
+                _receiver = receiver;
+            receiver.SetPresentationActive(presentationActive);
+            receiver.SetThumbnailStreaming(
+                ShouldStreamLiveThumbnails(),
+                MonitoringProfile.CreateAutomatic(Math.Max(
+                    1,
+                    _persistentHosts.Values.Count(host => host.IsOnline))));
 
             // 시그널 전송
             receiver.OnSignalReady += async (signal) =>
             {
-                if (!ReferenceEquals(_receiver, receiver)) return;
                 if (_isHubMode &&
                     _hubServer != null &&
                     _connectedHostId == hostId)
@@ -1725,9 +2063,9 @@ namespace Viewer
                 {
                     await _lanSignal.SendSignalAsync(signal);
                 }
-                else if (_signaling != null && _connectedHostId != null)
+                else if (_signaling != null)
                 {
-                    await _signaling.SendSignalAsync(_connectedHostId, signal);
+                    await _signaling.SendSignalAsync(hostId, signal);
                 }
             };
 
@@ -1736,6 +2074,17 @@ namespace Viewer
             {
                 Dispatcher.Invoke(() =>
                 {
+                    if (receiver.VideoBitmap != null &&
+                        _liveThumbnailImages.TryGetValue(hostId, out var thumbnailImage))
+                    {
+                        if (!ReferenceEquals(thumbnailImage.Source, receiver.VideoBitmap))
+                            thumbnailImage.Source = receiver.VideoBitmap;
+                        if (thumbnailImage.Tag is UIElement placeholder)
+                            placeholder.Visibility = Visibility.Collapsed;
+                        if (_persistentHosts.TryGetValue(hostId, out var thumbnailHost))
+                            thumbnailHost.LastSeen = DateTime.UtcNow;
+                    }
+
                     if (ReferenceEquals(_receiver, receiver) &&
                         receiver.VideoBitmap != null)
                     {
@@ -1749,6 +2098,24 @@ namespace Viewer
             // 연결 상태 변경
             receiver.OnConnectionStateChanged += (state) =>
             {
+                Dispatcher.Invoke(() =>
+                {
+                    UpdateInputCaptureState();
+                    if (!ReferenceEquals(_receiver, receiver)) return;
+
+                    if (state == RTCPeerConnectionState.connected)
+                    {
+                        _statusText.Text = "\uC5F0\uACB0 \uC644\uB8CC \u00B7 \uCCAB \uD654\uBA74\uC744 \uBD88\uB7EC\uC624\uB294 \uC911...";
+                        _statusText.Foreground = new SolidColorBrush(Color.FromRgb(148, 163, 184));
+                        _statusText.Visibility = Visibility.Visible;
+                    }
+                    else if (state == RTCPeerConnectionState.connecting)
+                    {
+                        _statusText.Text = "\uBCF4\uC548 \uC5F0\uACB0\uACFC \uB124\uD2B8\uC6CC\uD06C \uACBD\uB85C\uB97C \uD655\uC778\uD558\uB294 \uC911...";
+                        _statusText.Visibility = Visibility.Visible;
+                    }
+                });
+
                 if (state == RTCPeerConnectionState.failed ||
                     state == RTCPeerConnectionState.disconnected)
                 {
@@ -1756,12 +2123,15 @@ namespace Viewer
                         _ = ReconnectAsync(receiver, hostId);
                 }
             };
+            receiver.OnInputReadyChanged += _ =>
+                Dispatcher.Invoke(() => UpdateInputCaptureState());
 
             // 비밀번호 거절
             receiver.OnRejected += (reason) =>
             {
                 Dispatcher.Invoke(() =>
                 {
+                    if (!ReferenceEquals(_receiver, receiver)) return;
                     ShowPasswordPanel("비밀번호가 틀립니다. 다시 입력해 주세요.");
                 });
             };
@@ -1771,6 +2141,7 @@ namespace Viewer
             {
                 Dispatcher.Invoke(() =>
                 {
+                    if (!ReferenceEquals(_receiver, receiver)) return;
                     try { Clipboard.SetText(text); }
                     catch { }
                 });
@@ -1795,29 +2166,76 @@ namespace Viewer
                     }
                 });
             }, null, 1000, 1000);
+            return receiver;
         }
 
         // ==========================================================
         // 자동 재연결
         // ==========================================================
+        private async Task WatchConnectionAsync(
+            VideoReceiver receiver,
+            string hostId,
+            int attempt = 0)
+        {
+            await Task.Delay(attempt == 0
+                ? TimeSpan.FromSeconds(3)
+                : TimeSpan.FromSeconds(7));
+
+            if (!ReferenceEquals(_receiver, receiver) ||
+                _connectedHostId != hostId ||
+                receiver.ConnectionState == RTCPeerConnectionState.connected)
+            {
+                return;
+            }
+
+            if (attempt >= 2)
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    _statusText.Text = !receiver.HasRemoteResponse
+                        ? "Client signaling is not responding. Check whether Client is running."
+                        : !IceServerConfiguration.HasManagedTurn
+                            ? "Client responded, but the direct route is blocked. TURN is required across restricted networks."
+                            : "Client responded, but the relay route is delayed. Comote will keep reconnecting.";
+                    _statusText.Foreground = Brushes.OrangeRed;
+                    _statusText.Visibility = Visibility.Visible;
+                });
+                return;
+            }
+
+            Dispatcher.Invoke(() =>
+            {
+                _statusText.Text =
+                    "Client \uC751\uB2F5\uC744 \uAE30\uB2E4\uB9AC\uB294 \uC911 \u00B7 \uC5F0\uACB0 \uC694\uCCAD\uC744 \uB2E4\uC2DC \uBCF4\uB0C5\uB2C8\uB2E4...";
+                _statusText.Foreground = new SolidColorBrush(Color.FromRgb(251, 191, 36));
+                _statusText.Visibility = Visibility.Visible;
+            });
+
+            await ReconnectAsync(receiver, hostId, 0, attempt + 1);
+        }
+
         private async Task ReconnectAsync(
             VideoReceiver receiver,
-            string hostId)
+            string hostId,
+            int delayMilliseconds = 3000,
+            int watchAttempt = 0)
         {
             if (_isReconnecting ||
                 !ReferenceEquals(_receiver, receiver) ||
                 _connectedHostId != hostId) return;
             _isReconnecting = true;
 
-            Console.WriteLine("[UI] Connection lost, reconnecting in 3s...");
-            Dispatcher.Invoke(() =>
+            if (delayMilliseconds > 0)
             {
-                _statusText.Text = "연결 끊김. 3초 후 재연결...";
-                _statusText.Visibility = Visibility.Visible;
-                _statsOverlay.Visibility = Visibility.Collapsed;
-            });
-
-            await Task.Delay(3000);
+                Console.WriteLine($"[UI] Connection lost, reconnecting in {delayMilliseconds}ms...");
+                Dispatcher.Invoke(() =>
+                {
+                    _statusText.Text = "\uC5F0\uACB0\uC774 \uB04A\uACA8 \uC7AC\uC5F0\uACB0\uD558\uB294 \uC911...";
+                    _statusText.Visibility = Visibility.Visible;
+                    _statsOverlay.Visibility = Visibility.Collapsed;
+                });
+                await Task.Delay(delayMilliseconds);
+            }
 
             if (ReferenceEquals(_receiver, receiver) &&
                 _connectedHostId == hostId)
@@ -1826,6 +2244,7 @@ namespace Viewer
                 {
                     receiver.Reset();
                     await receiver.StartAsync(_enteredPassword);
+                    _ = WatchConnectionAsync(receiver, hostId, watchAttempt);
                     Console.WriteLine("[UI] Reconnect offer sent");
                 }
                 catch (Exception ex)
@@ -1836,7 +2255,6 @@ namespace Viewer
 
             _isReconnecting = false;
         }
-
         private static T? FindVisualParent<T>(DependencyObject? obj) where T : DependencyObject
         {
             while (obj != null)
@@ -1854,9 +2272,11 @@ namespace Viewer
     public class HostDisplayItem
     {
         public string StatusText { get; set; } = "";
+        public string LastSeenText { get; set; } = "";
         public string Name { get; set; } = "";
         public string Ip { get; set; } = "";
         public string CpuText { get; set; } = "";
+        public string VersionText { get; set; } = "";
         public string Ram { get; set; } = "";
         public string Hdd { get; set; } = "";
         public string Resolution { get; set; } = "";

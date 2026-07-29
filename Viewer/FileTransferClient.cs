@@ -6,6 +6,7 @@ using SIPSorcery.Net;
 using SIPSorceryMedia.Abstractions;
 using Newtonsoft.Json.Linq;
 
+using Comote.Shared;
 namespace Viewer
 {
     /// <summary>
@@ -14,11 +15,11 @@ namespace Viewer
     /// </summary>
     public class FileTransferClient : IDisposable
     {
-        private RTCPeerConnection _pc;
-        private RTCDataChannel _dc;
+        private RTCPeerConnection _pc = null!;
+        private RTCDataChannel _dc = null!;
         private SignalingClient _signaling;
         private string _targetHostId;
-        private TaskCompletionSource<bool> _connectionTcs;
+        private TaskCompletionSource<bool> _connectionTcs = null!;
         
         public Action<int>? OnProgress; // 0~100
         public Action<string>? OnStatus; // 상태 메시지
@@ -46,10 +47,7 @@ namespace Viewer
 
             var config = new RTCConfiguration
             {
-                iceServers = new List<RTCIceServer>
-                {
-                    new RTCIceServer { urls = "stun:stun.l.google.com:19302" }
-                }
+                iceServers = IceServerConfiguration.Create()
             };
             _pc = new RTCPeerConnection(config);
 
@@ -82,7 +80,7 @@ namespace Viewer
             _pc.onicecandidate += (candidate) =>
             {
                 // Host는 { "ice": { ... } } 포맷을 기대함 (WebRTCManager.cs 354행)
-                _signaling.SendSignalAsync(_targetHostId, new { 
+                _ = _signaling.SendSignalAsync(_targetHostId, new {
                     ice = new {
                         candidate = candidate.candidate,
                         sdpMid = candidate.sdpMid,
@@ -124,9 +122,9 @@ namespace Viewer
                 var json = JObject.FromObject(signal);
                 if (json.ContainsKey("sdp"))
                 {
-                    var sdp = json["sdp"];
-                    var type = sdp["type"]?.ToString();
-                    var sdpStr = sdp["sdp"]?.ToString();
+                    if (json["sdp"] is not JObject sdp) return;
+                    var type = sdp.Value<string>("type");
+                    var sdpStr = sdp.Value<string>("sdp");
                     
                     if (type == "answer")
                     {
@@ -143,7 +141,7 @@ namespace Viewer
                 }
                 else if (json.ContainsKey("ice"))
                 {
-                    var ice = json["ice"];
+                    if (json["ice"] is not JObject ice) return;
                     var candidate = new RTCIceCandidateInit
                     {
                         candidate = ice["candidate"]?.ToString(),

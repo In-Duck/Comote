@@ -12,6 +12,7 @@ using Newtonsoft.Json;
 using System.Text;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using Comote.Shared;
 
 namespace Host
 {
@@ -20,7 +21,7 @@ namespace Host
         // 소켓 고갈 방지를 위해 static HttpClient 사용 (앱 수명 동안 재사용)
         private static readonly HttpClient _httpClient = new HttpClient();
 
-        private Pusher _pusher;
+        private Pusher _pusher = null!;
         private string _appKey;
         private string _cluster;
         private string _hostId;
@@ -36,9 +37,11 @@ namespace Host
         private string _supabaseKey;
         private string _userId;
         private readonly CancellationTokenSource _lifetimeCts = new();
+        private int _heartbeatStarted;
+        private int _signalingReconnectStarted;
         private ScreenCapture? _capture;
 
-        public event Action<string, object> OnSignalReceived;
+        public event Action<string, object>? OnSignalReceived;
 
         public SignalingClient(string appKey, string cluster, string webAuthUrl, string accessToken,
             string hostId, string? hostName = null, string? resolution = null,
@@ -54,7 +57,7 @@ namespace Host
             _supabaseUrl = supabaseUrl ?? "";
             _supabaseKey = supabaseKey ?? "";
             _userId = userId ?? "";
-            
+
             // 시스템 정보 수집
             try
             {
@@ -66,9 +69,34 @@ namespace Host
 
         public async Task ConnectAsync()
         {
+            await IceServerConfiguration.RefreshManagedCredentialsAsync(
+                _webAuthUrl,
+                _accessToken,
+                _lifetimeCts.Token);
+            if (HasHeartbeatConfiguration())
+            {
+                // Register ownership before Pusher authorizes private-control-{hostId}.
+                await SendHeartbeatAsync(advertiseOnline: false);
+            }
+            StartHeartbeat();
+
+            try
+            {
+                await ConnectSignalingAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[Signaling] Initial connection failed: {ex.Message}. " +
+                    "Host registration remains active; signaling will retry.");
+                StartSignalingReconnectLoop();
+            }
+        }
+
+        private async Task ConnectSignalingAsync()
+        {
             Console.WriteLine("[Signaling] Connecting to Pusher...");
 
-            // Pusher 초기화 (Private 채널 전용, Presence 채널 미사용)
             _pusher = new Pusher(_appKey, new PusherOptions
             {
                 Cluster = _cluster,
@@ -79,52 +107,108 @@ namespace Host
                 }
             });
 
-            _pusher.Connected += (s) => {
+            _pusher.Connected += (s) =>
+            {
                 Console.WriteLine("[Signaling] Pusher Connected (Private Channel Only)");
             };
-            _pusher.Error += (s, e) => {
+            _pusher.Error += (s, e) =>
+            {
                 Console.WriteLine($"[Signaling] Pusher Connection Error: {e.Message}");
             };
-            _pusher.ConnectionStateChanged += (s, state) => {
+            _pusher.ConnectionStateChanged += (s, state) =>
+            {
                 Console.WriteLine($"[Signaling] Connection State: {state}");
             };
 
             await _pusher.ConnectAsync();
 
-            // Private 채널만 구독 (시그널링 전용)
             Console.WriteLine($"[Signaling] Subscribing to private-control-{_hostId}...");
             var privateChannel = await _pusher.SubscribeAsync($"private-control-{_hostId}");
-            privateChannel.Bind("pusher:subscription_succeeded", (PusherEvent eventData) => {
+            privateChannel.Bind("pusher:subscription_succeeded", (PusherEvent eventData) =>
+            {
                 Console.WriteLine($"[Signaling] Subscribed to private-control-{_hostId} successfully");
             });
             privateChannel.Bind("signal", (PusherEvent eventData) =>
             {
-                try {
-                    var data = JsonConvert.DeserializeObject<dynamic>(eventData.Data);
-                    string from = data.from;
-                    object signal = data.signal;
-                    OnSignalReceived?.Invoke(from, signal);
-                } catch(Exception ex) { Console.WriteLine("[Signaling] Signal parse error: " + ex.Message); }
+                try
+                {
+                    var data = Newtonsoft.Json.Linq.JObject.Parse(eventData.Data);
+                    var from = data.Value<string>("from");
+                    var signal = data["signal"]?.ToObject<object>();
+                    if (!string.IsNullOrWhiteSpace(from) && signal != null)
+                        OnSignalReceived?.Invoke(from, signal);
+                }
+                catch (Exception ex) { Console.WriteLine("[Signaling] Signal parse error: " + ex.Message); }
             });
-
-            // Supabase heartbeat 시작 (30초마다 시스템 정보 + last_seen 업데이트)
-            if (!string.IsNullOrEmpty(_supabaseUrl) && !string.IsNullOrEmpty(_userId))
-            {
-                // 최초 즉시 실행 + 이후 30초 간격
-                _ = RunHeartbeatLoopAsync(_lifetimeCts.Token);
-                Console.WriteLine("[Signaling] Supabase heartbeat started (30s interval)");
-            }
+            await SendHeartbeatAsync(advertiseOnline: true);
         }
 
+        private bool HasHeartbeatConfiguration() =>
+            !string.IsNullOrWhiteSpace(_supabaseUrl) &&
+            !string.IsNullOrWhiteSpace(_supabaseKey) &&
+            !string.IsNullOrWhiteSpace(_userId);
+
+        private void StartHeartbeat()
+        {
+            if (!HasHeartbeatConfiguration())
+            {
+                Console.WriteLine(
+                    "[Heartbeat] Supabase configuration is incomplete; " +
+                    "this PC cannot appear in Manager.");
+                return;
+            }
+
+            if (Interlocked.Exchange(ref _heartbeatStarted, 1) != 0) return;
+
+            _ = RunHeartbeatLoopAsync(_lifetimeCts.Token);
+            Console.WriteLine("[Heartbeat] Host registration started (20s interval)");
+        }
+
+        private void StartSignalingReconnectLoop()
+        {
+            if (Interlocked.Exchange(ref _signalingReconnectStarted, 1) != 0) return;
+            _ = RunSignalingReconnectLoopAsync(_lifetimeCts.Token);
+        }
+
+        private async Task RunSignalingReconnectLoopAsync(
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
+                    try
+                    {
+                        await ConnectSignalingAsync();
+                        Console.WriteLine("[Signaling] Reconnected successfully");
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Signaling] Retry failed: {ex.Message}");
+                    }
+                }
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested)
+            {
+                // Normal shutdown.
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _signalingReconnectStarted, 0);
+            }
+        }
         private async Task RunHeartbeatLoopAsync(CancellationToken cancellationToken)
         {
             try
             {
-                await SendHeartbeatAsync();
-                using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+                using var timer = new PeriodicTimer(TimeSpan.FromSeconds(20));
                 while (await timer.WaitForNextTickAsync(cancellationToken))
                 {
-                    await SendHeartbeatAsync();
+                    await SendHeartbeatAsync(
+                        _pusher?.State == ConnectionState.Connected);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -137,7 +221,7 @@ namespace Host
         /// Supabase hosts 테이블에 시스템 정보 + last_seen을 UPSERT합니다.
         /// Presence 채널을 완전히 대체합니다.
         /// </summary>
-        private async Task SendHeartbeatAsync()
+        private async Task SendHeartbeatAsync(bool advertiseOnline)
         {
             try
             {
@@ -154,7 +238,12 @@ namespace Host
                     uptime = (string?)((dynamic)info).uptime ?? "N/A",
                     ip = (string?)((dynamic)info).ip ?? "unknown",
                     mac_address = (string?)((dynamic)info).mac_address ?? "",
-                    last_seen = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+                    agent_version = typeof(SignalingClient).Assembly
+                        .GetName().Version?.ToString() ?? "unknown",
+                    last_seen = (advertiseOnline
+                        ? DateTime.UtcNow
+                        : DateTime.UtcNow.AddMinutes(-5))
+                        .ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
                 };
 
                 var baseUrl = _supabaseUrl.TrimEnd('/');
@@ -193,7 +282,7 @@ namespace Host
             {
                 // 60초 간격으로 썸네일 업로드
                 _ = RunThumbnailLoopAsync(_lifetimeCts.Token);
-                Console.WriteLine("[Signaling] Thumbnail reporting started (60s interval)");
+                Console.WriteLine("[Signaling] Thumbnail reporting started (30s interval)");
             }
         }
 
@@ -201,10 +290,10 @@ namespace Host
         {
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
                 await SendThumbnailAsync();
 
-                using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+                using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
                 while (await timer.WaitForNextTickAsync(cancellationToken))
                 {
                     await SendThumbnailAsync();
@@ -236,11 +325,16 @@ namespace Host
                 request.Content = new ByteArrayContent(thumbnail);
                 request.Content.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
 
-                var response = await _httpClient.SendAsync(request);
+                using var response = await _httpClient.SendAsync(request);
                 if (response.IsSuccessStatusCode)
                 {
                     await UpdateThumbnailPathInDbAsync(objectPath);
                     Console.WriteLine("[Thumbnail] Uploaded successfully");
+                }
+                else
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine($"[Thumbnail] Upload failed ({(int)response.StatusCode}): {error}");
                 }
             }
             catch (Exception ex)
@@ -260,9 +354,17 @@ namespace Host
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _accessToken);
                 request.Content = new StringContent(JsonConvert.SerializeObject(dto), Encoding.UTF8, "application/json");
 
-                await _httpClient.SendAsync(request);
+                using var response = await _httpClient.SendAsync(request);
+                if (!response.IsSuccessStatusCode)
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    Console.WriteLine($"[Thumbnail] Database update failed ({(int)response.StatusCode}): {error}");
+                }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Thumbnail] Database update error: {ex.Message}");
+            }
         }
 
         [System.Runtime.InteropServices.DllImport("kernel32.dll")]
@@ -336,16 +438,21 @@ namespace Host
 
             // MAC Address
             var mac = "";
-            try {
-                foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()) {
-                    if (nic.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up && 
-                        nic.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Loopback) {
+            try
+            {
+                foreach (var nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (nic.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up &&
+                        nic.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Loopback)
+                    {
                         mac = nic.GetPhysicalAddress().ToString();
-                        if (!string.IsNullOrEmpty(mac)) {
+                        if (!string.IsNullOrEmpty(mac))
+                        {
                             // Format: XX:XX:XX:XX:XX:XX
                             var sb = new System.Text.StringBuilder();
-                            for(int i=0; i<mac.Length; i++) {
-                                if (i>0 && i%2==0) sb.Append(":");
+                            for (int i = 0; i < mac.Length; i++)
+                            {
+                                if (i > 0 && i % 2 == 0) sb.Append(":");
                                 sb.Append(mac[i]);
                             }
                             mac = sb.ToString();
@@ -353,7 +460,8 @@ namespace Host
                         }
                     }
                 }
-            } catch {}
+            }
+            catch { }
 
             return new
             {
@@ -389,7 +497,7 @@ namespace Host
             }
             catch (Exception ex)
             {
-                 Console.WriteLine($"[Signaling] SendSignal Error: {ex.Message}");
+                Console.WriteLine($"[Signaling] SendSignal Error: {ex.Message}");
             }
         }
     }

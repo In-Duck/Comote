@@ -1,0 +1,14 @@
+{
+  "version": "1.6.0-preview.28",
+  "assembly_version": "1.6.0.28",
+  "client": {
+    "url": "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.28/ComoteClient-1.6.0-preview.28-win-x64.zip",
+    "sha256": "6A5E5FEBCE3DA971ED65F88A1D5160426243D99E8351F6B1442BE3F11C4391C2",
+    "bytes": 120771379
+  },
+  "manager": {
+    "url": "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.28/ComoteManager-1.6.0-preview.28-win-x64.zip",
+    "sha256": "9E8495338BC02464C6B6416F0515F2CFB9F84542045D4AECA241F718853E4F3C",
+    "bytes": 143184776
+  }
+}

@@ -1,9 +1,11 @@
-﻿name: Release Preview 10
+name: Validate Preview Packages
 
 on:
   push:
     branches:
       - main
+      - agent/complete-comote-prototype
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -18,57 +20,71 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Verify Phase 1 driver safety boundary
+        shell: pwsh
+        run: ./Driver/ComoteVirtualHid/Test-Phase1Boundary.ps1
+
       - name: Build manager and client
         shell: pwsh
         run: ./Distribution/Build_Hub_Packages.ps1
 
-      - name: Create separate download packages
+      - name: Build small online installers
+        shell: pwsh
+        run: ./Installer/Build_Web_Installers.ps1 -UseLocalPackages
+
+      - name: Resolve release metadata
+        id: release_metadata
         shell: pwsh
         run: |
-          Compress-Archive `
-            -Path artifacts/Comote-1.6.0-preview.10/Manager/* `
-            -DestinationPath artifacts/ComoteManager-1.6.0-preview.10-win-x64.zip `
-            -CompressionLevel Optimal
-          Compress-Archive `
-            -Path artifacts/Comote-1.6.0-preview.10/Client/* `
-            -DestinationPath artifacts/ComoteClient-1.6.0-preview.10-win-x64.zip `
-            -CompressionLevel Optimal
+          [xml]$project = Get-Content Host/Host.csproj
+          $version = [string]$project.Project.PropertyGroup.Version
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Host project version is missing."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
 
-      - name: Build offline and online installers
+      - name: Verify release packages
         shell: pwsh
+        env:
+          VERSION: ${{ steps.release_metadata.outputs.version }}
         run: |
-          choco install innosetup --no-progress -y
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          ./Distribution/Build_All_Preview10_Installers.ps1 `
-            -PackagePath artifacts/Comote-1.6.0-preview.10-win-x64.zip `
-            -InnoCompiler $iscc
-          & $iscc Distribution/Client/Client_Online_Installer.iss
+          $assets = @(
+            "artifacts/ComoteManager-$env:VERSION-win-x64.zip",
+            "artifacts/ComoteClient-$env:VERSION-win-x64.zip",
+            "artifacts/Comote-$env:VERSION-win-x64.zip",
+            "artifacts/installers/ComoteManager_Setup.exe",
+            "artifacts/installers/ComoteClient_Setup.exe"
+          )
+          foreach ($asset in $assets) {
+            if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) {
+              throw "Release package is missing: $asset"
+            }
+            $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $asset
+            Write-Host "$($hash.Hash)  $asset"
+          }
 
-          Copy-Item `
-            artifacts/Comote-1.6.0-preview.10/Client/ComoteClient.exe `
-            artifacts/ComoteClient.exe
-          (Get-FileHash `
-            -Algorithm SHA256 `
-            artifacts/ComoteClient.exe).Hash |
-            Set-Content -NoNewline artifacts/ComoteClient.exe.sha256
       - name: Publish GitHub Release
+        if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release_metadata.outputs.version }}
         run: |
-          gh release create "v1.6.0-preview.10" `
-            artifacts/ComoteManager-1.6.0-preview.10-win-x64.zip `
-            artifacts/ComoteClient-1.6.0-preview.10-win-x64.zip `
-            artifacts/Comote-1.6.0-preview.10-win-x64.zip `
-            artifacts/installers/ComoteManager_Setup_1.6.0-preview.10_Offline.exe `
-            artifacts/installers/ComoteClient_Setup_1.6.0-preview.10_Offline.exe `
-            artifacts/installers/ComoteClient_Setup_1.6.0-preview.10_Online.exe `
-            artifacts/ComoteClient.exe `
-            artifacts/ComoteClient.exe.sha256 `
-            --title "Comote 1.6.0 Preview 10" `
-            --notes "Central account mode by default, unique device identity for duplicate PC names, improved remote input delivery, and shared device lists for managers signed in to the same account."
+          $assets = @(
+            "artifacts/ComoteManager-$env:VERSION-win-x64.zip",
+            "artifacts/ComoteClient-$env:VERSION-win-x64.zip",
+            "artifacts/Comote-$env:VERSION-win-x64.zip",
+            "artifacts/installers/ComoteManager_Setup.exe",
+            "artifacts/installers/ComoteClient_Setup.exe"
+          )
+          $tag = "v$env:VERSION"
 
-
-
-
-
+          if (gh release view $tag 2>$null) {
+            gh release upload $tag $assets --clobber
+          } else {
+            gh release create $tag $assets `
+              --target "${{ github.sha }}" `
+              --title "Comote $env:VERSION" `
+              --prerelease `
+              --generate-notes
+          }

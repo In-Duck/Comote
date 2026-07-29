@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text;
 using System.Windows.Forms;
 using SIPSorceryMedia.FFmpeg;
@@ -38,6 +38,8 @@ namespace Host
                 savedSettings?.ClientName ?? Environment.MachineName;
             var adapterIndex = savedSettings?.AdapterIndex ?? 0;
             var outputIndex = savedSettings?.OutputIndex ?? 0;
+            var inputBackendMode = savedSettings?.InputBackendMode ??
+                InputBackendMode.SendInput;
 
             if (!int.TryParse(portText, out var port) ||
                 port is < 1024 or > 65535)
@@ -62,6 +64,7 @@ namespace Host
                 clientName = setup.ClientName;
                 adapterIndex = setup.AdapterIndex;
                 outputIndex = setup.OutputIndex;
+                inputBackendMode = setup.SelectedInputBackendMode;
             }
 
             if (password.Length < 8)
@@ -71,6 +74,10 @@ namespace Host
                 return;
             }
 
+            inputBackendMode = InputBackendFactory.ResolveConfiguredMode(
+                inputBackendMode,
+                null,
+                allowInstall: Environment.UserInteractive);
             HubClientSettingsStore.Save(
                 new HubClientSettings
                 {
@@ -79,6 +86,7 @@ namespace Host
                     ClientName = clientName,
                     AdapterIndex = adapterIndex,
                     OutputIndex = outputIndex,
+                    InputBackendMode = inputBackendMode,
                     UpdateManifestUrl = updateManifest ?? "",
                 },
                 password);
@@ -105,7 +113,10 @@ namespace Host
                 ffmpegPath);
             using var capture =
                 new ScreenCapture(adapterIndex, outputIndex);
-            using var webRtc = new WebRTCManager(capture);
+            using var inputBackend = InputBackendFactory.Create(
+                inputBackendMode, capture);
+            using var webRtc = new WebRTCManager(
+                capture, inputBackend: inputBackend);
             using var hub = new ManagerHubClient(
                 manager,
                 port,

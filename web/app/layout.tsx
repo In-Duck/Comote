@@ -1,22 +1,25 @@
-
 import type { Metadata } from "next";
 import "./globals.css";
 
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://comote-remote.dopum54.chatgpt.site";
+
 export const metadata: Metadata = {
-  title: "Comote | 다중 PC 원격 관제",
-  description: "여러 대의 Windows PC를 하나의 계정에서 관제하고 원격 제어하세요.",
+  metadataBase: new URL(siteUrl),
+  title: "Comote | Windows 원격 관리",
+  description: "같은 계정으로 로그인한 Windows PC를 어디서든 확인하고 제어하세요.",
+  openGraph: {
+    title: "Comote",
+    description: "같은 계정으로, 어디서든 내 PC",
+    images: [{ url: "/og.png", width: 1200, height: 630, alt: "Comote 원격 PC 관리" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Comote",
+    description: "같은 계정으로, 어디서든 내 PC",
+    images: ["/og.png"],
+  },
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
-  return (
-    <html lang="ko">
-      <body className="bg-[#07111f] text-slate-100 antialiased selection:bg-cyan-300 selection:text-[#07111f]">
-        {children}
-      </body>
-    </html>
-  );
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  return <html lang="ko"><body>{children}</body></html>;
 }

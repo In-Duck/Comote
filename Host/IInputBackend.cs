@@ -3,8 +3,7 @@ namespace Host
     public enum InputBackendMode
     {
         SendInput = 1,
-        VirtualHidMode2 = 2,
-        VirtualHidMode3 = 3,
+        VirtualHid = 2,
     }
 
     public sealed record InputBackendStatus(
@@ -22,6 +21,8 @@ namespace Host
         InputBackendStatus GetStatus();
 
         void UpdateScreenSize(int width, int height);
+
+        void UpdateScreenBounds(int left, int top, int width, int height);
 
         void ProcessMessage(byte[] data);
 

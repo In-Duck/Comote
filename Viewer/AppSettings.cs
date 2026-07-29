@@ -18,12 +18,14 @@ namespace Viewer
         public double WindowWidth { get; set; } = 1200;
         public double WindowHeight { get; set; } = 800;
         public List<string> HostOrder { get; set; } = new();
+        public bool? HostOrderCustomized { get; set; }
+        public List<string> PendingClientUpdateHostIds { get; set; } = new();
 
         public string PusherAppKey { get; set; } = "50ef3c55ccd8c468f604";
         public string PusherCluster { get; set; } = "ap3";
         public string SupabaseUrl { get; set; } = "https://xhdpmxarnkntbkwqobzm.supabase.co";
         public string SupabaseAnonKey { get; set; } = "sb_publishable_0DND4OEVX8lTX5qGIgs1Xg_Bnm7ORhO";
-        public string WebAuthUrl { get; set; } = "https://kymote.vercel.app/api/pusher/auth";
+        public string WebAuthUrl { get; set; } = "https://comote-remote.dopum54.chatgpt.site/api/pusher/auth";
 
         public static string DataDirectory =>
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Comote", "Viewer");

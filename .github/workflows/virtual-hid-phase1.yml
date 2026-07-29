@@ -1,0 +1,47 @@
+name: Virtual HID Phase 1 Build
+
+on:
+  push:
+    branches:
+      - agent/complete-comote-prototype
+    paths:
+      - Driver/ComoteVirtualHid/**
+      - .github/workflows/virtual-hid-phase1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: virtual-hid-phase1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-only:
+    name: Build and validate unsigned driver
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up NuGet
+        uses: NuGet/setup-nuget@v2
+        with:
+          nuget-version: 6.x
+
+      - name: Verify no-install safety boundary
+        shell: pwsh
+        run: ./Driver/ComoteVirtualHid/Test-Phase1Boundary.ps1
+
+      - name: Restore WDK and build
+        shell: pwsh
+        run: ./Driver/ComoteVirtualHid/Build-Phase1Ci.ps1
+
+      - name: Upload unsigned validation package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ComoteVirtualHid-phase1-unsigned-${{ github.sha }}
+          path: Driver/ComoteVirtualHid/artifacts/phase1-ci-unsigned/
+          if-no-files-found: error
+          retention-days: 7

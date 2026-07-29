@@ -21,6 +21,9 @@ namespace Viewer
 
         [JsonProperty("last_seen")]
         public DateTime LastSeen { get; set; }
+        [JsonProperty("created_at")]
+        public DateTime CreatedAt { get; set; }
+
 
         [JsonProperty("ip")]
         public string Ip { get; set; } = "unknown";
@@ -42,6 +45,9 @@ namespace Viewer
 
         [JsonProperty("mac_address")]
         public string MacAddress { get; set; } = "";
+
+        [JsonProperty("agent_version")]
+        public string AgentVersion { get; set; } = "";
 
         [JsonProperty("thumbnail_path")]
         public string? ThumbnailPath { get; set; }

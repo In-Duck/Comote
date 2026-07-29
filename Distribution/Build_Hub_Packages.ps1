@@ -1,11 +1,11 @@
-﻿param(
+param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64"
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$version = "1.6.0-preview.10"
+$version = "1.6.0-preview.28"
 $artifacts = Join-Path $root "artifacts"
 $stage = Join-Path $artifacts "Comote-$version"
 $managerOut = Join-Path $stage "Manager"
@@ -29,24 +29,58 @@ dotnet publish (Join-Path $root "Viewer\Viewer.csproj") `
     -c $Configuration -r $Runtime --self-contained true `
     -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false `
     -o $managerOut
+if ($LASTEXITCODE -ne 0) { throw "Manager publish failed: $LASTEXITCODE" }
+
 
 dotnet publish (Join-Path $root "Host\Host.csproj") `
     -c $Configuration -r $Runtime --self-contained true `
     -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false `
     -o $clientOut
+if ($LASTEXITCODE -ne 0) { throw "Client publish failed: $LASTEXITCODE" }
+
+
+$fakerInputUrl =
+    "https://github.com/Ryochan7/FakerInput/releases/download/" +
+    "v0.1.1/FakerInput_Setup_0.1.1_x64.msi"
+$downloadTemp = if ($env:RUNNER_TEMP) {
+    $env:RUNNER_TEMP
+} else {
+    [System.IO.Path]::GetTempPath()
+}
+$fakerInputPath = Join-Path $downloadTemp `
+    "FakerInput_Setup_0.1.1_x64.msi"
+$expectedFakerInputSha256 =
+    "4C0AEFB7340051A91D606776243298B5CD1143EF5508BBAE6800C474F9ED0840"
+Invoke-WebRequest -Uri $fakerInputUrl -OutFile $fakerInputPath
+$actualFakerInputSha256 =
+    (Get-FileHash -Algorithm SHA256 -LiteralPath $fakerInputPath).Hash
+if ($actualFakerInputSha256 -ne $expectedFakerInputSha256) {
+    throw "FakerInput installer SHA-256 mismatch."
+}
+$fakerSignature = Get-AuthenticodeSignature -LiteralPath $fakerInputPath
+if ($fakerSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+    throw "FakerInput installer signature is not valid: $($fakerSignature.Status)"
+}
+Copy-Item -LiteralPath $fakerInputPath -Destination $clientOut
+Copy-Item -LiteralPath `
+    (Join-Path $root "ThirdParty\FakerInput-LICENSE.txt") `
+    -Destination (Join-Path $clientOut "FakerInput-LICENSE.txt")
 
 Rename-Item -LiteralPath (Join-Path $managerOut "Viewer.exe") `
     -NewName "ComoteManager.exe"
 Rename-Item -LiteralPath (Join-Path $clientOut "Host.exe") `
     -NewName "ComoteClient.exe"
 
+
 Copy-Item -LiteralPath `
-    (Join-Path $root "Distribution\Open_Comote_Manager_Hub_Port_45820.cmd") `
-    -Destination `
-    (Join-Path $managerOut "Open Manager Hub Firewall as Administrator.cmd")
-Copy-Item -LiteralPath `
-    (Join-Path $root "docs\HUB_CONNECTION_TEST_GUIDE.md") `
+    (Join-Path $root "docs\ACCOUNT_CONNECTION_GUIDE.md") `
     -Destination (Join-Path $stage "README.md")
+Copy-Item -LiteralPath `
+    (Join-Path $root "docs\ACCOUNT_CONNECTION_GUIDE.md") `
+    -Destination (Join-Path $clientOut "README.md")
+Copy-Item -LiteralPath `
+    (Join-Path $root "docs\SECURE_DESKTOP_GUIDE.md") `
+    -Destination (Join-Path $clientOut "SECURE_DESKTOP_GUIDE.md")
 
 Copy-Item -LiteralPath `
     (Join-Path $root "docs\CLIENT_AUTO_UPDATE_GUIDE.md") `
@@ -73,14 +107,28 @@ Compress-Archive `
     -DestinationPath $zip `
     -CompressionLevel Optimal
 
+$managerZip = Join-Path $artifacts "ComoteManager-$version-win-x64.zip"
+$clientZip = Join-Path $artifacts "ComoteClient-$version-win-x64.zip"
+foreach ($releaseZip in @($managerZip, $clientZip)) {
+    if (Test-Path -LiteralPath $releaseZip) {
+        Remove-Item -LiteralPath $releaseZip -Force
+    }
+}
+Compress-Archive -Path (Join-Path $managerOut "*") `
+    -DestinationPath $managerZip -CompressionLevel Optimal
+Compress-Archive -Path (Join-Path $clientOut "*") `
+    -DestinationPath $clientZip -CompressionLevel Optimal
+
 $updateManifest = [ordered]@{
-    version = "1.6.0.10"
-    client_package_url = "REPLACE_WITH_HTTPS_PACKAGE_URL"
-    client_package_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash
+    version = "1.6.0.28"
+    client_package_url = "https://github.com/In-Duck/Comote/releases/download/v1.6.0-preview.28/ComoteClient-1.6.0-preview.28-win-x64.zip"
+    client_package_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $clientZip).Hash
 }
 $updateManifest | ConvertTo-Json | Set-Content `
     -LiteralPath (Join-Path $artifacts "Comote-$version-client-update.json") `
     -Encoding UTF8
 
 Write-Host "Hub package: $zip"
+Write-Host "Manager release: $managerZip"
+Write-Host "Client release: $clientZip"
 Write-Host "Unpacked: $stage"

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -25,7 +25,8 @@ namespace Viewer
         private DataGrid _progressGrid;
         private Button _startBtn;
         private Button _stopBtn;
-        private TextBlock _statusText;
+
+
 
         public MultiFileTransferWindow(List<HostInfo> targets)
         {

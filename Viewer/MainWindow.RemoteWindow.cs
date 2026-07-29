@@ -1,4 +1,4 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Controls;
 
 namespace Viewer
@@ -27,6 +27,13 @@ namespace Viewer
                 };
                 _remoteWindow.Activated += (_, _) => UpdateInputCaptureState();
                 _remoteWindow.Deactivated += (_, _) => ReleaseRemoteInputs();
+                _remoteWindow.StateChanged += (_, _) =>
+                {
+                    if (_remoteWindow?.WindowState == WindowState.Minimized)
+                        ReleaseRemoteInputs();
+                    else
+                        UpdateInputCaptureState();
+                };
                 _remoteWindow.Closed += (_, _) =>
                 {
                     if (_remoteWindow?.Content == _remoteGrid)

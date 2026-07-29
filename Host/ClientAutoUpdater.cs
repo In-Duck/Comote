@@ -16,120 +16,342 @@ namespace Host
 
         [JsonProperty("client_package_sha256")]
         public string ClientPackageSha256 { get; set; } = "";
+
+        [JsonProperty("minimum_version")]
+        public string MinimumVersion { get; set; } = "";
+
+        [JsonProperty("release_notes")]
+        public string ReleaseNotes { get; set; } = "";
     }
+
+    internal sealed record ClientUpdateInfo(
+        Version Version,
+        Uri PackageUri,
+        string Sha256,
+        string ReleaseNotes);
+
+    internal sealed record ClientUpdateProgress(int? Percent, string Status);
 
     internal static class ClientAutoUpdater
     {
+        private const long MaximumPackageBytes = 750L * 1024 * 1024;
+        private const long MaximumExpandedBytes = 2L * 1024 * 1024 * 1024;
         private static readonly HttpClient Http = new()
         {
-            Timeout = TimeSpan.FromSeconds(20),
+            Timeout = TimeSpan.FromMinutes(10),
         };
+
+        public static Version CurrentVersion =>
+            Assembly.GetExecutingAssembly().GetName().Version ?? new Version(0, 0);
+
+        public static async Task<ClientUpdateInfo?> CheckForUpdateAsync(
+            string manifestUrl,
+            CancellationToken cancellationToken = default)
+        {
+            if (!TryGetHttpsUri(manifestUrl, out var manifestUri))
+                throw new InvalidOperationException("업데이트 정보 주소는 HTTPS여야 합니다.");
+
+            using var response = await Http.GetAsync(
+                manifestUri,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            response.EnsureSuccessStatusCode();
+            if (response.Content.Headers.ContentLength is > 128 * 1024)
+                throw new InvalidDataException("업데이트 정보가 허용 크기를 초과했습니다.");
+
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            var manifest = JsonConvert.DeserializeObject<ClientUpdateManifest>(json);
+            if (!TryValidateManifest(manifest, out var availableVersion, out var packageUri))
+                throw new InvalidDataException("업데이트 정보가 올바르지 않습니다.");
+
+            if (availableVersion <= CurrentVersion) return null;
+            return new ClientUpdateInfo(
+                availableVersion,
+                packageUri,
+                manifest!.ClientPackageSha256.ToUpperInvariant(),
+                manifest.ReleaseNotes);
+        }
 
         public static async Task<bool> TryStageUpdateAsync(
             string manifestUrl,
             string[] restartArguments,
+            IProgress<ClientUpdateProgress>? progress = null,
             CancellationToken cancellationToken = default)
         {
-            if (!Uri.TryCreate(manifestUrl, UriKind.Absolute, out var uri) ||
-                uri.Scheme != Uri.UriSchemeHttps)
-            {
-                Console.WriteLine("[Updater] Update manifest must use HTTPS.");
-                return false;
-            }
-
             try
             {
-                var json = await Http.GetStringAsync(uri, cancellationToken);
-                var manifest = JsonConvert.DeserializeObject<ClientUpdateManifest>(json);
-                if (manifest == null ||
-                    !Version.TryParse(manifest.Version, out var availableVersion) ||
-                    !Uri.TryCreate(
-                        manifest.ClientPackageUrl,
-                        UriKind.Absolute,
-                        out var packageUri) ||
-                    packageUri.Scheme != Uri.UriSchemeHttps ||
-                    manifest.ClientPackageSha256.Length != 64)
+                var update = await CheckForUpdateAsync(manifestUrl, cancellationToken);
+                if (update == null)
                 {
-                    Console.WriteLine("[Updater] Update manifest is invalid.");
+                    Console.WriteLine($"[Updater] Client is current ({CurrentVersion}).");
                     return false;
                 }
-
-                var currentVersion = Assembly.GetExecutingAssembly()
-                    .GetName().Version ?? new Version(0, 0, 0, 0);
-                if (availableVersion <= currentVersion)
-                {
-                    Console.WriteLine(
-                        $"[Updater] Client is current ({currentVersion}).");
-                    return false;
-                }
-
-                Console.WriteLine(
-                    $"[Updater] Downloading {availableVersion} from {packageUri.Host}.");
-                var stageDirectory = Path.Combine(
-                    Path.GetTempPath(),
-                    "ComoteUpdate",
-                    Guid.NewGuid().ToString("N"));
-                Directory.CreateDirectory(stageDirectory);
-                var archivePath = Path.Combine(stageDirectory, "package.zip");
-                var bytes = await Http.GetByteArrayAsync(packageUri, cancellationToken);
-                var actualHash = Convert.ToHexString(
-                    SHA256.HashData(bytes));
-                if (!actualHash.Equals(
-                        manifest.ClientPackageSha256,
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    Console.WriteLine("[Updater] SHA-256 validation failed.");
-                    Directory.Delete(stageDirectory, true);
-                    return false;
-                }
-
-                await File.WriteAllBytesAsync(
-                    archivePath, bytes, cancellationToken);
-                var extractedDirectory = Path.Combine(stageDirectory, "files");
-                ZipFile.ExtractToDirectory(archivePath, extractedDirectory);
-                var replacement = Directory.GetFiles(
-                    extractedDirectory,
-                    "ComoteClient.exe",
-                    SearchOption.AllDirectories).SingleOrDefault();
-                var executablePath = Environment.ProcessPath;
-                if (replacement == null ||
-                    string.IsNullOrWhiteSpace(executablePath))
-                {
-                    Console.WriteLine("[Updater] Client executable was not found in package.");
-                    Directory.Delete(stageDirectory, true);
-                    return false;
-                }
-
-                var scriptPath = Path.Combine(stageDirectory, "apply-update.cmd");
-                var commandLine = string.Join(
-                    " ", restartArguments.Select(Quote));
-                var script = string.Join(Environment.NewLine, new[]
-                {
-                    "@echo off",
-                    "timeout /t 2 /nobreak >nul",
-                    $"copy /y {Quote(replacement)} {Quote(executablePath)} >nul",
-                    $"start \"\" {Quote(executablePath)} {commandLine}",
-                    $"rmdir /s /q {Quote(stageDirectory)}",
-                });
-                await File.WriteAllTextAsync(
-                    scriptPath, script, cancellationToken);
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "cmd.exe",
-                    Arguments = $"/c {Quote(scriptPath)}",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    WorkingDirectory = Path.GetDirectoryName(executablePath)!,
-                });
-                Console.WriteLine(
-                    $"[Updater] Update {availableVersion} staged. Restarting client.");
-                return true;
+                return await StageUpdateAsync(update, restartArguments, progress, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                Console.WriteLine("[Updater] Update was cancelled.");
+                return false;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[Updater] Update check failed: {ex.Message}");
                 return false;
             }
+        }
+
+        public static async Task<bool> StageUpdateAsync(
+            ClientUpdateInfo update,
+            string[] restartArguments,
+            IProgress<ClientUpdateProgress>? progress = null,
+            CancellationToken cancellationToken = default)
+        {
+            string? stageDirectory = null;
+            try
+            {
+                stageDirectory = Path.Combine(
+                    Path.GetTempPath(), "ComoteUpdate", Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(stageDirectory);
+                var archivePath = Path.Combine(stageDirectory, "package.zip");
+                var extractedDirectory = Path.Combine(stageDirectory, "files");
+
+                Console.WriteLine($"[Updater] Downloading {update.Version} from {update.PackageUri.Host}.");
+                progress?.Report(new ClientUpdateProgress(2, "다운로드 연결 중…"));
+                await DownloadFileAsync(update.PackageUri, archivePath, progress, cancellationToken);
+                progress?.Report(new ClientUpdateProgress(82, "파일 무결성 확인 중…"));
+                var actualHash = await ComputeSha256Async(archivePath, cancellationToken);
+                if (!actualHash.Equals(update.Sha256, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("다운로드한 파일의 SHA-256 값이 일치하지 않습니다.");
+
+                progress?.Report(new ClientUpdateProgress(90, "업데이트 파일 확인 중…"));
+                ExtractValidatedArchive(archivePath, extractedDirectory);
+                var replacements = Directory.GetFiles(
+                    extractedDirectory, "ComoteClient.exe", SearchOption.AllDirectories);
+                var executablePath = Environment.ProcessPath;
+                if (replacements.Length != 1 || string.IsNullOrWhiteSpace(executablePath))
+                    throw new InvalidDataException("패키지에서 ComoteClient.exe 하나를 찾지 못했습니다.");
+
+                progress?.Report(new ClientUpdateProgress(96, "설치 준비 중…"));
+                var replacement = replacements[0];
+                var replacementVersionText = FileVersionInfo.GetVersionInfo(replacement).FileVersion;
+                if (!Version.TryParse(replacementVersionText, out var replacementVersion) ||
+                    replacementVersion != update.Version)
+                    throw new InvalidDataException("패키지 실행 파일 버전이 업데이트 정보와 다릅니다.");
+
+                var packageRoot = Path.GetDirectoryName(replacement)!;
+                var installDirectory = Path.GetDirectoryName(executablePath)!;
+                if (SecureDesktopService.IsSystemAgent() && SecureDesktopService.IsInstalled())
+                    ScheduleServiceUpdate(stageDirectory, packageRoot, installDirectory, executablePath);
+                else
+                    ScheduleInteractiveUpdate(
+                        stageDirectory, packageRoot, installDirectory,
+                        executablePath, restartArguments);
+
+                progress?.Report(new ClientUpdateProgress(100, "업데이트 준비 완료 · 다시 시작합니다…"));
+                Console.WriteLine($"[Updater] Update {update.Version} verified and staged.");
+                stageDirectory = null;
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Updater] Update staging failed: {ex.Message}");
+                return false;
+            }
+            finally
+            {
+                if (!string.IsNullOrWhiteSpace(stageDirectory) && Directory.Exists(stageDirectory))
+                {
+                    try { Directory.Delete(stageDirectory, true); } catch { }
+                }
+            }
+        }
+
+        private static void ScheduleInteractiveUpdate(
+            string stageDirectory,
+            string packageRoot,
+            string installDirectory,
+            string executablePath,
+            string[] restartArguments)
+        {
+            var scriptPath = Path.Combine(
+                Path.GetTempPath(), $"comote-apply-update-{Guid.NewGuid():N}.cmd");
+            var backupDirectory = Path.Combine(stageDirectory, "backup");
+            var executableName = Path.GetFileName(executablePath);
+            var restartCommandLine = string.Join(" ", restartArguments.Select(Quote));
+            var script = string.Join(Environment.NewLine, new[]
+            {
+                "@echo off", "setlocal", "timeout /t 2 /nobreak >nul",
+                $"mkdir {Quote(backupDirectory)} >nul 2>&1",
+                $"robocopy {Quote(installDirectory)} {Quote(backupDirectory)} /E /R:3 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
+                "if errorlevel 8 goto failed",
+                $"robocopy {Quote(packageRoot)} {Quote(installDirectory)} /E /R:10 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
+                "if errorlevel 8 goto rollback",
+                $"start \"\" {Quote(executablePath)} {restartCommandLine}",
+                "timeout /t 20 /nobreak >nul",
+                $"tasklist.exe /FI \"IMAGENAME eq {executableName}\" | find /I {Quote(executableName)} >nul",
+                "if errorlevel 1 goto rollback",
+                "goto cleanup",
+                ":rollback",
+                $"taskkill.exe /F /IM {Quote(executableName)} >nul 2>&1",
+                $"robocopy {Quote(backupDirectory)} {Quote(installDirectory)} /MIR /R:3 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
+                $"start \"\" {Quote(executablePath)} {restartCommandLine}",
+                "goto cleanup",
+                ":failed",
+                "exit /b 8",
+                ":cleanup",
+                $"rmdir /s /q {Quote(stageDirectory)}",
+                "del /q \"%~f0\"",
+            });
+            File.WriteAllText(scriptPath, script);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "cmd.exe",
+                Arguments = $"/d /c {Quote(scriptPath)}",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = installDirectory,
+            });
+        }
+
+        private static void ScheduleServiceUpdate(
+            string stageDirectory,
+            string packageRoot,
+            string installDirectory,
+            string executablePath)
+        {
+            var taskName = $"ComoteUpdate-{Guid.NewGuid():N}";
+            var scriptPath = Path.Combine(stageDirectory, "apply-service-update.cmd");
+            var backupDirectory = Path.Combine(stageDirectory, "backup");
+            var script = string.Join(Environment.NewLine, new[]
+            {
+                "@echo off", "setlocal",
+                $"sc.exe stop {SecureDesktopService.ServiceName} >nul 2>&1",
+                $":waitstop", $"sc.exe query {SecureDesktopService.ServiceName} | find \"STOPPED\" >nul",
+                "if errorlevel 1 (timeout /t 1 /nobreak >nul & goto waitstop)",
+                $"mkdir {Quote(backupDirectory)} >nul 2>&1",
+                $"robocopy {Quote(installDirectory)} {Quote(backupDirectory)} /E /R:3 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
+                "if errorlevel 8 goto cleanup",
+                $"robocopy {Quote(packageRoot)} {Quote(installDirectory)} /E /R:10 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
+                "if errorlevel 8 goto rollback",
+                $"sc.exe start {SecureDesktopService.ServiceName} >nul 2>&1",
+                "timeout /t 20 /nobreak >nul",
+                $"sc.exe query {SecureDesktopService.ServiceName} | find \"RUNNING\" >nul",
+                "if errorlevel 1 goto rollback",
+                "goto cleanup",
+                ":rollback",
+                $"sc.exe stop {SecureDesktopService.ServiceName} >nul 2>&1",
+                $"robocopy {Quote(backupDirectory)} {Quote(installDirectory)} /MIR /R:3 /W:1 /NFL /NDL /NJH /NJS /NP >nul",
+                $"sc.exe start {SecureDesktopService.ServiceName} >nul 2>&1",
+                ":cleanup",
+                $"schtasks.exe /Delete /TN {Quote(taskName)} /F >nul 2>&1",
+                $"rmdir /s /q {Quote(stageDirectory)}",
+                "exit /b 0",
+            });
+            File.WriteAllText(scriptPath, script);
+
+            var taskCommand = $"cmd.exe /d /c {Quote(scriptPath)}";
+            RunScheduleCommand($"/Create /TN {Quote(taskName)} /SC ONLOGON /RU SYSTEM /RL HIGHEST /TR {Quote(taskCommand)} /F");
+            RunScheduleCommand($"/Run /TN {Quote(taskName)}");
+        }
+
+        private static void RunScheduleCommand(string arguments)
+        {
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = "schtasks.exe", Arguments = arguments,
+                UseShellExecute = false, CreateNoWindow = true,
+            }) ?? throw new InvalidOperationException("업데이트 작업을 시작하지 못했습니다.");
+            process.WaitForExit(15000);
+            if (!process.HasExited || process.ExitCode != 0)
+                throw new InvalidOperationException("업데이트 작업 등록에 실패했습니다.");
+        }
+
+        private static bool TryValidateManifest(
+            ClientUpdateManifest? manifest,
+            out Version availableVersion,
+            out Uri packageUri)
+        {
+            availableVersion = new Version(0, 0);
+            packageUri = null!;
+            if (manifest == null ||
+                !Version.TryParse(manifest.Version, out var parsedVersion) ||
+                parsedVersion == null ||
+                !TryGetHttpsUri(manifest.ClientPackageUrl, out packageUri) ||
+                !IsOfficialPackageUri(packageUri) ||
+                manifest.ClientPackageSha256.Length != 64 ||
+                !manifest.ClientPackageSha256.All(Uri.IsHexDigit))
+                return false;
+            availableVersion = parsedVersion;
+            return true;
+        }
+
+        private static bool IsOfficialPackageUri(Uri uri) =>
+            uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase) &&
+            uri.AbsolutePath.StartsWith(
+                "/In-Duck/Comote/releases/download/", StringComparison.OrdinalIgnoreCase) &&
+            uri.AbsolutePath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
+
+        private static bool TryGetHttpsUri(string value, out Uri uri) =>
+            Uri.TryCreate(value, UriKind.Absolute, out uri!) &&
+            uri.Scheme == Uri.UriSchemeHttps;
+
+        private static async Task DownloadFileAsync(
+            Uri uri,
+            string destination,
+            IProgress<ClientUpdateProgress>? progress,
+            CancellationToken cancellationToken)
+        {
+            using var response = await Http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            var expectedBytes = response.Content.Headers.ContentLength;
+            if (expectedBytes is long size && size > MaximumPackageBytes)
+                throw new InvalidDataException("업데이트 패키지가 허용 크기를 초과했습니다.");
+            await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
+            await using var target = new FileStream(
+                destination, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            var buffer = new byte[81920];
+            long total = 0;
+            int read;
+            while ((read = await source.ReadAsync(buffer, cancellationToken)) > 0)
+            {
+                total += read;
+                if (total > MaximumPackageBytes)
+                    throw new InvalidDataException("업데이트 패키지가 허용 크기를 초과했습니다.");
+                await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                var percent = expectedBytes is > 0
+                    ? 5 + (int)Math.Min(75, total * 75 / expectedBytes.Value)
+                    : (int?)null;
+                var downloadedMb = total / 1024d / 1024d;
+                var status = expectedBytes is > 0
+                    ? $"다운로드 중 · {downloadedMb:0.0} / {expectedBytes.Value / 1024d / 1024d:0.0} MB"
+                    : $"다운로드 중 · {downloadedMb:0.0} MB";
+                progress?.Report(new ClientUpdateProgress(percent, status));
+            }
+        }
+
+        private static void ExtractValidatedArchive(string archivePath, string destination)
+        {
+            using (var archive = ZipFile.OpenRead(archivePath))
+            {
+                if (archive.Entries.Count > 2000 ||
+                    archive.Entries.Sum(entry => entry.Length) > MaximumExpandedBytes)
+                    throw new InvalidDataException("업데이트 압축 파일이 허용 범위를 초과했습니다.");
+            }
+            ZipFile.ExtractToDirectory(archivePath, destination);
+        }
+
+        private static async Task<string> ComputeSha256Async(
+            string path, CancellationToken cancellationToken)
+        {
+            await using var stream = new FileStream(
+                path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            return Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken));
         }
 
         private static string Quote(string value) =>

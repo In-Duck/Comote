@@ -1,5 +1,5 @@
 interface Fetcher { fetch(input: Request): Promise<Response> }
-interface D1Database {}
+type D1Database = object;
 
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";

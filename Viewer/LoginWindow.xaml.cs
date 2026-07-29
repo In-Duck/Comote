@@ -1,9 +1,11 @@
 using System;
-using System.Net.Http;
 using System.Diagnostics;
+using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Media;
+using Comote.Shared;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -34,80 +36,85 @@ namespace Viewer
             LoadSavedCredentials();
             Loaded += (_, _) =>
             {
-                if (string.IsNullOrWhiteSpace(txtEmail.Text))
-                    txtEmail.Focus();
-                else
-                    txtPassword.Focus();
+                if (string.IsNullOrWhiteSpace(txtEmail.Text)) txtEmail.Focus();
+                else txtPassword.Focus();
             };
 
             var configurationErrors = _settings.GetConfigurationErrors();
             if (configurationErrors.Count > 0)
             {
                 btnLogin.IsEnabled = false;
-                lblStatus.Text =
-                    "서버 설정이 필요합니다: " +
-                    string.Join(", ", configurationErrors);
-                lblStatus.Foreground = System.Windows.Media.Brushes.Red;
+                ShowStatus("서버 설정이 필요합니다: " + string.Join(", ", configurationErrors), true);
             }
         }
 
         private void LoadSavedCredentials()
         {
-            if (UserCredentialStore.TryLoad(out var email, out var password))
-            {
-                txtEmail.Text = email;
-                txtPassword.Password = password;
-                chkSave.IsChecked = true;
-            }
+            if (!UserCredentialStore.TryLoad(out var email, out var password)) return;
+            txtEmail.Text = email;
+            txtPassword.Password = password;
+            chkSave.IsChecked = true;
         }
 
         private async void btnLogin_Click(object sender, RoutedEventArgs e)
         {
-            btnLogin.IsEnabled = false;
-            statusPanel.Visibility = Visibility.Visible;
-            lblStatus.Text = "계정 정보를 확인하고 있습니다...";
-            lblStatus.Foreground = System.Windows.Media.Brushes.LightBlue;
-
-            var email = txtEmail.Text.Trim();
+            var accountId = txtEmail.Text.Trim();
             var password = txtPassword.Password;
-            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
+            if (!AccountIdentity.TryNormalize(accountId, out _) || string.IsNullOrWhiteSpace(password))
             {
-                lblStatus.Text = "이메일과 비밀번호를 입력해 주세요.";
-                btnLogin.IsEnabled = true;
+                ShowStatus("올바른 아이디 또는 이메일과 비밀번호를 입력해 주세요.", true);
                 return;
             }
 
+            btnLogin.IsEnabled = false;
+            btnLogin.Content = "연결 중";
+            ShowStatus("계정을 확인하고 있습니다.", false);
             try
             {
-                var result = await SignInWithEmailPassword(email, password);
+                var result = await SignInWithEmailPassword(accountId, password);
                 if (result == null)
                 {
-                    lblStatus.Text = "로그인하지 못했습니다. 이메일 인증 여부와 비밀번호를 확인해 주세요.";
-                    lblStatus.Foreground = System.Windows.Media.Brushes.Red;
+                    ShowStatus("아이디 또는 비밀번호가 올바르지 않습니다.", true);
                     return;
                 }
 
                 AccessToken = result.Value.Token;
                 UserId = result.Value.UserId;
-                UserEmail = email;
+                UserEmail = accountId;
 
-                if (chkSave.IsChecked == true)
-                    UserCredentialStore.Save(email, password);
-                else
-                    UserCredentialStore.Delete();
+                if (chkSave.IsChecked == true) UserCredentialStore.Save(accountId, password);
+                else UserCredentialStore.Delete();
 
                 DialogResult = true;
                 Close();
             }
-            catch
+            catch (TaskCanceledException)
             {
-                lblStatus.Text = "인증 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.";
-                lblStatus.Foreground = System.Windows.Media.Brushes.Red;
+                ShowStatus("계정 서버 응답이 늦습니다. 잠시 후 다시 시도해 주세요.", true);
+            }
+            catch (HttpRequestException)
+            {
+                ShowStatus("인터넷 연결을 확인한 뒤 다시 시도해 주세요.", true);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Login] Unexpected error: {ex.Message}");
+                ShowStatus("로그인 중 오류가 발생했습니다.", true);
             }
             finally
             {
+                btnLogin.Content = "로그인";
                 btnLogin.IsEnabled = true;
             }
+        }
+
+        private void ShowStatus(string message, bool isError)
+        {
+            statusPanel.Visibility = Visibility.Visible;
+            lblStatus.Text = message;
+            lblStatus.Foreground = isError
+                ? new SolidColorBrush(Color.FromRgb(185, 28, 28))
+                : new SolidColorBrush(Color.FromRgb(71, 85, 105));
         }
 
         private void CreateAccount_Click(object sender, RoutedEventArgs e)
@@ -116,32 +123,30 @@ namespace Viewer
             {
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = "https://kymote.vercel.app/login",
+                    FileName = "https://comote-remote.dopum54.chatgpt.site/login",
                     UseShellExecute = true,
                 });
             }
             catch
             {
-                statusPanel.Visibility = Visibility.Visible;
-                lblStatus.Text =
-                    "브라우저를 열 수 없습니다. kymote.vercel.app/login에 접속해 주세요.";
+                ShowStatus("브라우저를 열 수 없습니다. 계정 웹사이트에 직접 접속해 주세요.", true);
             }
-        }
-        private static string ToAccountEmail(string accountId)
-        {
-            var normalized = accountId.Trim().ToLowerInvariant();
-            return $"{normalized}@accounts.kymote.app";
         }
 
         private async Task<(string Token, string UserId)?> SignInWithEmailPassword(
             string accountId,
             string password)
         {
+            var normalizedAccount = accountId.Trim();
+            if (!normalizedAccount.Contains('@'))
+                return await SignInWithAccountId(normalizedAccount, password);
+
+            if (!AccountIdentity.TryNormalize(accountId, out var accountEmail)) return null;
+
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
             var url = $"{_settings.SupabaseUrl.TrimEnd('/')}/auth/v1/token?grant_type=password";
-            var body = new { email = ToAccountEmail(accountId), password };
             using var content = new StringContent(
-                JsonConvert.SerializeObject(body),
+                JsonConvert.SerializeObject(new { email = accountEmail, password }),
                 Encoding.UTF8,
                 "application/json");
             client.DefaultRequestHeaders.Add("apikey", _settings.SupabaseAnonKey);
@@ -161,7 +166,27 @@ namespace Viewer
                 ? (token, userId)
                 : null;
         }
+
+        private static async Task<(string Token, string UserId)?> SignInWithAccountId(
+            string accountId,
+            string password)
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            using var content = new StringContent(
+                JsonConvert.SerializeObject(new { account = accountId, password }),
+                Encoding.UTF8,
+                "application/json");
+            using var response = await client.PostAsync(
+                "https://comote-remote.dopum54.chatgpt.site/api/auth/desktop-login",
+                content);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var json = JObject.Parse(await response.Content.ReadAsStringAsync());
+            var token = json.Value<string>("access_token");
+            var userId = json.Value<string>("user_id");
+            return !string.IsNullOrWhiteSpace(token) &&
+                   !string.IsNullOrWhiteSpace(userId)
+                ? (token, userId) : null;
+        }
     }
 }
-
-

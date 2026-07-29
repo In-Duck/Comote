@@ -11,6 +11,8 @@ namespace Host
         public string ClientName { get; set; } = Environment.MachineName;
         public int AdapterIndex { get; set; }
         public int OutputIndex { get; set; }
+        public InputBackendMode InputBackendMode { get; set; } =
+            InputBackendMode.SendInput;
         public string UpdateManifestUrl { get; set; } = "";
         public string EncryptedPassword { get; set; } = "";
     }
