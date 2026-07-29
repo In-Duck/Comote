@@ -140,6 +140,7 @@ foreach ($requiredInfText in @(
     "DefaultDestDir=13",
     "ComoteDriverCopy=13",
     "ServiceBinary=%13%\ComoteVirtualHid.sys",
+    "NTamd64.10.0...16299",
     "StartType=3",
     "PnpLockdown=1"
 )) {

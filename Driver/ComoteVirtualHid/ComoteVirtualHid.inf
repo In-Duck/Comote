@@ -18,9 +18,9 @@ ComoteDriverCopy=13
 ComoteVirtualHid.sys=1
 
 [Manufacturer]
-%ProviderName%=ComoteModels,NTamd64
+%ProviderName%=ComoteModels,NTamd64.10.0...16299
 
-[ComoteModels.NTamd64]
+[ComoteModels.NTamd64.10.0...16299]
 %DeviceDescription%=ComoteVirtualHid_Install,ROOT\COMOTEVIRTUALHID
 
 [ComoteVirtualHid_Install.NT]
