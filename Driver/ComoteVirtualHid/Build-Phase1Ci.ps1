@@ -24,6 +24,34 @@ $packagesConfig = Join-Path $projectRoot "packages.config"
 $packagesDirectory = Join-Path $projectRoot "packages"
 $boundaryTest = Join-Path $projectRoot "Test-Phase1Boundary.ps1"
 
+function Find-ComoteWdkTool {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name
+    )
+
+    $matches = Get-ChildItem `
+        -LiteralPath $packagesDirectory `
+        -Filter $Name `
+        -File `
+        -Recurse |
+        Sort-Object FullName
+
+    $preferred = $matches |
+        Where-Object FullName -Match '\\(x64|amd64)\\' |
+        Select-Object -First 1
+    if ($null -ne $preferred) {
+        return $preferred.FullName
+    }
+
+    $fallback = $matches | Select-Object -First 1
+    if ($null -eq $fallback) {
+        throw "WDK tool was not restored: $Name"
+    }
+
+    return $fallback.FullName
+}
+
 foreach ($file in @($project, $packagesConfig, $boundaryTest)) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
         throw "Required CI build input was not found: $file"
@@ -57,6 +85,11 @@ if ($LASTEXITCODE -ne 0) {
     throw "WDK NuGet restore failed with exit code $LASTEXITCODE."
 }
 
+$stampInf = Find-ComoteWdkTool -Name "stampinf.exe"
+$wdkToolDirectory = Split-Path -Parent $stampInf
+$env:PATH = "$wdkToolDirectory;$env:PATH"
+Write-Host "WDK build tools: $wdkToolDirectory"
+
 & $msbuild $project `
     /t:Rebuild `
     /m:1 `
@@ -74,34 +107,6 @@ foreach ($file in @($sys, $inf)) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
         throw "Expected CI build output was not found: $file"
     }
-}
-
-function Find-ComoteWdkTool {
-    param(
-        [Parameter(Mandatory)]
-        [string]$Name
-    )
-
-    $matches = Get-ChildItem `
-        -LiteralPath $packagesDirectory `
-        -Filter $Name `
-        -File `
-        -Recurse |
-        Sort-Object FullName
-
-    $preferred = $matches |
-        Where-Object FullName -Match '\\(x64|amd64)\\' |
-        Select-Object -First 1
-    if ($null -ne $preferred) {
-        return $preferred.FullName
-    }
-
-    $fallback = $matches | Select-Object -First 1
-    if ($null -eq $fallback) {
-        throw "WDK tool was not restored: $Name"
-    }
-
-    return $fallback.FullName
 }
 
 $infVerif = Find-ComoteWdkTool -Name "InfVerif.exe"
