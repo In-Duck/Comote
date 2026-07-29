@@ -8,8 +8,8 @@ CatalogFile=ComoteVirtualHid.cat
 PnpLockdown=1
 
 [DestinationDirs]
-DefaultDestDir=12
-ComoteDriverCopy=12
+DefaultDestDir=13
+ComoteDriverCopy=13
 
 [SourceDisksNames]
 1=%DiskName%,,,
@@ -43,7 +43,7 @@ DisplayName=%ServiceDescription%
 ServiceType=1
 StartType=3
 ErrorControl=1
-ServiceBinary=%12%\ComoteVirtualHid.sys
+ServiceBinary=%13%\ComoteVirtualHid.sys
 
 [ComoteVirtualHid_Install.NT.Wdf]
 KmdfService=ComoteVirtualHid,ComoteVirtualHid_Wdf

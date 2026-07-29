@@ -137,6 +137,9 @@ $inf = Get-Content -LiteralPath $infPath -Raw
 foreach ($requiredInfText in @(
     'ROOT\COMOTEVIRTUALHID',
     '"LowerFilters",0x00010000,"vhf"',
+    "DefaultDestDir=13",
+    "ComoteDriverCopy=13",
+    "ServiceBinary=%13%\ComoteVirtualHid.sys",
     "StartType=3",
     "PnpLockdown=1"
 )) {
