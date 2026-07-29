@@ -69,12 +69,13 @@ if (-not (Test-Path -LiteralPath $vsWhere -PathType Leaf)) {
 
 $msbuild = & $vsWhere -latest -products * `
     -requires Microsoft.Component.MSBuild `
-    -find "MSBuild\**\Bin\MSBuild.exe" |
+    -find "MSBuild\**\Bin\amd64\MSBuild.exe" |
     Select-Object -First 1
 if ([string]::IsNullOrWhiteSpace($msbuild) -or
     -not (Test-Path -LiteralPath $msbuild -PathType Leaf)) {
-    throw "MSBuild.exe was not found on the Windows runner."
+    throw "64-bit MSBuild.exe was not found on the Windows runner."
 }
+Write-Host "MSBuild host: $msbuild"
 
 & $boundaryTest
 

@@ -107,6 +107,7 @@ $ciBuild = Get-Content -LiteralPath $ciBuildPath -Raw
 foreach ($requiredCiText in @(
     'GetEnvironmentVariable("GITHUB_ACTIONS")',
     "nuget",
+    "Bin\amd64\MSBuild.exe",
     "stampinf.exe",
     "InfVerif.exe",
     "Inf2Cat.exe"
