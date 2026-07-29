@@ -1,5 +1,11 @@
 #include "ComoteVirtualHid.h"
 
+#ifdef ALLOC_PRAGMA
+#pragma alloc_text(INIT, DriverEntry)
+#pragma alloc_text(PAGE, ComoteEvtDeviceAdd)
+#pragma alloc_text(PAGE, ComoteEvtDeviceCleanup)
+#endif
+
 //
 // Phase 1 descriptor only. No user-mode control interface and no input-report
 // submission path are exposed in this build.
@@ -207,9 +213,3 @@ ComoteEvtDeviceCleanup(
         deviceContext->VhfHandle = NULL;
     }
 }
-
-#ifdef ALLOC_PRAGMA
-#pragma alloc_text(INIT, DriverEntry)
-#pragma alloc_text(PAGE, ComoteEvtDeviceAdd)
-#pragma alloc_text(PAGE, ComoteEvtDeviceCleanup)
-#endif

@@ -87,17 +87,29 @@ if ($LASTEXITCODE -ne 0) {
 
 $stampInf = Find-ComoteWdkTool -Name "stampinf.exe"
 $wdkToolDirectory = Split-Path -Parent $stampInf
-$env:PATH = "$wdkToolDirectory;$env:PATH"
-Write-Host "WDK build tools: $wdkToolDirectory"
+$wdkBinRoot = Split-Path -Parent $wdkToolDirectory
+$wdkX86Directory = Join-Path $wdkBinRoot "x86"
+if (-not (Test-Path -LiteralPath $wdkX86Directory -PathType Container)) {
+    throw "The restored WDK x86 tool directory was not found: $wdkX86Directory"
+}
+$env:PATH = "$wdkToolDirectory;$wdkX86Directory;$env:PATH"
+Write-Host "WDK versioned bin root: $wdkBinRoot"
 
-& $msbuild $project `
-    /t:Rebuild `
-    /m:1 `
-    /p:Configuration=$Configuration `
-    /p:Platform=x64 `
-    /p:RunCodeAnalysis=true
-if ($LASTEXITCODE -ne 0) {
-    throw "Driver CI build failed with exit code $LASTEXITCODE."
+Push-Location -LiteralPath $wdkBinRoot
+try {
+    & $msbuild $project `
+        /t:Rebuild `
+        /m:1 `
+        /p:Configuration=$Configuration `
+        /p:Platform=x64 `
+        /p:RunCodeAnalysis=true
+    $buildExitCode = $LASTEXITCODE
+}
+finally {
+    Pop-Location
+}
+if ($buildExitCode -ne 0) {
+    throw "Driver CI build failed with exit code $buildExitCode."
 }
 
 $buildOutput = Join-Path $projectRoot "bin\x64\$Configuration"
@@ -127,14 +139,22 @@ New-Item -ItemType Directory -Path $stage -Force | Out-Null
 Copy-Item -LiteralPath $sys -Destination $stage
 Copy-Item -LiteralPath $inf -Destination $stage
 
-& $infVerif /k (Join-Path $stage "ComoteVirtualHid.inf")
-if ($LASTEXITCODE -ne 0) {
-    throw "CI InfVerif failed with exit code $LASTEXITCODE."
-}
+Push-Location -LiteralPath $wdkBinRoot
+try {
+    & $infVerif /k (Join-Path $stage "ComoteVirtualHid.inf")
+    $infVerifExitCode = $LASTEXITCODE
+    if ($infVerifExitCode -ne 0) {
+        throw "CI InfVerif failed with exit code $infVerifExitCode."
+    }
 
-& $inf2Cat "/driver:$stage" "/os:$Inf2CatOs" /verbose
-if ($LASTEXITCODE -ne 0) {
-    throw "CI Inf2Cat failed with exit code $LASTEXITCODE."
+    & $inf2Cat "/driver:$stage" "/os:$Inf2CatOs" /verbose
+    $inf2CatExitCode = $LASTEXITCODE
+}
+finally {
+    Pop-Location
+}
+if ($inf2CatExitCode -ne 0) {
+    throw "CI Inf2Cat failed with exit code $inf2CatExitCode."
 }
 
 $catalog = Join-Path $stage "ComoteVirtualHid.cat"
