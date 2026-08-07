@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 2,
+  "build": "n8.1.2-32-gcfa62de001-20260730",
+  "license": "LGPL-3.0-or-later",
+  "architecture": "x86_64",
+  "redistributable": true,
+  "gplEnabled": false,
+  "softwareH264Fallback": "h264_mf",
+  "encoderOptions": {
+    "rate_control": "cbr",
+    "scenario": "display_remoting",
+    "hw_encoding": "0"
+  },
+  "archive": {
+    "releaseTag": "autobuild-2026-07-30-13-32",
+    "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-30-13-32/ffmpeg-n8.1.2-32-gcfa62de001-win64-lgpl-shared-8.1.zip",
+    "sha256": "23429F940316EA92E376F6946C0A1F1B9043C930F3BC068228461D65AE24F8B8"
+  },
+  "publisherChecksums": {
+    "url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-30-13-32/checksums.sha256",
+    "sha256": "8E62B0A71BAF8E70CF9BE34AD805AAECE3A7695BC0353959F1A3B915A5A49A24"
+  },
+  "source": {
+    "ffmpegCommit": "cfa62de001af8ffeb7e22561f246469c7b809951",
+    "btbnBuildsCommit": "a99e8230eae00d1cee38f23076a7a1f55cd984e2",
+    "sipsorceryMediaFfmpegCommit": "dfbc856767a19108fa55bdd59e6bdb7005ca9961",
+    "ffmpegAutoGenCommit": "444925cd53d3611fd4c8c295873fb631be56ab21"
+  },
+  "managedComponents": [
+    {
+      "name": "SIPSorceryMedia.FFmpeg",
+      "version": "10.0.12",
+      "license": "LGPL-2.1-only"
+    },
+    {
+      "name": "FFmpeg.AutoGen",
+      "version": "8.1.0",
+      "license": "MIT"
+    }
+  ],
+  "abiMajors": {
+    "avcodec": 62,
+    "avdevice": 62,
+    "avfilter": 11,
+    "avformat": 62,
+    "avutil": 60,
+    "swresample": 6,
+    "swscale": 9
+  },
+  "files": [
+    {
+      "name": "avcodec-62.dll",
+      "length": 70876672,
+      "sha256": "8398209557DC8557407EA6ABD6E05E4B253996F4E155CCCDD4DFCD1CEDBEAB17"
+    },
+    {
+      "name": "avdevice-62.dll",
+      "length": 3699712,
+      "sha256": "9C12B37B517775721E72B6A4E34B24E5E3FE98750E9DB3D72C9A985DBCA535FE"
+    },
+    {
+      "name": "avfilter-11.dll",
+      "length": 29817856,
+      "sha256": "52E212E24435396687E1C00099DFDD5229D2552BE77A3E34BD61A90D16D51406"
+    },
+    {
+      "name": "avformat-62.dll",
+      "length": 22070784,
+      "sha256": "C8A8E1CE726F21F701A61481BC3D8DBDF6F020F064291CBC333E906A10D7B4FA"
+    },
+    {
+      "name": "avutil-60.dll",
+      "length": 2937856,
+      "sha256": "F4BA434931C38D60671CD905F485DE1CB415BFC2386C286D5578A7597C1C8187"
+    },
+    {
+      "name": "swresample-6.dll",
+      "length": 723968,
+      "sha256": "BEE2D7A942A67D9EBF668D8B565C2F613E5D5E3E609E00ED1C1E90EBBD6C8612"
+    },
+    {
+      "name": "swscale-9.dll",
+      "length": 12570624,
+      "sha256": "5C05FA6055B6626C21C7F7B2897EF140A91BDE898E51F86D6923282138980E6A"
+    }
+  ]
+}

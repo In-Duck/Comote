@@ -1,3 +1,5 @@
+using Comote.Input;
+using System.Security.Cryptography;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -24,7 +26,8 @@ namespace Host
                 return;
             }
 
-            var password = GetLanArgumentValue(args, "--password");
+            var password = GetLanArgumentValue(args, "--access-key") ??
+                GetLanArgumentValue(args, "--password");
             var adapterIndex = 0;
             var outputIndex = 0;
             if (string.IsNullOrWhiteSpace(password))
@@ -32,7 +35,7 @@ namespace Host
                 if (!Environment.UserInteractive)
                 {
                     Console.WriteLine(
-                        "[Direct] Service mode requires --password.");
+                        "[Direct] Service mode requires --access-key.");
                     return;
                 }
 
@@ -45,14 +48,13 @@ namespace Host
                 outputIndex = setup.SelectedOutputIndex;
             }
 
-            if (string.IsNullOrWhiteSpace(password) ||
-                password.Length < 8)
+            if (!ComoteAccessKey.TryParse(password, out var parsedKey))
             {
                 MessageBox.Show(
-                    "직접 연결 암호는 최소 8자 이상이어야 합니다.",
-                    "Comote Direct Host");
+                    "직접 연결 접속 키는 CMT1 형식의 256비트 키여야 합니다.");
                 return;
             }
+            CryptographicOperations.ZeroMemory(parsedKey);
 
             Console.WriteLine("==============================================");
             Console.WriteLine("       COMOTE DIRECT HOST 1.4");
@@ -81,8 +83,15 @@ namespace Host
 
             using var capture =
                 new ScreenCapture(adapterIndex, outputIndex);
-            using var webRtc = new WebRTCManager(capture);
-            using var server = new LanSignalServer(port, password);
+            using var webRtc = new WebRTCManager(
+                capture,
+                inputBackend: InputBackendFactory.Create(
+                    args,
+                    capture.Left,
+                    capture.Top,
+                    capture.Width,
+                    capture.Height));
+            using var server = new LanSignalServer(port, password!);
             using var cancellation = new CancellationTokenSource();
 
             Console.CancelKeyPress += (_, eventArgs) =>

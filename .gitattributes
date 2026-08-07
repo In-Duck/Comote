@@ -1,0 +1,4 @@
+# The VirtualHidPreview release workflow pins a source inventory built from
+# each file's exact byte length and SHA-256, so Git must never rewrite line
+# endings. Store and check out every path verbatim.
+* -text

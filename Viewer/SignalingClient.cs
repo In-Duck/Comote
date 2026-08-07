@@ -22,7 +22,7 @@ namespace Viewer
         private string _webAuthUrl;
         private string _accessToken;
 
-        public event Action<string, object> OnSignalReceived;
+        public event Func<string, object, Task>? OnSignalReceived;
 
         public string ViewerId => _viewerId;
 
@@ -66,14 +66,49 @@ namespace Viewer
             myChannel.Bind("signal", (PusherEvent eventData) =>
             {
                 try {
-                    var data = JsonConvert.DeserializeObject<dynamic>(eventData.Data);
-                    string from = data.from;
-                    object signal = data.signal;
-                    OnSignalReceived?.Invoke(from, signal);
+                    var data = JsonConvert.DeserializeObject<Newtonsoft.Json.Linq.JObject>(
+                        eventData.Data) ?? throw new JsonException(
+                        "Signal payload is empty.");
+                    string from = data.Value<string>("from") ??
+                        throw new JsonException("Signal sender is missing.");
+                    object signal = data["signal"] ??
+                        throw new JsonException("Signal body is missing.");
+                    QueueSignalReceived(from, signal);
                 } catch(Exception ex) { Console.WriteLine("[Signaling] Signal parse error: " + ex.Message); }
             });
 
             Console.WriteLine("[Signaling] Ready (Private channel only, no Presence)");
+        }
+
+        private void QueueSignalReceived(string from, object signal)
+        {
+            var handlers = OnSignalReceived;
+            if (handlers == null)
+            {
+                return;
+            }
+
+            foreach (Func<string, object, Task> handler in
+                     handlers.GetInvocationList())
+            {
+                _ = InvokeSignalHandlerAsync(handler, from, signal);
+            }
+        }
+
+        private static async Task InvokeSignalHandlerAsync(
+            Func<string, object, Task> handler,
+            string from,
+            object signal)
+        {
+            try
+            {
+                await handler(from, signal).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[Signaling] Signal handler failed: {ex.GetType().Name}");
+            }
         }
 
         public async Task SendSignalAsync(string to, object signal)
@@ -113,6 +148,8 @@ namespace Viewer
         public string Hdd { get; set; } = "N/A";
         public string Uptime { get; set; } = "N/A";
         public bool IsOnline { get; set; } = false;
+        public bool AllowsRemoteTasks { get; set; } = false;
+        public bool AllowsSystemCommands { get; set; } = false;
         public DateTime LastSeen { get; set; } = DateTime.MinValue;
         public string? ThumbnailUrl { get; set; }
         public byte[]? ThumbnailBytes { get; set; }

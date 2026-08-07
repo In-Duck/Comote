@@ -4,6 +4,16 @@ using System.Runtime.InteropServices;
 
 namespace Viewer
 {
+    public readonly record struct KeyboardHookEvent(
+        ushort VirtualKey,
+        ushort ScanCode,
+        uint Flags,
+        bool IsDown)
+    {
+        public bool IsExtended => (Flags & 0x01) != 0;
+        public bool IsInjected => (Flags & 0x12) != 0;
+    }
+
     /// <summary>
     /// WH_KEYBOARD_LL 저수준 키보드 훅으로 모든 키 입력을 캡처합니다.
     /// OS 레벨에서 동작하므로 한/영, Win, Alt+Tab 등 시스템 키도 캡처 가능합니다.
@@ -17,13 +27,13 @@ namespace Viewer
         private const int WM_SYSKEYUP = 0x0105;
 
         private IntPtr _hookId = IntPtr.Zero;
-        private LowLevelKeyboardProc _proc;
-        private bool _isCapturing;
+        private readonly LowLevelKeyboardProc _proc;
+        private volatile bool _isCapturing;
 
         /// <summary>
         /// 키 이벤트 콜백: (ushort virtualKeyCode, bool isDown)
         /// </summary>
-        public event Action<ushort, bool>? OnKeyEvent;
+        public event Action<KeyboardHookEvent>? OnKeyEvent;
 
         public KeyboardHook()
         {
@@ -71,18 +81,43 @@ namespace Viewer
             {
                 int msg = (int)wParam;
                 var hookStruct = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
-                ushort vk = (ushort)hookStruct.vkCode;
+                ushort vk = checked((ushort)hookStruct.vkCode);
 
                 bool isDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
                 bool isUp = (msg == WM_KEYUP || msg == WM_SYSKEYUP);
 
-                if (isDown || isUp)
+                var keyEvent = new KeyboardHookEvent(
+                    vk,
+                    checked((ushort)hookStruct.scanCode),
+                    hookStruct.flags,
+                    isDown);
+
+                if ((isDown || isUp) && !keyEvent.IsInjected)
                 {
-                    OnKeyEvent?.Invoke(vk, isDown);
+                    bool delivered = false;
+                    var handlers = OnKeyEvent;
+                    if (handlers != null)
+                    {
+                        foreach (Action<KeyboardHookEvent> handler in
+                                 handlers.GetInvocationList())
+                        {
+                            try
+                            {
+                                handler(keyEvent);
+                                delivered = true;
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine(
+                                    $"[KeyboardHook] Subscriber failed: {ex.Message}");
+                            }
+                        }
+                    }
 
                     // 시스템 키(Alt+Tab, Win, 한/영 등)를 로컬에서 처리하지 않도록 차단
                     // Viewer 창이 포커스 중일 때만 차단하므로 안전
-                    return (IntPtr)1;
+                    if (delivered)
+                        return (IntPtr)1;
                 }
             }
 
@@ -91,6 +126,7 @@ namespace Viewer
 
         public void Dispose()
         {
+            _isCapturing = false;
             if (_hookId != IntPtr.Zero)
             {
                 UnhookWindowsHookEx(_hookId);

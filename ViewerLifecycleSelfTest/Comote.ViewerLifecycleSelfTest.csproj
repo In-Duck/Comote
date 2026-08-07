@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Viewer\ConnectionGenerationState.cs"
+             Link="ConnectionGenerationState.cs" />
+    <Compile Include="..\Viewer\ModifierKeyState.cs"
+             Link="ModifierKeyState.cs" />
+    <Compile Include="..\Viewer\ClipboardConsentState.cs"
+             Link="ClipboardConsentState.cs" />
+    <Compile Include="..\Host\ClipboardStaWorker.cs"
+             Link="ClipboardStaWorker.cs" />
+    <Compile Include="..\Host\ClipboardMonitoringTransition.cs"
+             Link="ClipboardMonitoringTransition.cs" />
+  </ItemGroup>
+</Project>

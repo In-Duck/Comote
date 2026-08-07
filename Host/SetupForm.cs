@@ -1,9 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using System.Security.Cryptography;
+using Comote.Input;
 
 namespace Host
 {
@@ -99,7 +101,7 @@ namespace Host
             // 비밀번호
             var pwdLabel = new Label
             {
-                Text = "직접 연결 암호 (최소 8자, 12자 이상 권장)",
+                Text = "256비트 접속 키 (Manager에 그대로 복사)",
                 Location = new Point(20, 125),
                 AutoSize = true,
                 ForeColor = Color.FromArgb(148, 163, 184)
@@ -114,7 +116,8 @@ namespace Host
                 ForeColor = Color.FromArgb(15, 23, 42),
                 BorderStyle = BorderStyle.FixedSingle,
                 Font = new Font("Segoe UI", 11),
-                UseSystemPasswordChar = true
+                Text = ComoteAccessKey.Generate(),
+                UseSystemPasswordChar = false
             };
             Controls.Add(_passwordBox);
 
@@ -174,14 +177,17 @@ namespace Host
 
             startBtn.Click += (s, e) =>
             {
-                if (_passwordBox.Text.Length < 8)
+                if (!ComoteAccessKey.TryParse(
+                        _passwordBox.Text,
+                        out var parsedKey))
                 {
                     MessageBox.Show(
-                        "직접 연결 암호는 최소 8자 이상이어야 합니다.",
-                        "Comote Direct Host");
+                        "접속 키는 CMT1 형식의 256비트 키여야 합니다.",
+                        "Comote Host");
                     _passwordBox.Focus();
                     return;
                 }
+                CryptographicOperations.ZeroMemory(parsedKey);
 
                 DialogResult = DialogResult.OK;
                 Close();

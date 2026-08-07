@@ -1,10 +1,11 @@
-﻿using System.Net;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using Newtonsoft.Json;
+using Comote.Input;
 
 namespace Viewer
 {
@@ -51,7 +52,7 @@ namespace Viewer
             root.Children.Add(Label("포트 (Client 공유기에서 TCP 포워딩)"));
             _portBox = Input("45820");
             root.Children.Add(_portBox);
-            root.Children.Add(Label("접속 암호 (12자 이상 권장)"));
+            root.Children.Add(Label("256비트 접속 키 (CMT1-로 시작)"));
             _passwordBox = new PasswordBox
             {
                 Height = 34,
@@ -125,14 +126,35 @@ namespace Viewer
                 MessageBox.Show("포트는 1024~65535 범위여야 합니다.");
                 return;
             }
-            if (ConnectionPassword.Length < 8)
+            if (!ComoteAccessKey.TryParse(
+                    ConnectionPassword,
+                    out var parsedKey))
             {
-                MessageBox.Show("접속 암호는 최소 8자 이상이어야 합니다.");
+                MessageBox.Show(
+                    "접속 키는 CMT1 형식의 256비트 키여야 합니다.");
                 return;
             }
+            CryptographicOperations.ZeroMemory(parsedKey);
 
-            if (_rememberBox.IsChecked == true) Save();
-            else DirectConnectionStore.Clear();
+            if (_rememberBox.IsChecked == true)
+            {
+                try
+                {
+                    Save();
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(
+                        "접속 정보를 Windows 사용자 보호 저장소에 " +
+                        $"저장하지 못했습니다.\n\n{ex.Message}",
+                        "Comote Direct Manager");
+                    return;
+                }
+            }
+            else
+            {
+                DirectConnectionStore.Clear();
+            }
             DialogResult = true;
         }
 
@@ -172,23 +194,62 @@ namespace Viewer
         private static readonly string FilePath =
             Path.Combine(DirectoryPath, "direct-connection.dat");
         private static readonly byte[] Entropy =
-            Encoding.UTF8.GetBytes("Comote.DirectConnection.v1");
+            Encoding.UTF8.GetBytes("Comote.DirectConnection.v2");
 
         public static void Save(string host, int port, string password)
         {
-            Directory.CreateDirectory(DirectoryPath);
-            var json = JsonConvert.SerializeObject(
-                new StoredConnection
+            byte[]? plaintext = null;
+            byte[]? protectedBytes = null;
+            string? temporaryPath = null;
+            try
+            {
+                Directory.CreateDirectory(DirectoryPath);
+                var json = JsonConvert.SerializeObject(
+                    new StoredConnection
+                    {
+                        Host = host,
+                        Port = port,
+                        Password = password,
+                    });
+                plaintext = Encoding.UTF8.GetBytes(json);
+                protectedBytes = ProtectedData.Protect(
+                    plaintext,
+                    Entropy,
+                    DataProtectionScope.CurrentUser);
+                temporaryPath = Path.Combine(
+                    DirectoryPath,
+                    $".direct-connection-{Guid.NewGuid():N}.tmp");
+                using (var stream = new FileStream(
+                           temporaryPath,
+                           FileMode.CreateNew,
+                           FileAccess.Write,
+                           FileShare.None,
+                           bufferSize: 4096,
+                           FileOptions.WriteThrough))
                 {
-                    Host = host,
-                    Port = port,
-                    Password = password,
-                });
-            var protectedBytes = ProtectedData.Protect(
-                Encoding.UTF8.GetBytes(json),
-                Entropy,
-                DataProtectionScope.CurrentUser);
-            File.WriteAllBytes(FilePath, protectedBytes);
+                    stream.Write(protectedBytes);
+                    stream.Flush(flushToDisk: true);
+                }
+                File.Move(temporaryPath, FilePath, overwrite: true);
+                temporaryPath = null;
+            }
+            finally
+            {
+                if (plaintext is not null)
+                    CryptographicOperations.ZeroMemory(plaintext);
+                if (protectedBytes is not null)
+                    CryptographicOperations.ZeroMemory(protectedBytes);
+                if (temporaryPath is not null)
+                {
+                    try
+                    {
+                        File.Delete(temporaryPath);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
         }
 
         public static bool TryLoad(
@@ -199,19 +260,28 @@ namespace Viewer
             host = "";
             port = 45820;
             password = "";
+            byte[]? protectedBytes = null;
+            byte[]? plaintext = null;
+            byte[]? parsedKey = null;
             try
             {
                 if (!File.Exists(FilePath)) return false;
-                var json = Encoding.UTF8.GetString(
-                    ProtectedData.Unprotect(
-                        File.ReadAllBytes(FilePath),
-                        Entropy,
-                        DataProtectionScope.CurrentUser));
+                protectedBytes = File.ReadAllBytes(FilePath);
+                plaintext = ProtectedData.Unprotect(
+                    protectedBytes,
+                    Entropy,
+                    DataProtectionScope.CurrentUser);
+                var json = new UTF8Encoding(
+                    encoderShouldEmitUTF8Identifier: false,
+                    throwOnInvalidBytes: true).GetString(plaintext);
                 var stored =
                     JsonConvert.DeserializeObject<StoredConnection>(json);
                 if (stored == null ||
                     string.IsNullOrWhiteSpace(stored.Host) ||
-                    stored.Port is < 1024 or > 65535)
+                    stored.Port is < 1024 or > 65535 ||
+                    !ComoteAccessKey.TryParse(
+                        stored.Password,
+                        out parsedKey))
                     return false;
                 host = stored.Host;
                 port = stored.Port;
@@ -221,6 +291,15 @@ namespace Viewer
             catch
             {
                 return false;
+            }
+            finally
+            {
+                if (parsedKey is not null)
+                    CryptographicOperations.ZeroMemory(parsedKey);
+                if (plaintext is not null)
+                    CryptographicOperations.ZeroMemory(plaintext);
+                if (protectedBytes is not null)
+                    CryptographicOperations.ZeroMemory(protectedBytes);
             }
         }
 

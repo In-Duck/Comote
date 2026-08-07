@@ -1,6 +1,7 @@
-﻿using System.Net.Sockets;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using Comote.Input;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -8,32 +9,65 @@ namespace Host
 {
     internal sealed class ManagerHubClient : IDisposable
     {
+        private static readonly TimeSpan ConnectionTimeout =
+            TimeSpan.FromSeconds(15);
+
         private readonly string _managerHost;
         private readonly int _managerPort;
-        private readonly string _clientId;
+        private readonly string _routingId;
         private readonly string _clientName;
-        private readonly byte[] _passwordBytes;
+        private readonly byte[] _accessKey;
+        private readonly bool _allowRemoteTasks;
+        private readonly bool _allowSystemCommands;
         private readonly CancellationTokenSource _lifetime = new();
-        private readonly SemaphoreSlim _writeLock = new(1, 1);
-        private StreamWriter? _writer;
+        private SecurePskChannel? _channel;
         private TcpClient? _client;
 
         public event Func<object, Task>? SignalReceived;
         public event Func<JObject, Task>? CommandReceived;
         public event Action<bool, string>? ConnectionChanged;
 
+        internal string RoutingId => _routingId;
+
         public ManagerHubClient(
             string managerHost,
             int managerPort,
-            string password,
-            string clientId,
-            string clientName)
+            string accessKey,
+            string clientName,
+            bool allowRemoteTasks = false,
+            bool allowSystemCommands = false)
         {
-            _managerHost = managerHost;
+            if (string.IsNullOrWhiteSpace(managerHost))
+            {
+                throw new ArgumentException(
+                    "A Manager address is required.",
+                    nameof(managerHost));
+            }
+            if (managerPort is < 1024 or > 65535)
+            {
+                throw new ArgumentOutOfRangeException(nameof(managerPort));
+            }
+
+            var normalizedName = clientName?.Trim() ?? "";
+            if (normalizedName.Length is <= 0 or > 128)
+            {
+                throw new ArgumentException(
+                    "The Client name must contain 1 to 128 characters.",
+                    nameof(clientName));
+            }
+            if (!ComoteAccessKey.TryParse(accessKey, out _accessKey))
+            {
+                throw new ArgumentException(
+                    "Manager access key must be a canonical CMT1 256-bit key.",
+                    nameof(accessKey));
+            }
+
+            _managerHost = managerHost.Trim();
             _managerPort = managerPort;
-            _passwordBytes = Encoding.UTF8.GetBytes(password);
-            _clientId = clientId;
-            _clientName = clientName;
+            _routingId = ManagerHubProtocol.DeriveRoutingId(_accessKey);
+            _clientName = normalizedName;
+            _allowRemoteTasks = allowRemoteTasks;
+            _allowSystemCommands = allowSystemCommands;
         }
 
         public async Task RunAsync(CancellationToken cancellationToken)
@@ -61,7 +95,7 @@ namespace Host
                 }
                 finally
                 {
-                    _writer = null;
+                    _channel = null;
                     _client?.Dispose();
                     _client = null;
                 }
@@ -82,9 +116,10 @@ namespace Host
 
         public async Task SendSignalAsync(object signal)
         {
-            var writer = _writer ??
-                throw new IOException("Manager Hub에 연결되지 않았습니다.");
-            await SendAsync(writer, new JObject
+            var channel = _channel ??
+                throw new IOException(
+                    "The Client is not connected to the Manager Hub.");
+            await SendAsync(channel, new JObject
             {
                 ["type"] = "signal",
                 ["payload"] = JToken.FromObject(signal),
@@ -93,9 +128,18 @@ namespace Host
 
         public async Task SendThumbnailAsync(byte[] jpeg)
         {
-            var writer = _writer;
-            if (writer == null || jpeg.Length == 0) return;
-            await SendAsync(writer, new JObject
+            ArgumentNullException.ThrowIfNull(jpeg);
+            var channel = _channel;
+            if (channel == null || jpeg.Length == 0)
+            {
+                return;
+            }
+            if (jpeg.Length > 500_000)
+            {
+                throw new IOException("The thumbnail is too large.");
+            }
+
+            await SendAsync(channel, new JObject
             {
                 ["type"] = "thumbnail",
                 ["contentType"] = "image/jpeg",
@@ -106,128 +150,257 @@ namespace Host
         private async Task ConnectAndServeAsync(
             CancellationToken cancellationToken)
         {
+            using var connectionTimeout =
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken);
+            connectionTimeout.CancelAfter(ConnectionTimeout);
             _client = new TcpClient { NoDelay = true };
             await _client.ConnectAsync(
                 _managerHost,
                 _managerPort,
-                cancellationToken);
+                connectionTimeout.Token);
             var stream = _client.GetStream();
-            using var reader = new StreamReader(
+            await ManagerHubProtocol.WriteRoutingPrefaceAsync(
                 stream,
-                Encoding.UTF8,
-                false,
-                8192,
-                leaveOpen: true);
-            await using var writer = new StreamWriter(
-                stream,
-                new UTF8Encoding(false),
-                8192,
-                leaveOpen: true)
-            {
-                AutoFlush = true,
-            };
+                _routingId,
+                connectionTimeout.Token);
+            await using var channel =
+                await SecurePskChannel.AuthenticateClientAsync(
+                    stream,
+                    _accessKey,
+                    ManagerHubProtocol.CreateSecureContext(_routingId),
+                    connectionTimeout.Token);
 
-            var challengeLine =
-                await reader.ReadLineAsync(cancellationToken);
-            var challenge = JObject.Parse(
-                challengeLine ??
-                throw new IOException("Manager 인증 응답이 없습니다."));
-            if (challenge.Value<string>("type") != "challenge")
-                throw new IOException("Manager 인증 형식이 올바르지 않습니다.");
-
-            var nonce = Convert.FromBase64String(
-                challenge.Value<string>("nonce") ?? "");
-            using var hmac = new HMACSHA256(_passwordBytes);
-            var proof = hmac.ComputeHash(nonce);
-            await SendAsync(writer, new JObject
-            {
-                ["type"] = "auth",
-                ["proof"] = Convert.ToBase64String(proof),
-            });
-            CryptographicOperations.ZeroMemory(proof);
-
-            var resultLine = await reader.ReadLineAsync(cancellationToken);
-            var result = JObject.Parse(
-                resultLine ??
-                throw new IOException("Manager 인증 결과가 없습니다."));
-            if (result.Value<string>("type") != "auth_result" ||
-                result.Value<bool?>("ok") != true)
-                throw new UnauthorizedAccessException(
-                    "Manager 등록 암호가 일치하지 않습니다.");
-
-            await SendAsync(writer, new JObject
+            await SendAsync(channel, new JObject
             {
                 ["type"] = "register",
-                ["clientId"] = _clientId,
+                ["routingId"] = _routingId,
                 ["name"] = _clientName,
-            });
-            _writer = writer;
+                ["allowRemoteTasks"] = _allowRemoteTasks,
+                ["allowSystemCommands"] = _allowSystemCommands,
+            }, connectionTimeout.Token);
+            var registration = await ReceiveAsync(
+                channel,
+                connectionTimeout.Token);
+            if (!HasOnlyProperties(
+                    registration,
+                    "type",
+                    "routingId") ||
+                registration["type"]?.Type != JTokenType.String ||
+                registration.Value<string>("type") != "registered" ||
+                registration["routingId"]?.Type != JTokenType.String ||
+                !string.Equals(
+                    registration.Value<string>("routingId"),
+                    _routingId,
+                    StringComparison.Ordinal))
+            {
+                throw new UnauthorizedAccessException(
+                    "The Manager rejected the device registration.");
+            }
+
+            _channel = channel;
             ConnectionChanged?.Invoke(
                 true,
                 $"{_managerHost}:{_managerPort}");
 
+            using var connectionLifetime =
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken);
             using var pingTimer = new PeriodicTimer(
                 TimeSpan.FromSeconds(20));
-            var pingTask = Task.Run(async () =>
-            {
-                while (await pingTimer.WaitForNextTickAsync(
-                           cancellationToken))
-                {
-                    await SendAsync(
-                        writer,
-                        new JObject { ["type"] = "ping" });
-                }
-            }, cancellationToken);
+            var pingTask = RunPingLoopAsync(
+                channel,
+                pingTimer,
+                connectionLifetime.Token);
 
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                var line = await reader.ReadLineAsync(cancellationToken);
-                if (line == null) break;
-                if (line.Length > 1_000_000)
-                    throw new IOException("Manager 메시지가 너무 큽니다.");
-
-                var message = JObject.Parse(line);
-                var messageType = message.Value<string>("type");
-                if (messageType == "signal")
-                {
-                    var payload = message["payload"];
-                    if (payload != null && SignalReceived != null)
-                        await SignalReceived(payload);
-                }
-                else if (messageType == "command" && CommandReceived != null)
-                {
-                    await CommandReceived(message);
-                }
-            }
-
-            ConnectionChanged?.Invoke(false, "Manager 연결 종료");
-        }
-
-        private async Task SendAsync(
-            StreamWriter writer,
-            JObject message)
-        {
-            await _writeLock.WaitAsync();
             try
             {
-                await writer.WriteLineAsync(
-                    message.ToString(Formatting.None));
-                await writer.FlushAsync();
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    var message = await ReceiveAsync(
+                        channel,
+                        cancellationToken);
+                    var messageType = message["type"]?.Type == JTokenType.String
+                        ? message.Value<string>("type")
+                        : null;
+                    if (messageType == "signal" &&
+                        HasOnlyProperties(message, "type", "payload") &&
+                        message["payload"] is JObject payload)
+                    {
+                        if (SignalReceived != null)
+                        {
+                            await SignalReceived(payload);
+                        }
+                    }
+                    else if (messageType == "command")
+                    {
+                        // A malformed or unauthorized command is dropped, not
+                        // treated as a fatal protocol violation, so a future
+                        // validation drift degrades to "ignored" rather than a
+                        // reconnect loop that never delivers commands.
+                        var action = message.Value<string>("action");
+                        if (!IsValidCommand(message) ||
+                            !IsActionAllowed(action))
+                        {
+                            Console.WriteLine(
+                                "[Hub] A remote command was ignored " +
+                                "(invalid or not opted in).");
+                            continue;
+                        }
+                        if (CommandReceived != null)
+                        {
+                            await CommandReceived(message);
+                        }
+                    }
+                    else if (messageType == "pong" &&
+                             HasOnlyProperties(message, "type"))
+                    {
+                    }
+                    else
+                    {
+                        throw new IOException(
+                            "The Manager Hub message schema is invalid.");
+                    }
+                }
             }
             finally
             {
-                _writeLock.Release();
+                connectionLifetime.Cancel();
+                try
+                {
+                    await pingTask;
+                }
+                catch (OperationCanceledException)
+                    when (connectionLifetime.IsCancellationRequested)
+                {
+                }
             }
+        }
+
+        private static async Task RunPingLoopAsync(
+            SecurePskChannel channel,
+            PeriodicTimer timer,
+            CancellationToken cancellationToken)
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                await SendAsync(
+                    channel,
+                    new JObject { ["type"] = "ping" },
+                    cancellationToken);
+            }
+        }
+
+        private static async Task SendAsync(
+            SecurePskChannel channel,
+            JObject message,
+            CancellationToken cancellationToken = default)
+        {
+            var encoded = Encoding.UTF8.GetBytes(
+                message.ToString(Formatting.None));
+            try
+            {
+                await channel.SendAsync(encoded, cancellationToken);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(encoded);
+            }
+        }
+
+        private static async Task<JObject> ReceiveAsync(
+            SecurePskChannel channel,
+            CancellationToken cancellationToken)
+        {
+            var encoded = await channel.ReceiveAsync(cancellationToken);
+            try
+            {
+                return StrictJsonObject.Parse(encoded);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(encoded);
+            }
+        }
+
+        private bool IsActionAllowed(string? action) =>
+            (RemoteCommandProtocol.IsAppTask(action) && _allowRemoteTasks) ||
+            (RemoteCommandProtocol.IsSystemCommand(action) &&
+                _allowSystemCommands);
+
+        private static bool IsValidCommand(JObject value)
+        {
+            if (value["action"]?.Type != JTokenType.String)
+            {
+                return false;
+            }
+
+            var action = value.Value<string>("action")!;
+            if (!HasOnlyProperties(
+                    value,
+                    [.. RemoteCommandProtocol.AllowedProperties(action)]))
+            {
+                return false;
+            }
+
+            return RemoteCommandProtocol.IsSystemCommand(action)
+                ? IsValidSystemCommand(value, action)
+                : IsValidAppTask(value, action);
+        }
+
+        private static bool IsValidAppTask(JObject value, string action)
+        {
+            if (value["name"]?.Type != JTokenType.String ||
+                value["folder"]?.Type != JTokenType.String ||
+                value["value"]?.Type != JTokenType.String)
+            {
+                return false;
+            }
+
+            return RemoteCommandProtocol.IsAppTask(action) &&
+                RemoteCommandProtocol.IsValidName(value.Value<string>("name")) &&
+                RemoteCommandProtocol.IsValidAppTaskValue(
+                    value.Value<string>("value")) &&
+                RemoteCommandProtocol.IsValidFolder(
+                    value.Value<string>("folder"));
+        }
+
+        private static bool IsValidSystemCommand(JObject value, string action)
+        {
+            if (value["name"]?.Type != JTokenType.String ||
+                value["commandId"]?.Type != JTokenType.String ||
+                value["issuedAtUnixMs"]?.Type != JTokenType.Integer ||
+                value["delaySeconds"]?.Type != JTokenType.Integer)
+            {
+                return false;
+            }
+
+            return RemoteCommandProtocol.IsSystemCommand(action) &&
+                RemoteCommandProtocol.IsValidName(value.Value<string>("name")) &&
+                RemoteCommandProtocol.IsValidCommandId(
+                    value.Value<string>("commandId")) &&
+                RemoteCommandProtocol.IsValidDelaySeconds(
+                    value.Value<long>("delaySeconds"));
+        }
+
+        private static bool HasOnlyProperties(
+            JObject value,
+            params string[] names)
+        {
+            var allowed = new HashSet<string>(
+                names,
+                StringComparer.Ordinal);
+            return value.Properties().All(
+                    property => allowed.Remove(property.Name)) &&
+                allowed.Count == 0;
         }
 
         public void Dispose()
         {
             _lifetime.Cancel();
             _client?.Dispose();
-            CryptographicOperations.ZeroMemory(_passwordBytes);
-            _writeLock.Dispose();
+            CryptographicOperations.ZeroMemory(_accessKey);
             _lifetime.Dispose();
         }
     }
 }
-

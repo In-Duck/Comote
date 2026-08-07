@@ -1,4 +1,4 @@
-﻿using System.Linq;
+using System.Linq;
 using System;
 using System.Windows;
 using SIPSorceryMedia.FFmpeg;
@@ -29,23 +29,27 @@ namespace Viewer
             // [Style] Mono Vintage Console Styling
             try
             {
+                var version =
+                    typeof(Program).Assembly.GetName().Version?.ToString() ??
+                    "unknown";
                 Console.Title = "Comote Viewer";
                 Console.BackgroundColor = ConsoleColor.Black;
                 Console.ForegroundColor = ConsoleColor.DarkYellow;
                 Console.Clear();
                 Console.WriteLine("=================================================");
-                Console.WriteLine("    Comote - Premium Remote Control (v1.3.0)     ");
+                Console.WriteLine(
+                    $"    Comote - Premium Remote Control ({version})");
                 Console.WriteLine("=================================================");
                 Console.WriteLine("");
             }
             catch { }
 
-            Console.WriteLine("Comote Viewer v1.3.0 starting...");
-            
+            Console.WriteLine("Comote Viewer starting...");
+
             // WPF Application 객체를 가장 먼저 생성하여 시스템 DLL 로딩을 보장
             Console.WriteLine("[DEBUG] Creating Application...");
             var app = new Application();
-            
+
             try
             {
                 var uri = new Uri("pack://application:,,,/Viewer;component/Styles.xaml");
@@ -56,7 +60,7 @@ namespace Viewer
             {
                 Console.WriteLine($"[UI] Failed to load styles: {ex.Message}");
             }
-            
+
 
 
             try
@@ -78,7 +82,7 @@ namespace Viewer
                 };
 
                 app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
-                
+
                 Console.WriteLine("[DEBUG] Showing LoginWindow...");
                 if (demoMode)
                 {
@@ -100,7 +104,7 @@ namespace Viewer
 
                     var hubWindow = new MainWindow(
                         hubArguments.Port,
-                        hubArguments.Password,
+                        hubArguments.Devices,
                         hubArguments.AutoConnectId);
                     app.ShutdownMode = ShutdownMode.OnMainWindowClose;
                     app.Run(hubWindow);
@@ -134,7 +138,7 @@ namespace Viewer
                     if (setup.ShowDialog() != true) return;
                     var hubWindow = new MainWindow(
                         setup.Port,
-                        setup.AccessPassword);
+                        setup.Devices);
                     app.ShutdownMode = ShutdownMode.OnMainWindowClose;
                     app.Run(hubWindow);
                     return;

@@ -11,7 +11,6 @@ namespace Host
 
         public PusherConfig Pusher { get; set; } = new();
         public string? DefaultHostName { get; set; }
-        public string? DefaultPassword { get; set; }
         public string? HostId { get; set; }
         public string SupabaseUrl { get; set; } = "";
         public string SupabaseAnonKey { get; set; } = "";
@@ -116,8 +115,6 @@ namespace Host
                 target.WebAuthUrl = source.WebAuthUrl;
             if (!string.IsNullOrWhiteSpace(source.DefaultHostName))
                 target.DefaultHostName = source.DefaultHostName;
-            if (source.DefaultPassword != null)
-                target.DefaultPassword = source.DefaultPassword;
             if (!string.IsNullOrWhiteSpace(source.HostId))
                 target.HostId = source.HostId;
         }

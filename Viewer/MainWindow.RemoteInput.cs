@@ -53,6 +53,8 @@ namespace Viewer
                 MouseButton.Left => 0,
                 MouseButton.Right => 1,
                 MouseButton.Middle => 2,
+                MouseButton.XButton1 => 3,
+                MouseButton.XButton2 => 4,
                 _ => byte.MaxValue,
             };
             return button != byte.MaxValue;
@@ -67,6 +69,8 @@ namespace Viewer
             catch
             {
             }
+
+            _modifierKeys.Reset();
 
             if (_videoDisplay.IsMouseCaptured)
                 _videoDisplay.ReleaseMouseCapture();

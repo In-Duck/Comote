@@ -12,13 +12,19 @@ namespace Viewer
             _statusBarText.Text =
                 $"HUB · TCP {_hubPort} · Client 접속 대기 중 · 중앙 서버 없음";
             _hubLifetime = new CancellationTokenSource();
-            _hubServer = new ManagerHubServer(
+            var server = new ManagerHubServer(
                 _hubPort,
-                _hubPassword!);
+                _hubCredentials);
+            _hubServer = server;
 
-            _hubServer.ClientOnline += info =>
-                Dispatcher.Invoke(() =>
+            server.ClientOnline += info =>
+                Dispatcher.BeginInvoke(() =>
                 {
+                    if (_hubClosing)
+                    {
+                        return;
+                    }
+
                     _persistentHosts.TryGetValue(
                         info.Id, out var previousHost);
                     _persistentHosts[info.Id] = new HostInfo
@@ -32,6 +38,8 @@ namespace Viewer
                         Hdd = "N/A",
                         Uptime = "접속됨",
                         IsOnline = true,
+                        AllowsRemoteTasks = info.AllowsRemoteTasks,
+                        AllowsSystemCommands = info.AllowsSystemCommands,
                         LastSeen = DateTime.UtcNow,
                         ThumbnailBytes = previousHost?.ThumbnailBytes,
                     };
@@ -45,13 +53,20 @@ namespace Viewer
                         string.Equals(
                             _hubAutoConnectId,
                             info.Id,
-                            StringComparison.OrdinalIgnoreCase))
+                            StringComparison.Ordinal))
+                    {
                         ConnectToHost(info.Id);
+                    }
                 });
 
-            _hubServer.ClientOffline += clientId =>
-                Dispatcher.Invoke(() =>
+            server.ClientOffline += clientId =>
+                Dispatcher.BeginInvoke(() =>
                 {
+                    if (_hubClosing)
+                    {
+                        return;
+                    }
+
                     if (_persistentHosts.TryGetValue(
                             clientId,
                             out var host))
@@ -61,7 +76,10 @@ namespace Viewer
                         host.Uptime = "연결 종료";
                     }
                     UpdateLobbyUI(_persistentHosts.Values.ToList());
-                    if (_connectedHostId == clientId)
+                    if (string.Equals(
+                            _connectedHostId,
+                            clientId,
+                            StringComparison.Ordinal))
                     {
                         _statusText.Text = "Client 연결이 종료되었습니다.";
                         _statusText.Foreground = Brushes.Red;
@@ -69,33 +87,96 @@ namespace Viewer
                     }
                 });
 
-            _hubServer.SignalReceived += async (clientId, signal) =>
-            {
-                if (_connectedHostId == clientId && _receiver != null)
-                    await _receiver.HandleSignalAsync(clientId, signal);
-            };
+            server.SignalReceived += HandleHubSignalAsync;
 
-            _hubServer.ThumbnailReceived += (clientId, jpeg) =>
+            server.ThumbnailReceived += (clientId, jpeg) =>
                 Dispatcher.BeginInvoke(() =>
-                    SetLiveThumbnail(clientId, jpeg));
+                {
+                    if (!_hubClosing)
+                    {
+                        SetLiveThumbnail(clientId, jpeg);
+                    }
+                });
 
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    await _hubServer.RunAsync(_hubLifetime.Token);
+                    await server.RunAsync(_hubLifetime.Token);
+                }
+                catch (OperationCanceledException)
+                    when (_hubLifetime.IsCancellationRequested)
+                {
                 }
                 catch (Exception ex)
                 {
-                    Dispatcher.Invoke(() =>
+                    _ = Dispatcher.BeginInvoke(() =>
                     {
-                        _statusBarText.Text =
-                            $"Hub 수신 오류: {ex.Message}";
+                        if (!_hubClosing)
+                        {
+                            _statusBarText.Text =
+                                $"Hub 수신 오류: {ex.Message}";
+                        }
                     });
                 }
             });
 
             return Task.CompletedTask;
+        }
+
+        private async Task HandleHubSignalAsync(
+            string clientId,
+            object signal)
+        {
+            var lifetime = _hubLifetime;
+            if (lifetime is null || lifetime.IsCancellationRequested)
+            {
+                return;
+            }
+
+            try
+            {
+                await _hubSignalDispatchGate.WaitAsync(lifetime.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            try
+            {
+                var receiver = await Dispatcher.InvokeAsync(() =>
+                {
+                    if (_hubClosing ||
+                        !string.Equals(
+                            _connectedHostId,
+                            clientId,
+                            StringComparison.Ordinal))
+                    {
+                        return null;
+                    }
+
+                    return _receiver;
+                });
+                if (receiver is null)
+                {
+                    return;
+                }
+
+                await receiver.HandleSignalAsync(clientId, signal);
+            }
+            catch (OperationCanceledException)
+                when (lifetime.IsCancellationRequested)
+            {
+            }
+            catch (ObjectDisposedException)
+                when (_hubClosing || lifetime.IsCancellationRequested)
+            {
+            }
+            finally
+            {
+                _hubSignalDispatchGate.Release();
+            }
         }
     }
 }

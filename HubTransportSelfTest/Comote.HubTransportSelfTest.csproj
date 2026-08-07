@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\InputCore\Comote.InputCore.csproj" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Host\ManagerHubClient.cs"
+             Link="Host\ManagerHubClient.cs" />
+    <Compile Include="..\Host\StrictJsonObject.cs"
+             Link="Host\StrictJsonObject.cs" />
+    <Compile Include="..\Viewer\ManagerHubServer.cs"
+             Link="Viewer\ManagerHubServer.cs" />
+    <Compile Include="..\Viewer\StrictJsonObject.cs"
+             Link="Viewer\StrictJsonObject.cs" />
+  </ItemGroup>
+</Project>

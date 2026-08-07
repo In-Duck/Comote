@@ -1,5 +1,7 @@
-﻿using System.Drawing;
+using System.Drawing;
 using System.Windows.Forms;
+using System.Security.Cryptography;
+using Comote.Input;
 
 namespace Host
 {
@@ -9,15 +11,13 @@ namespace Host
         private readonly NumericUpDown _portBox;
         private readonly TextBox _nameBox;
         private readonly TextBox _passwordBox;
-        private readonly TextBox _updateManifestBox;
         private readonly ComboBox _monitorBox;
         private readonly List<MonitorInfo> _monitors;
 
         public string ManagerAddress => _managerBox.Text.Trim();
         public int ManagerPort => (int)_portBox.Value;
         public string ClientName => _nameBox.Text.Trim();
-        public string AccessPassword => _passwordBox.Text;
-        public string UpdateManifestUrl => _updateManifestBox.Text.Trim();
+        public string AccessKey => _passwordBox.Text;
         public int AdapterIndex =>
             _monitors.Count > 0
                 ? _monitors[_monitorBox.SelectedIndex].AdapterIndex
@@ -31,7 +31,7 @@ namespace Host
         {
             Text = "Comote Client → Manager Hub";
             Width = 470;
-            Height = 640;
+            Height = 570;
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -72,7 +72,7 @@ namespace Host
                 savedSettings?.ClientName ?? Environment.MachineName,
                 198);
             _passwordBox = AddTextBox(
-                "Manager 등록 암호",
+                "Manager 256비트 접속 키 (CMT1-)",
                 "",
                 280);
             _passwordBox.UseSystemPasswordChar = true;
@@ -105,16 +105,11 @@ namespace Host
             if (_monitorBox.Items.Count > 0)
                 _monitorBox.SelectedIndex = primary;
 
-            _updateManifestBox = AddTextBox(
-                "Update manifest HTTPS URL (optional)",
-                savedSettings?.UpdateManifestUrl ?? "",
-                442);
-
             var start = new Button
             {
                 Text = "Manager에 연결",
                 Left = 24,
-                Top = 538,
+                Top = 458,
                 Width = 400,
                 Height = 44,
                 BackColor = Color.FromArgb(0, 122, 204),
@@ -165,11 +160,15 @@ namespace Host
                 MessageBox.Show("Manager 주소와 Client 이름을 입력하세요.");
                 return;
             }
-            if (AccessPassword.Length < 8)
+            if (!ComoteAccessKey.TryParse(
+                    AccessKey,
+                    out var parsedKey))
             {
-                MessageBox.Show("Manager 등록 암호는 최소 8자 이상이어야 합니다.");
+                MessageBox.Show(
+                    "Manager 접속 키는 CMT1 형식의 256비트 키여야 합니다.");
                 return;
             }
+            CryptographicOperations.ZeroMemory(parsedKey);
             DialogResult = DialogResult.OK;
             Close();
         }

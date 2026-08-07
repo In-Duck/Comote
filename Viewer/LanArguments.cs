@@ -1,3 +1,6 @@
+using Comote.Input;
+using System.Security.Cryptography;
+
 namespace Viewer
 {
     internal sealed record LanArguments(
@@ -32,7 +35,8 @@ namespace Viewer
 
             var host = args[lanIndex + 1];
             var portText = GetValue(args, "--port") ?? "45820";
-            var password = GetValue(args, "--password");
+            var password = GetValue(args, "--access-key") ??
+                GetValue(args, "--password");
             if (!int.TryParse(portText, out var port) ||
                 port is < 1024 or > 65535)
             {
@@ -40,13 +44,14 @@ namespace Viewer
                 return true;
             }
 
-            if (string.IsNullOrWhiteSpace(password))
+            if (!ComoteAccessKey.TryParse(password, out var parsedKey))
             {
-                error = "LAN 테스트 암호가 필요합니다.";
+                error = "Direct 접속 키는 CMT1 형식의 256비트 키여야 합니다.";
                 return true;
             }
+            CryptographicOperations.ZeroMemory(parsedKey);
 
-            result = new LanArguments(host, port, password);
+            result = new LanArguments(host, port, password!);
             return true;
         }
 

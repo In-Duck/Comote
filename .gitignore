@@ -19,6 +19,12 @@ Distribution/**
 !Distribution/**/*.cmd
 !Distribution/**/*.ps1
 !Distribution/GUIDE.md
+!Distribution/VirtualHidPreview/
+!Distribution/VirtualHidPreview/MediaGate/
+!Distribution/VirtualHidPreview/MediaGate/**
+!Distribution/VirtualHidPreview/README.md
+!Distribution/VirtualHidPreview/THIRD_PARTY_NOTICES/
+!Distribution/VirtualHidPreview/THIRD_PARTY_NOTICES/**
 
 # Explicitly ignore all EXEs and ZIPs to prevent large file errors
 **/*.exe

@@ -1,3 +1,5 @@
+using Comote.Input;
+using System.Security.Cryptography;
 using System.Text;
 using System.Windows.Forms;
 using SIPSorceryMedia.FFmpeg;
@@ -19,17 +21,15 @@ namespace Host
                 return;
             }
 
-            var password = GetLanArgumentValue(args, "--password");
-            if (string.IsNullOrWhiteSpace(password) ||
-                password.Length < 8)
+            var password = GetLanArgumentValue(args, "--access-key") ??
+                GetLanArgumentValue(args, "--password");
+            if (!ComoteAccessKey.TryParse(password, out var parsedKey))
             {
                 MessageBox.Show(
-                    "LAN 테스트 암호는 8자 이상으로 지정해 주세요.\n\n" +
-                    "예: ComoteHost.exe --lan-test --port 45820 " +
-                    "--password \"테스트암호\"",
-                    "Comote LAN Host");
+                    "LAN 테스트 접속 키는 CMT1 형식의 256비트 키여야 합니다.");
                 return;
             }
+            CryptographicOperations.ZeroMemory(parsedKey);
 
             Console.OutputEncoding = Encoding.UTF8;
             Console.WriteLine("Comote LAN Host 1.4 Demo");
@@ -43,8 +43,15 @@ namespace Host
                 ffmpegPath);
 
             using var capture = new ScreenCapture(0, 0);
-            using var webRtc = new WebRTCManager(capture);
-            using var server = new LanSignalServer(port, password);
+            using var webRtc = new WebRTCManager(
+                capture,
+                inputBackend: InputBackendFactory.Create(
+                    args,
+                    capture.Left,
+                    capture.Top,
+                    capture.Width,
+                    capture.Height));
+            using var server = new LanSignalServer(port, password!);
             using var cancellation = new CancellationTokenSource();
 
             Console.CancelKeyPress += (_, eventArgs) =>

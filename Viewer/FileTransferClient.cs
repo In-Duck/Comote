@@ -1,269 +1,778 @@
-using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Threading.Tasks;
+using System.Security.Cryptography;
+using Comote.Input;
+using Newtonsoft.Json.Linq;
 using SIPSorcery.Net;
 using SIPSorceryMedia.Abstractions;
-using Newtonsoft.Json.Linq;
 
-namespace Viewer
+namespace Viewer;
+
+public sealed class FileTransferClient : IDisposable
 {
-    /// <summary>
-    /// 파일 전송 전용 WebRTC 클라이언트.
-    /// Video/Audio 트랙 없이 DataChannel만 사용합니다.
-    /// </summary>
-    public class FileTransferClient : IDisposable
+    private readonly SignalingClient _signaling;
+    private readonly string _targetHostId;
+    private readonly List<RTCIceCandidateInit> _iceQueue = [];
+    private readonly object _stateGate = new();
+    private readonly SemaphoreSlim _connectGate = new(1, 1);
+
+    private RTCPeerConnection? _peerConnection;
+    private RTCDataChannel? _dataChannel;
+    private RemoteChannelClientState? _security;
+    private RemoteFileSender? _fileSender;
+    private TaskCompletionSource<bool>? _connectionCompletion;
+    private long _connectionGeneration;
+    private bool _remoteDescriptionSet;
+    private bool _answerApplied;
+    private bool _disposed;
+
+    public Action<int>? OnProgress;
+    public Action<string>? OnStatus;
+
+    public FileTransferClient(
+        SignalingClient signaling,
+        string targetHostId)
     {
-        private RTCPeerConnection _pc;
-        private RTCDataChannel _dc;
-        private SignalingClient _signaling;
-        private string _targetHostId;
-        private TaskCompletionSource<bool> _connectionTcs;
-        
-        public Action<int>? OnProgress; // 0~100
-        public Action<string>? OnStatus; // 상태 메시지
+        _signaling = signaling ??
+            throw new ArgumentNullException(nameof(signaling));
+        _targetHostId = string.IsNullOrWhiteSpace(targetHostId)
+            ? throw new ArgumentException(
+                "Target host ID is required.",
+                nameof(targetHostId))
+            : targetHostId;
+        _signaling.OnSignalReceived += OnSignalReceivedAsync;
+    }
 
-        private List<RTCIceCandidateInit> _iceQueue = new();
-        private bool _remoteDescriptionSet = false;
-
-        // 파일 전송 프로토콜 상수 (Viewer/Host 공통)
-        private const byte MSG_FILE_START = 0x30;
-        private const byte MSG_FILE_CHUNK = 0x31;
-        private const byte MSG_FILE_END   = 0x32;
-        private const byte MSG_FILE_ACK   = 0x33;
-        private const byte MSG_FILE_HASH_MISMATCH = 0x34;
-
-        public FileTransferClient(SignalingClient signaling, string targetHostId)
+    public async Task<bool> ConnectAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        await _connectGate.WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
+        try
         {
-            _signaling = signaling;
-            _targetHostId = targetHostId;
-            _signaling.OnSignalReceived += OnSignalReceived;
-        }
-
-        public async Task<bool> ConnectAsync()
-        {
-            _connectionTcs = new TaskCompletionSource<bool>();
-
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            DisposePeerConnection();
+            var generation = Random.Shared.NextInt64(
+                1,
+                long.MaxValue);
+            var security = new RemoteChannelClientState(
+                RemoteChannelKind.File);
+            security.Reset(Guid.NewGuid());
+            var completion = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
             var config = new RTCConfiguration
             {
-                iceServers = new List<RTCIceServer>
+                iceServers =
+                [
+                    new RTCIceServer
+                    {
+                        urls = "stun:stun.l.google.com:19302",
+                    },
+                ],
+            };
+            var connection = new RTCPeerConnection(config);
+            RTCDataChannel channel;
+            try
+            {
+                channel = await connection.createDataChannel("file")
+                    .ConfigureAwait(false);
+            }
+            catch
+            {
+                security.Dispose();
+                try { connection.Dispose(); } catch { }
+                throw;
+            }
+            var sender = new RemoteFileSender(
+                payload => SendSecure(
+                    generation,
+                    connection,
+                    channel,
+                    security,
+                    payload.Span),
+                () =>
                 {
-                    new RTCIceServer { urls = "stun:stun.l.google.com:19302" }
-                }
-            };
-            _pc = new RTCPeerConnection(config);
-
-            // DataChannel 생성
-            _dc = await _pc.createDataChannel("file"); // Host는 'file' 채널을 기대함
-            _dc.onopen += () => 
-            {
-                Console.WriteLine($"[FileTransfer] DataChannel open for {_targetHostId}");
-                _connectionTcs.TrySetResult(true);
-            };
-            
-            _pc.onconnectionstatechange += (state) =>
-            {
-                Console.WriteLine($"[FileTransfer] Connection state: {state}");
-                if (state == RTCPeerConnectionState.failed)
+                    var isOpen = IsCurrent(
+                            generation,
+                            connection,
+                            channel,
+                            security) &&
+                        channel.readyState == RTCDataChannelState.open;
+                    return (
+                        isOpen,
+                        isOpen ? checked((ulong)channel.bufferedAmount) : 0);
+                },
+                _ =>
                 {
-                    _connectionTcs.TrySetResult(false);
-                }
-            };
-            _dc.onmessage += (dc, protocol, data) =>
-            {
-                // ACK 처리
-                 if (data.Length > 0)
-                 {
-                     if (data[0] == MSG_FILE_ACK) _ackTcs.TrySetResult(true);
-                     else if (data[0] == MSG_FILE_HASH_MISMATCH) _ackTcs.TrySetResult(false);
-                 }
-            };
-
-            _pc.onicecandidate += (candidate) =>
-            {
-                // Host는 { "ice": { ... } } 포맷을 기대함 (WebRTCManager.cs 354행)
-                _signaling.SendSignalAsync(_targetHostId, new { 
-                    ice = new {
-                        candidate = candidate.candidate,
-                        sdpMid = candidate.sdpMid,
-                        sdpMLineIndex = candidate.sdpMLineIndex
+                    if (!IsCurrent(
+                            generation,
+                            connection,
+                            channel,
+                            security))
+                    {
+                        return;
                     }
+
+                    completion.TrySetResult(false);
+                    security.Revoke();
+                    try { channel.close(); } catch { }
+                    try { connection.close(); } catch { }
                 });
+            sender.ProgressChanged += progress =>
+                OnProgress?.Invoke(progress);
+
+            bool published;
+            lock (_stateGate)
+            {
+                published = !_disposed;
+                if (published)
+                {
+                    _connectionGeneration = generation;
+                    _peerConnection = connection;
+                    _dataChannel = channel;
+                    _security = security;
+                    _fileSender = sender;
+                    _connectionCompletion = completion;
+                    _remoteDescriptionSet = false;
+                    _answerApplied = false;
+                    _iceQueue.Clear();
+                }
+            }
+            if (!published)
+            {
+                sender.Dispose();
+                security.Dispose();
+                try { channel.close(); } catch { }
+                try { connection.Close("disposed"); } catch { }
+                connection.Dispose();
+                throw new ObjectDisposedException(nameof(FileTransferClient));
+            }
+
+            channel.onopen += () =>
+                TrySendAuthenticationHello(
+                    generation,
+                    connection,
+                    channel,
+                    security);
+            channel.onmessage += (_, _, data) =>
+                HandleSecuredMessage(
+                    generation,
+                    connection,
+                    channel,
+                    security,
+                    sender,
+                    completion,
+                    data);
+            channel.onclose += () =>
+            {
+                if (IsCurrent(
+                        generation,
+                        connection,
+                        channel,
+                        security))
+                {
+                    sender.Abort();
+                    completion.TrySetResult(false);
+                    security.Revoke();
+                }
             };
 
-            // Host와의 호환성을 위해 Video Track 추가 (RecvOnly)
-            // Host가 항상 Video Track을 추가하므로, 이를 받아주지 않으면 협상 실패 가능성 있음.
-            var h264Format = new VideoFormat(VideoCodecsEnum.H264, 96, 90000, null);
-            var videoTrack = new MediaStreamTrack(h264Format, MediaStreamStatusEnum.RecvOnly);
-            _pc.addTrack(videoTrack);
-
-            // Offer 생성 및 전송
-            var offer = _pc.createOffer(null);
-            await _pc.setLocalDescription(offer);
-            await _signaling.SendSignalAsync(_targetHostId, new { sdp = offer });
-
-            // 30초 타임아웃
-            var timeoutTask = Task.Delay(30000);
-            var completedTask = await Task.WhenAny(_connectionTcs.Task, timeoutTask);
-            
-            if (completedTask == timeoutTask)
+            connection.onconnectionstatechange += state =>
             {
-                Console.WriteLine($"[FileTransfer] Connection timeout for {_targetHostId}");
+                if (!IsCurrent(
+                        generation,
+                        connection,
+                        channel,
+                        security))
+                {
+                    return;
+                }
+
+                if (state is RTCPeerConnectionState.disconnected or
+                             RTCPeerConnectionState.failed or
+                             RTCPeerConnectionState.closed)
+                {
+                    sender.Abort();
+                    completion.TrySetResult(false);
+                    security.Revoke();
+                    try { channel.close(); } catch { }
+                }
+            };
+            connection.onicecandidate += candidate =>
+            {
+                if (candidate == null ||
+                    !IsCurrent(
+                        generation,
+                        connection,
+                        channel,
+                        security))
+                {
+                    return;
+                }
+
+                _ = _signaling.SendSignalAsync(
+                    _targetHostId,
+                    new
+                    {
+                        ice = new
+                        {
+                            candidate = candidate.candidate,
+                            sdpMid = candidate.sdpMid,
+                            sdpMLineIndex = candidate.sdpMLineIndex,
+                        },
+                        connectionGeneration = generation,
+                    });
+            };
+
+            var h264 = new VideoFormat(
+                VideoCodecsEnum.H264,
+                96,
+                90000,
+                null);
+            connection.addTrack(new MediaStreamTrack(
+                h264,
+                MediaStreamStatusEnum.RecvOnly));
+
+            if (!IsCurrent(
+                    generation,
+                    connection,
+                    channel,
+                    security))
+            {
                 return false;
             }
 
-            return await _connectionTcs.Task;
-        }
-
-        private void OnSignalReceived(string from, object signal)
-        {
-            if (from != _targetHostId) return;
+            var offer = connection.createOffer(null);
+            await connection.setLocalDescription(offer)
+                .ConfigureAwait(false);
+            if (!IsCurrent(
+                    generation,
+                    connection,
+                    channel,
+                    security))
+            {
+                return false;
+            }
+            await _signaling.SendSignalAsync(
+                    _targetHostId,
+                    new
+                    {
+                        sdp = new
+                        {
+                            type = "offer",
+                            sdp = offer.sdp,
+                        },
+                        connectionGeneration = generation,
+                    })
+                .ConfigureAwait(false);
 
             try
             {
-                var json = JObject.FromObject(signal);
-                if (json.ContainsKey("sdp"))
+                bool connected = await completion.Task.WaitAsync(
+                        TimeSpan.FromSeconds(30),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (!connected)
                 {
-                    var sdp = json["sdp"];
-                    var type = sdp["type"]?.ToString();
-                    var sdpStr = sdp["sdp"]?.ToString();
-                    
-                    if (type == "answer")
+                    DisposePeerConnection();
+                }
+                return connected;
+            }
+            catch (TimeoutException)
+            {
+                DisposePeerConnection();
+                return false;
+            }
+        }
+        catch
+        {
+            DisposePeerConnection();
+            throw;
+        }
+        finally
+        {
+            _connectGate.Release();
+        }
+    }
+
+    public async Task SendFileAsync(
+        string filePath,
+        CancellationToken cancellationToken = default)
+    {
+        RemoteFileSender sender;
+        lock (_stateGate)
+        {
+            sender = _fileSender ??
+                throw new InvalidOperationException(
+                    "File channel is not connected.");
+        }
+
+        ReportStatus("파일을 안전하게 전송하는 중입니다.");
+        await sender.SendAsync(filePath, cancellationToken)
+            .ConfigureAwait(false);
+        ReportStatus("파일 전송 및 무결성 검증이 완료되었습니다.");
+    }
+
+    private void ReportStatus(string status)
+    {
+        try
+        {
+            OnStatus?.Invoke(status);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(
+                $"[FileTransfer] Status callback failed: {ex.GetType().Name}");
+        }
+    }
+
+    private Task OnSignalReceivedAsync(string from, object signal)
+    {
+        OnSignalReceived(from, signal);
+        return Task.CompletedTask;
+    }
+
+    private void OnSignalReceived(string from, object signal)
+    {
+        if (!string.Equals(
+                from,
+                _targetHostId,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        RTCPeerConnection? connection;
+        RTCDataChannel? channel;
+        RemoteChannelClientState? security;
+        TaskCompletionSource<bool>? completion;
+        long generation;
+        lock (_stateGate)
+        {
+            connection = _peerConnection;
+            channel = _dataChannel;
+            security = _security;
+            completion = _connectionCompletion;
+            generation = _connectionGeneration;
+        }
+        if (connection == null ||
+            channel == null ||
+            security == null ||
+            completion == null)
+        {
+            return;
+        }
+
+        try
+        {
+            var json = signal as JObject ?? JObject.FromObject(signal);
+            if (json["connectionGeneration"]?.Type !=
+                    JTokenType.Integer ||
+                json.Value<long>("connectionGeneration") != generation)
+            {
+                return;
+            }
+
+            int signalKindCount =
+                (json.ContainsKey("rejected") ? 1 : 0) +
+                (json.ContainsKey("sdp") ? 1 : 0) +
+                (json.ContainsKey("ice") ? 1 : 0);
+            if (signalKindCount != 1)
+            {
+                throw new InvalidDataException(
+                    "A signal must contain exactly one body.");
+            }
+
+            if (json.ContainsKey("rejected"))
+            {
+                if (json["rejected"]?.Type != JTokenType.Boolean ||
+                    json.Value<bool>("rejected") != true)
+                {
+                    throw new InvalidDataException(
+                        "The rejection body is malformed.");
+                }
+
+                security.Revoke();
+                completion.TrySetResult(false);
+                try { channel.close(); } catch { }
+                return;
+            }
+
+            if (json["sdp"] is JObject sdp)
+            {
+                if (sdp["type"]?.Type != JTokenType.String ||
+                    !string.Equals(
+                        sdp.Value<string>("type"),
+                        "answer",
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        "Only an exact SDP answer is accepted.");
+                }
+
+                var answerText = sdp["sdp"]?.Type == JTokenType.String
+                    ? sdp.Value<string>("sdp")
+                    : null;
+                if (string.IsNullOrWhiteSpace(answerText) ||
+                    answerText.Length > 1024 * 1024)
+                {
+                    throw new InvalidDataException(
+                        "The SDP answer is empty or too large.");
+                }
+
+                lock (_stateGate)
+                {
+                    if (!IsCurrentLocked(
+                            generation,
+                            connection,
+                            channel,
+                            security) ||
+                        _answerApplied)
                     {
-                         _pc.setRemoteDescription(new RTCSessionDescriptionInit 
-                         { 
-                             type = RTCSdpType.answer, 
-                             sdp = sdpStr 
-                         });
-                         
-                         _remoteDescriptionSet = true;
-                         foreach (var c in _iceQueue) _pc.addIceCandidate(c);
-                         _iceQueue.Clear();
+                        throw new InvalidDataException(
+                            "Only one SDP answer is accepted per connection.");
                     }
+                    _answerApplied = true;
                 }
-                else if (json.ContainsKey("ice"))
+
+                ApplyControlToken(json, security);
+                if (connection.setRemoteDescription(
+                        new RTCSessionDescriptionInit
+                        {
+                            type = RTCSdpType.answer,
+                            sdp = answerText,
+                        }) != SetDescriptionResultEnum.OK)
                 {
-                    var ice = json["ice"];
-                    var candidate = new RTCIceCandidateInit
+                    throw new InvalidDataException(
+                        "The remote SDP answer was rejected.");
+                }
+
+                List<RTCIceCandidateInit> queued;
+                lock (_stateGate)
+                {
+                    if (!IsCurrentLocked(
+                            generation,
+                            connection,
+                            channel,
+                            security))
                     {
-                        candidate = ice["candidate"]?.ToString(),
-                        sdpMid = ice["sdpMid"]?.ToString(),
-                        sdpMLineIndex = (ushort?)ice["sdpMLineIndex"] ?? 0
-                    };
-                    
-                    if (_remoteDescriptionSet) _pc.addIceCandidate(candidate);
-                    else _iceQueue.Add(candidate);
+                        return;
+                    }
+                    _remoteDescriptionSet = true;
+                    queued = [.. _iceQueue];
+                    _iceQueue.Clear();
+                }
+                foreach (var queuedCandidate in queued)
+                {
+                    if (!IsCurrent(
+                            generation,
+                            connection,
+                            channel,
+                            security))
+                    {
+                        return;
+                    }
+                    connection.addIceCandidate(queuedCandidate);
+                }
+                TrySendAuthenticationHello(
+                    generation,
+                    connection,
+                    channel,
+                    security);
+                return;
+            }
+
+            if (json["ice"] is not JObject ice)
+            {
+                throw new InvalidDataException(
+                    "The signal body is malformed.");
+            }
+
+            var candidateText =
+                ice["candidate"]?.Type == JTokenType.String
+                    ? ice.Value<string>("candidate")
+                    : null;
+            var sdpMid = ice["sdpMid"]?.Type == JTokenType.String
+                ? ice.Value<string>("sdpMid")
+                : null;
+            var lineIndex =
+                ice["sdpMLineIndex"]?.Type == JTokenType.Integer
+                    ? ice.Value<int>("sdpMLineIndex")
+                    : -1;
+            if (string.IsNullOrWhiteSpace(candidateText) ||
+                candidateText.Length > 8192 ||
+                (sdpMid?.Length ?? 0) > 64 ||
+                lineIndex is < 0 or > ushort.MaxValue)
+            {
+                throw new InvalidDataException(
+                    "The ICE candidate is out of range.");
+            }
+
+            var candidate = new RTCIceCandidateInit
+            {
+                candidate = candidateText,
+                sdpMid = sdpMid,
+                sdpMLineIndex = checked((ushort)lineIndex),
+            };
+            bool addImmediately;
+            lock (_stateGate)
+            {
+                if (!IsCurrentLocked(
+                        generation,
+                        connection,
+                        channel,
+                        security))
+                {
+                    return;
+                }
+
+                addImmediately = _remoteDescriptionSet;
+                if (!addImmediately)
+                {
+                    if (_iceQueue.Count >= 64)
+                    {
+                        throw new InvalidDataException(
+                            "Too many queued ICE candidates.");
+                    }
+                    _iceQueue.Add(candidate);
                 }
             }
-            catch (Exception ex)
+            if (addImmediately &&
+                IsCurrent(
+                    generation,
+                    connection,
+                    channel,
+                    security))
             {
-                Console.WriteLine($"[FileTransfer] Signal processing error: {ex.Message}");
+                connection.addIceCandidate(candidate);
             }
         }
-
-        public async Task SendFileAsync(string filePath)
+        catch (Exception ex)
         {
-            if (_dc == null || _dc.readyState != RTCDataChannelState.open)
-                throw new InvalidOperationException("Connection not ready");
-
-            var fileInfo = new FileInfo(filePath);
-            if (!fileInfo.Exists) throw new FileNotFoundException("File not found", filePath);
-
-            string fileName = fileInfo.Name;
-            long fileSize = fileInfo.Length;
-            
-            OnStatus?.Invoke($"Sending {fileName}...");
-
-            // 1. START
-            byte[] nameBytes = System.Text.Encoding.UTF8.GetBytes(fileName);
-            
-            // 해시 계산 (SHA256)
-            using var sha256 = System.Security.Cryptography.SHA256.Create();
-            using var fsHash = fileInfo.OpenRead();
-            byte[] hashBytes = sha256.ComputeHash(fsHash);
-            fsHash.Close();
-
-            // 메시지 구조: [Type:1][Size:8][NameLen:4][Name:N][Hash:32] (구조 변경)
-            // 하위 호환성 유지를 위해 기존 구조 뒤에 Hash를 붙이는 것이 안전하지만, 
-            // Host측 파싱 로직도 수정하므로 구조를 명확히 함.
-            // 여기서는 간단히 기존 구조 뒤에 Hash를 붙임.
-            // 기존: [Type:1][Size:4][Name...] <- Size가 4바이트(uint)로 되어있음. 4GB 이상 불가. (수정 필요하지만 일단 유지)
-            
-            byte[] startMsg = new byte[1 + 4 + nameBytes.Length + 32];
-            startMsg[0] = MSG_FILE_START;
-            BitConverter.GetBytes((uint)fileSize).CopyTo(startMsg, 1); // 4GB Limit warning
-            Array.Copy(nameBytes, 0, startMsg, 5, nameBytes.Length);
-            Array.Copy(hashBytes, 0, startMsg, 5 + nameBytes.Length, 32); // 이름 뒤에 해시 부착
-
-            // 이름 길이를 명시하지 않고 있어서 Host가 파싱할 때 애매했음. 
-            // 기존 Host는 (전체 - 5)를 이름으로 간주.
-            // Host 수정 시: (전체 - 5 - 32)를 이름으로 간주하도록 변경해야 함.
-
-            _dc.send(startMsg);
-
-            // 2. CHUNK
-            const int chunkSize = 16 * 1024; // 16KB
-            byte[] buffer = new byte[chunkSize];
-            long sent = 0;
-            
-            using var fs = fileInfo.OpenRead();
-            int bytesRead;
-            while ((bytesRead = await fs.ReadAsync(buffer, 0, chunkSize)) > 0)
-            {
-                byte[] chunkMsg = new byte[1 + bytesRead];
-                chunkMsg[0] = MSG_FILE_CHUNK;
-                Array.Copy(buffer, 0, chunkMsg, 1, bytesRead);
-                _dc.send(chunkMsg);
-
-                sent += bytesRead;
-                int pct = (int)(sent * 100 / fileSize);
-                OnProgress?.Invoke(pct);
-                
-                // Flow control / Buffer clear wait
-                // SIPSorcery DataChannel doesn't expose bufferedAmount properly in older versions, 
-                // but checking source might help. For now, simple delay.
-                await Task.Delay(10); 
-            }
-
-            // 3. END
-            _dc.send(new byte[] { MSG_FILE_END });
-            OnStatus?.Invoke($"{fileName} 전송 완료, 검증 대기 중...");
-
-            // 4. ACK Wait (Host가 저장을 완료할 때까지 대기)
-            // 최대 30초 대기 (대용량 파일 저장 시간 고려)
-            var ackTask = _ackTcs.Task;
-            var timeoutTask = Task.Delay(30000);
-            
-            var completed = await Task.WhenAny(ackTask, timeoutTask);
-            if (completed == timeoutTask)
-            {
-                 Console.WriteLine($"[FileTransfer] ACK timeout for {fileName}");
-                 OnStatus?.Invoke($"응답 시간 초과 (ACK Timeout)");
-            }
-            else
-            {
-                 bool success = await ackTask; // Result check
-                 if (success)
-                 {
-                     Console.WriteLine($"[FileTransfer] ACK received for {fileName}");
-                     OnStatus?.Invoke($"전송 완료 (무결성 확인됨)");
-                 }
-                 else
-                 {
-                     Console.WriteLine($"[FileTransfer] Hash Mismatch reported by Host");
-                     OnStatus?.Invoke($"전송 실패: 파일 무결성 검증 오류");
-                 }
-            }
+            Console.WriteLine(
+                $"[FileTransfer] Signaling failed: {ex.GetType().Name}");
+            security.Revoke();
+            completion.TrySetResult(false);
+            try { channel.close(); } catch { }
         }
+    }
 
-        private TaskCompletionSource<bool> _ackTcs = new();
-
-        public void Dispose()
+    private static void ApplyControlToken(
+        JObject signal,
+        RemoteChannelClientState security)
+    {
+        if (signal["control"] is not JObject control ||
+            control["version"]?.Type != JTokenType.Integer ||
+            control.Value<int>("version") !=
+                RemoteControlProtocol.Version ||
+            control["token"]?.Type != JTokenType.String)
         {
-            _signaling.OnSignalReceived -= OnSignalReceived;
-            _dc?.close();
-            _pc?.Close("disposed");
-            _pc?.Dispose();
+            throw new InvalidDataException(
+                "The host did not provide a supported control handshake.");
         }
+
+        byte[] token;
+        try
+        {
+            token = Convert.FromBase64String(
+                control.Value<string>("token") ?? "");
+        }
+        catch (FormatException ex)
+        {
+            throw new InvalidDataException(
+                "The host control token is malformed.",
+                ex);
+        }
+        if (token.Length != RemoteControlProtocol.TokenSize)
+        {
+            CryptographicOperations.ZeroMemory(token);
+            throw new InvalidDataException(
+                "The host control token has the wrong size.");
+        }
+
+        try
+        {
+            security.SetToken(token);
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(token);
+        }
+    }
+    private void TrySendAuthenticationHello(
+        long generation,
+        RTCPeerConnection connection,
+        RTCDataChannel channel,
+        RemoteChannelClientState security)
+    {
+        if (!IsCurrent(
+                generation,
+                connection,
+                channel,
+                security) ||
+            channel.readyState != RTCDataChannelState.open)
+        {
+            return;
+        }
+
+        try
+        {
+            var hello = security.TryCreateHello();
+            if (hello != null)
+            {
+                channel.send(hello);
+            }
+        }
+        catch
+        {
+            security.Revoke();
+            try { channel.close(); } catch { }
+        }
+    }
+
+    private void HandleSecuredMessage(
+        long generation,
+        RTCPeerConnection connection,
+        RTCDataChannel channel,
+        RemoteChannelClientState security,
+        RemoteFileSender sender,
+        TaskCompletionSource<bool> completion,
+        byte[] data)
+    {
+        if (!IsCurrent(
+                generation,
+                connection,
+                channel,
+                security))
+        {
+            return;
+        }
+
+        var result = security.ProcessServerMessage(
+            data,
+            out var payload,
+            out _);
+        switch (result)
+        {
+            case RemoteChannelReceiveResult.Authenticated:
+                completion.TrySetResult(true);
+                return;
+            case RemoteChannelReceiveResult.Payload:
+                if (!sender.TryProcessResponse(payload))
+                {
+                    sender.Abort(new InvalidDataException(
+                        "The host sent an invalid file response."));
+                    channel.close();
+                }
+                return;
+            case RemoteChannelReceiveResult.Rejected:
+            case RemoteChannelReceiveResult.ProtocolViolation:
+                sender.Abort(new InvalidDataException(
+                    "The secure file channel was rejected."));
+                completion.TrySetResult(false);
+                channel.close();
+                return;
+        }
+    }
+
+    private bool SendSecure(
+        long generation,
+        RTCPeerConnection connection,
+        RTCDataChannel channel,
+        RemoteChannelClientState security,
+        ReadOnlySpan<byte> payload)
+    {
+        lock (_stateGate)
+        {
+            if (!IsCurrentLocked(
+                    generation,
+                    connection,
+                    channel,
+                    security) ||
+                channel.readyState != RTCDataChannelState.open ||
+                !security.IsAuthenticated)
+            {
+                return false;
+            }
+
+            channel.send(security.WrapPayload(payload));
+            return true;
+        }
+    }
+
+    private bool IsCurrent(
+        long generation,
+        RTCPeerConnection connection,
+        RTCDataChannel channel,
+        RemoteChannelClientState security)
+    {
+        lock (_stateGate)
+        {
+            return IsCurrentLocked(
+                generation,
+                connection,
+                channel,
+                security);
+        }
+    }
+
+    private bool IsCurrentLocked(
+        long generation,
+        RTCPeerConnection connection,
+        RTCDataChannel channel,
+        RemoteChannelClientState security) =>
+        !_disposed &&
+        generation == _connectionGeneration &&
+        ReferenceEquals(connection, _peerConnection) &&
+        ReferenceEquals(channel, _dataChannel) &&
+        ReferenceEquals(security, _security);
+
+    private void DisposePeerConnection()
+    {
+        RTCPeerConnection? connection;
+        RTCDataChannel? channel;
+        RemoteChannelClientState? security;
+        RemoteFileSender? sender;
+        TaskCompletionSource<bool>? completion;
+        lock (_stateGate)
+        {
+            connection = _peerConnection;
+            channel = _dataChannel;
+            security = _security;
+            sender = _fileSender;
+            completion = _connectionCompletion;
+            _connectionGeneration = 0;
+            _peerConnection = null;
+            _dataChannel = null;
+            _security = null;
+            _fileSender = null;
+            _connectionCompletion = null;
+            _remoteDescriptionSet = false;
+            _answerApplied = false;
+            _iceQueue.Clear();
+        }
+
+        sender?.Dispose();
+        security?.Dispose();
+        completion?.TrySetResult(false);
+        try { channel?.close(); } catch { }
+        try { connection?.Close("disposed"); } catch { }
+        connection?.Dispose();
+    }
+
+    public void Dispose()
+    {
+        lock (_stateGate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+        }
+
+        _signaling.OnSignalReceived -= OnSignalReceivedAsync;
+        DisposePeerConnection();
     }
 }

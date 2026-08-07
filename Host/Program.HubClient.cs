@@ -1,7 +1,8 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text;
 using System.Windows.Forms;
 using SIPSorceryMedia.FFmpeg;
+using Comote.Input;
 
 namespace Host
 {
@@ -12,27 +13,30 @@ namespace Host
             ConfigureConsole(false);
             var forceSetup = args.Any(argument =>
                 argument.Equals("--setup", StringComparison.OrdinalIgnoreCase) ||
-                argument.Equals("--configure", StringComparison.OrdinalIgnoreCase));
-            var resetDeviceId = args.Any(argument =>
+                argument.Equals("--configure", StringComparison.OrdinalIgnoreCase) ||
                 argument.Equals("--reset-device-id", StringComparison.OrdinalIgnoreCase));
-            if (resetDeviceId) DeviceIdentityStore.Reset();
-            var savedPassword = "";
+            if (HasHubArgument(args, "--access-key") ||
+                HasHubArgument(args, "--password") ||
+                HasHubArgument(args, "--client-id"))
+            {
+                MessageBox.Show(
+                    "Manager Hub 키와 기기 ID는 명령줄에서 받을 수 없습니다. " +
+                    "--setup 화면 또는 Windows 보호 저장소를 사용하세요.",
+                    "Comote Client");
+                return;
+            }
+
+            var savedAccessKey = "";
             var savedSettings = forceSetup
                 ? null
-                : HubClientSettingsStore.TryLoad(out savedPassword);
-            var updateManifest =
-                GetHubArgument(args, "--update-manifest") ??
-                Environment.GetEnvironmentVariable(
-                    "COMOTE_UPDATE_MANIFEST_URL") ??
-                savedSettings?.UpdateManifestUrl;
+                : HubClientSettingsStore.TryLoad(out savedAccessKey);
             Console.OutputEncoding = Encoding.UTF8;
 
             var manager = GetHubArgument(args, "--manager") ??
                 savedSettings?.ManagerAddress;
             var portText = GetHubArgument(args, "--port") ??
                 savedSettings?.ManagerPort.ToString() ?? "45820";
-            var password = GetHubArgument(args, "--password") ??
-                savedPassword;
+            var accessKey = savedAccessKey;
             var clientName =
                 GetHubArgument(args, "--name") ??
                 savedSettings?.ClientName ?? Environment.MachineName;
@@ -47,55 +51,70 @@ namespace Host
                 return;
             }
 
-            if (forceSetup || string.IsNullOrWhiteSpace(manager) ||
-                string.IsNullOrWhiteSpace(password))
+            var hasValidInitialKey =
+                ComoteAccessKey.TryParse(accessKey, out var initialKey);
+            try
             {
-                Application.EnableVisualStyles();
-                Application.SetCompatibleTextRenderingDefault(false);
-                using var setup = new HubClientSetupForm(
-                    savedSettings);
-                if (setup.ShowDialog() != DialogResult.OK) return;
-                manager = setup.ManagerAddress;
-                port = setup.ManagerPort;
-                updateManifest = setup.UpdateManifestUrl;
-                password = setup.AccessPassword;
-                clientName = setup.ClientName;
-                adapterIndex = setup.AdapterIndex;
-                outputIndex = setup.OutputIndex;
+                if (forceSetup ||
+                    string.IsNullOrWhiteSpace(manager) ||
+                    !hasValidInitialKey)
+                {
+                    Application.EnableVisualStyles();
+                    Application.SetCompatibleTextRenderingDefault(false);
+                    using var setup = new HubClientSetupForm(savedSettings);
+                    if (setup.ShowDialog() != DialogResult.OK) return;
+                    manager = setup.ManagerAddress;
+                    port = setup.ManagerPort;
+                    accessKey = setup.AccessKey;
+                    clientName = setup.ClientName;
+                    adapterIndex = setup.AdapterIndex;
+                    outputIndex = setup.OutputIndex;
+                }
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(initialKey);
             }
 
-            if (password.Length < 8)
+            if (!ComoteAccessKey.TryParse(accessKey, out var parsedKey))
             {
                 MessageBox.Show(
-                    "Manager 등록 암호는 최소 8자 이상이어야 합니다.");
+                    "Manager 접속 키는 CMT1 형식의 256비트 키여야 합니다.");
                 return;
             }
+            var routingId = ManagerHubProtocol.DeriveRoutingId(parsedKey);
+            CryptographicOperations.ZeroMemory(parsedKey);
+            var allowRemoteTasks = args.Any(argument =>
+                argument.Equals(
+                    "--allow-remote-tasks",
+                    StringComparison.OrdinalIgnoreCase));
+            var allowSystemCommands = args.Any(argument =>
+                argument.Equals(
+                    "--allow-system-commands",
+                    StringComparison.OrdinalIgnoreCase));
 
-            HubClientSettingsStore.Save(
-                new HubClientSettings
-                {
-                    ManagerAddress = manager,
-                    ManagerPort = port,
-                    ClientName = clientName,
-                    AdapterIndex = adapterIndex,
-                    OutputIndex = outputIndex,
-                    UpdateManifestUrl = updateManifest ?? "",
-                },
-                password);
-
-            if (!string.IsNullOrWhiteSpace(updateManifest) &&
-                await ClientAutoUpdater.TryStageUpdateAsync(
-                    updateManifest, args))
+            if (!HubClientSettingsStore.Save(
+                    new HubClientSettings
+                    {
+                        ManagerAddress = manager,
+                        ManagerPort = port,
+                        ClientName = clientName,
+                        AdapterIndex = adapterIndex,
+                        OutputIndex = outputIndex,
+                    },
+                    accessKey))
+            {
+                MessageBox.Show(
+                    "Manager Hub 연결 설정을 Windows 사용자 보호 저장소에 " +
+                    "저장하지 못했습니다.",
+                    "Comote Client");
                 return;
-
-            var clientId =
-                GetHubArgument(args, "--client-id") ??
-                DeviceIdentityStore.GetOrCreate();
+            }
 
             Console.WriteLine("==============================================");
             Console.WriteLine("       COMOTE CLIENT 1.6 PREVIEW");
             Console.WriteLine("==============================================");
-            Console.WriteLine($"Client ID: {clientId}");
+            Console.WriteLine($"Hub device ID: {routingId}");
             Console.WriteLine($"Manager: {manager}:{port}");
             Console.WriteLine("Client 측 포트포워딩: 필요 없음");
 
@@ -105,20 +124,28 @@ namespace Host
                 ffmpegPath);
             using var capture =
                 new ScreenCapture(adapterIndex, outputIndex);
-            using var webRtc = new WebRTCManager(capture);
+            using var webRtc = new WebRTCManager(
+                capture,
+                inputBackend: InputBackendFactory.Create(
+                    args,
+                    capture.Left,
+                    capture.Top,
+                    capture.Width,
+                    capture.Height));
             using var hub = new ManagerHubClient(
                 manager,
                 port,
-                password,
-                clientId,
-                clientName);
+                accessKey,
+                clientName,
+                allowRemoteTasks,
+                allowSystemCommands);
             using var cancellation = new CancellationTokenSource();
             using var tray = ClientTrayIcon.Start(
                 manager,
                 port,
                 clientName,
                 cancellation,
-                reset => RestartForSetup(cancellation, reset));
+                _ => RestartForSetup(cancellation, args));
 
             Console.CancelKeyPress += (_, eventArgs) =>
             {
@@ -135,9 +162,14 @@ namespace Host
             };
             hub.SignalReceived += signal =>
                 webRtc.HandleSignalAsync("hub-manager", signal);
+            var commandExecutor = new RemoteTaskExecutor(
+                new WindowsSystemCommandExecutor(
+                    () => RestartForSetup(cancellation, args, keepSetup: false)),
+                new Comote.Input.RemoteCommandDeduplicator(),
+                Comote.Input.RemoteCommandAuditLog.Open("host"));
             hub.CommandReceived += async command =>
             {
-                var result = await RemoteTaskExecutor.ExecuteAsync(command);
+                var result = await commandExecutor.ExecuteAsync(command);
                 Console.WriteLine($"[Hub Command] {command.Value<string>("action")}: {result.Value<string>("message")}");
             };
             webRtc.OnSignalReady += async (_, signal) =>
@@ -149,29 +181,70 @@ namespace Host
             await hub.RunAsync(cancellation.Token);
         }
 
-        private static void RestartForSetup(
+        private static bool RestartForSetup(
             CancellationTokenSource cancellation,
-            bool resetDeviceId)
+            IReadOnlyList<string> currentArguments,
+            bool keepSetup = true)
         {
             try
             {
-                var arguments = resetDeviceId
-                    ? "--setup --reset-device-id"
-                    : "--setup";
-                System.Diagnostics.Process.Start(
-                    new System.Diagnostics.ProcessStartInfo
+                var backend = InputBackendFactory.ResolveMode(
+                    currentArguments,
+                    Environment.GetEnvironmentVariable(
+                        InputBackendFactory.EnvironmentVariableName));
+                var startInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = Environment.ProcessPath!,
+                    UseShellExecute = true,
+                };
+                startInfo.ArgumentList.Add("--manager-hub");
+                if (keepSetup)
+                {
+                    startInfo.ArgumentList.Add("--setup");
+                }
+                startInfo.ArgumentList.Add(
+                    backend == InputBackendMode.VirtualHid
+                        ? "--virtual-hid"
+                        : "--send-input");
+                if (!keepSetup)
+                {
+                    // A restart-host command must not silently drop the
+                    // permissions the operator launched this Client with.
+                    if (HasHubArgument(
+                            currentArguments,
+                            "--allow-remote-tasks"))
                     {
-                        FileName = Environment.ProcessPath!,
-                        Arguments = arguments,
-                        UseShellExecute = true,
-                    });
+                        startInfo.ArgumentList.Add("--allow-remote-tasks");
+                    }
+                    if (HasHubArgument(
+                            currentArguments,
+                            "--allow-system-commands"))
+                    {
+                        startInfo.ArgumentList.Add("--allow-system-commands");
+                    }
+                }
+                var started = System.Diagnostics.Process.Start(startInfo);
+                if (started is null)
+                {
+                    return false;
+                }
                 cancellation.Cancel();
+                return true;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[Client] Setup restart failed: {ex.Message}");
+                return false;
             }
         }
+
+        private static bool HasHubArgument(
+            IEnumerable<string> args,
+            string name) =>
+            args.Any(argument => argument.Equals(
+                name,
+                StringComparison.OrdinalIgnoreCase));
+
         private static string? GetHubArgument(
             string[] args,
             string name)
@@ -181,7 +254,9 @@ namespace Host
                 if (args[index].Equals(
                     name,
                     StringComparison.OrdinalIgnoreCase))
+                {
                     return args[index + 1];
+                }
             }
             return null;
         }

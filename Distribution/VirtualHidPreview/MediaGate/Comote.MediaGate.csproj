@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>Comote.MediaGate</AssemblyName>
+    <RootNamespace>Comote.MediaGate</RootNamespace>
+    <PublishTrimmed>false</PublishTrimmed>
+    <RuntimeFrameworkVersion>10.0.10</RuntimeFrameworkVersion>
+    <TargetLatestRuntimePatch>false</TargetLatestRuntimePatch>
+    <RollForward>Disable</RollForward>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FFmpeg.AutoGen" Version="8.1.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
+    <PackageReference Include="SIPSorceryMedia.FFmpeg" Version="10.0.12" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\..\ffmpeg\manifest.json"
+                      LogicalName="Comote.MediaGate.ffmpeg.manifest.json" />
+    <EmbeddedResource Include="..\..\..\ffmpeg\avcodec-62.dll"
+                      LogicalName="Comote.MediaGate.Native.avcodec-62.dll" />
+    <EmbeddedResource Include="..\..\..\ffmpeg\avdevice-62.dll"
+                      LogicalName="Comote.MediaGate.Native.avdevice-62.dll" />
+    <EmbeddedResource Include="..\..\..\ffmpeg\avfilter-11.dll"
+                      LogicalName="Comote.MediaGate.Native.avfilter-11.dll" />
+    <EmbeddedResource Include="..\..\..\ffmpeg\avformat-62.dll"
+                      LogicalName="Comote.MediaGate.Native.avformat-62.dll" />
+    <EmbeddedResource Include="..\..\..\ffmpeg\avutil-60.dll"
+                      LogicalName="Comote.MediaGate.Native.avutil-60.dll" />
+    <EmbeddedResource Include="..\..\..\ffmpeg\swresample-6.dll"
+                      LogicalName="Comote.MediaGate.Native.swresample-6.dll" />
+    <EmbeddedResource Include="..\..\..\ffmpeg\swscale-9.dll"
+                      LogicalName="Comote.MediaGate.Native.swscale-9.dll" />
+  </ItemGroup>
+</Project>

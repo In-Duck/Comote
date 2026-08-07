@@ -3,29 +3,18 @@ using System.Runtime.InteropServices;
 namespace Host
 {
     /// <summary>
-    /// Implements the current Comote input protocol with the Windows SendInput API.
+    /// Implements the Comote input protocol with the Windows SendInput API.
     /// This backend must run in the interactive user's Windows session.
     /// </summary>
     public sealed class SendInputBackend : IInputBackend
     {
-        public const byte MsgMouseMove = 0x01;
-        public const byte MsgMouseDown = 0x02;
-        public const byte MsgMouseUp = 0x03;
-        public const byte MsgMouseWheel = 0x04;
-        public const byte MsgKeyDown = 0x10;
-        public const byte MsgKeyUp = 0x11;
-        public const byte MsgTextInput = 0x12;
-
-        public const byte ButtonLeft = 0;
-        public const byte ButtonRight = 1;
-        public const byte ButtonMiddle = 2;
-
         private const ushort VkHangul = 0x15;
         private const ushort VkHanja = 0x19;
+        private const uint LlkhfExtended = 0x01;
 
         private readonly object _sync = new();
-        private readonly HashSet<ushort> _pressedKeys = new();
-        private readonly HashSet<byte> _pressedMouseButtons = new();
+        private readonly Dictionary<ushort, PressedKey> _pressedKeys = [];
+        private readonly HashSet<byte> _pressedMouseButtons = [];
         private int _screenWidth;
         private int _screenLeft;
         private int _screenTop;
@@ -34,7 +23,7 @@ namespace Host
 
         public SendInputBackend(int screenWidth, int screenHeight)
         {
-            UpdateScreenSize(screenWidth, screenHeight);
+            UpdateScreenBounds(0, 0, screenWidth, screenHeight);
         }
 
         public InputBackendMode Mode => InputBackendMode.SendInput;
@@ -51,13 +40,9 @@ namespace Host
                     !_disposed,
                     _disposed
                         ? "Disposed"
-                        : $"Screen={_screenLeft},{_screenTop} {_screenWidth}x{_screenHeight}");
+                        : $"Screen={_screenLeft},{_screenTop} " +
+                            $"{_screenWidth}x{_screenHeight}");
             }
-        }
-
-        public void UpdateScreenSize(int width, int height)
-        {
-            UpdateScreenBounds(0, 0, width, height);
         }
 
         public void UpdateScreenBounds(
@@ -66,80 +51,90 @@ namespace Host
             int width,
             int height)
         {
-            if (width <= 0) throw new ArgumentOutOfRangeException(nameof(width));
-            if (height <= 0) throw new ArgumentOutOfRangeException(nameof(height));
+            if (width <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(width));
+            }
+            if (height <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(height));
+            }
 
             lock (_sync)
             {
-                ThrowIfDisposed();
+                ObjectDisposedException.ThrowIf(_disposed, this);
                 _screenLeft = left;
                 _screenTop = top;
                 _screenWidth = width;
                 _screenHeight = height;
             }
 
-            Console.WriteLine($"[Input] Backend screen bounds updated: {left},{top} {width}x{height}");
+            Console.WriteLine(
+                $"[Input] Backend screen bounds updated: " +
+                $"{left},{top} {width}x{height}");
         }
 
-        public void ProcessMessage(byte[] data)
+        public InputDispatchResult ProcessMessage(ReadOnlySpan<byte> data)
         {
-            ArgumentNullException.ThrowIfNull(data);
-            if (data.Length == 0) return;
+            var parsed = HostInputProtocol.Parse(data, out var message);
+            if (!parsed.IsAccepted)
+            {
+                return parsed;
+            }
 
             lock (_sync)
             {
-                ThrowIfDisposed();
+                if (_disposed)
+                {
+                    return InputDispatchResult.Unavailable(
+                        "The SendInput backend is disposed.");
+                }
 
                 try
                 {
-                    switch (data[0])
+                    var succeeded = message.Kind switch
                     {
-                        case MsgReleaseAll:
-                            ReleaseAllInputs();
-                            break;
-
-                        case MsgMouseMove when data.Length >= 9:
+                        HostInputMessageKind.MouseMove =>
                             MoveMouse(
-                                BitConverter.ToSingle(data, 1),
-                                BitConverter.ToSingle(data, 5));
-                            break;
-
-                        case MsgMouseDown when data.Length >= 10:
+                                message.NormalizedX,
+                                message.NormalizedY),
+                        HostInputMessageKind.MouseDown =>
                             SetMouseButton(
-                                data[1],
+                                message.Button,
                                 true,
-                                BitConverter.ToSingle(data, 2),
-                                BitConverter.ToSingle(data, 6));
-                            break;
-
-                        case MsgMouseUp when data.Length >= 10:
+                                message.NormalizedX,
+                                message.NormalizedY),
+                        HostInputMessageKind.MouseUp =>
                             SetMouseButton(
-                                data[1],
+                                message.Button,
                                 false,
-                                BitConverter.ToSingle(data, 2),
-                                BitConverter.ToSingle(data, 6));
-                            break;
+                                message.NormalizedX,
+                                message.NormalizedY),
+                        HostInputMessageKind.MouseWheel =>
+                            MouseWheel(message.WheelDelta, horizontal: false),
+                        HostInputMessageKind.MouseHorizontalWheel =>
+                            MouseWheel(message.WheelDelta, horizontal: true),
+                        HostInputMessageKind.KeyDown =>
+                            SetKey(message, true),
+                        HostInputMessageKind.KeyUp =>
+                            SetKey(message, false),
+                        HostInputMessageKind.TextInput =>
+                            SendUnicodeCharacter(message.Character),
+                        HostInputMessageKind.ReleaseAll =>
+                            ReleaseAllCore(),
+                        _ => false,
+                    };
 
-                        case MsgMouseWheel when data.Length >= 5:
-                            MouseWheel(BitConverter.ToInt32(data, 1));
-                            break;
-
-                        case MsgKeyDown when data.Length >= 3:
-                            SetKey(BitConverter.ToUInt16(data, 1), true);
-                            break;
-
-                        case MsgKeyUp when data.Length >= 3:
-                            SetKey(BitConverter.ToUInt16(data, 1), false);
-                            break;
-
-                        case MsgTextInput when data.Length >= 3:
-                            SendUnicodeCharacter(BitConverter.ToUInt16(data, 1));
-                            break;
-                    }
+                    return succeeded
+                        ? InputDispatchResult.Success()
+                        : InputDispatchResult.Rejected(
+                            "Windows did not accept the input operation.");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[Input] ProcessMessage failed: {ex.Message}");
+                    Console.WriteLine(
+                        $"[Input] ProcessMessage failed: {ex.Message}");
+                    return InputDispatchResult.Rejected(ex.Message);
                 }
             }
         }
@@ -148,30 +143,12 @@ namespace Host
         {
             lock (_sync)
             {
-                if (_disposed) return;
-
-                var keys = _pressedKeys.ToArray();
-                var buttons = _pressedMouseButtons.ToArray();
-
-                foreach (var key in keys)
+                if (_disposed)
                 {
-                    SetKey(key, false);
+                    return;
                 }
 
-                foreach (var button in buttons)
-                {
-                    SetMouseButton(button, false, null, null);
-                }
-
-                _pressedKeys.Clear();
-                _pressedMouseButtons.Clear();
-
-                if (keys.Length > 0 || buttons.Length > 0)
-                {
-                    Console.WriteLine(
-                        $"[Input] Released {keys.Length} key(s) and " +
-                        $"{buttons.Length} mouse button(s).");
-                }
+                _ = ReleaseAllCore();
             }
         }
 
@@ -179,36 +156,96 @@ namespace Host
         {
             lock (_sync)
             {
-                if (_disposed) return;
-                ReleaseAllInputs();
+                if (_disposed)
+                {
+                    return;
+                }
+
+                _ = ReleaseAllCore();
                 _disposed = true;
             }
         }
 
-        private void MoveMouse(float ratioX, float ratioY)
+        private bool ReleaseAllCore()
         {
-            if (!float.IsFinite(ratioX) || !float.IsFinite(ratioY)) return;
+            var keys = _pressedKeys.ToArray();
+            var buttons = _pressedMouseButtons.ToArray();
+            var succeeded = true;
 
-            var normalizedX = Math.Clamp(ratioX, 0f, 1f);
-            var normalizedY = Math.Clamp(ratioY, 0f, 1f);
+            foreach (var (virtualKey, pressedKey) in keys)
+            {
+                var message = new HostInputMessage(
+                    HostInputMessageKind.KeyUp,
+                    0,
+                    0,
+                    0,
+                    0,
+                    virtualKey,
+                    pressedKey.ScanCode,
+                    pressedKey.Flags,
+                    0,
+                    pressedKey.HasExtendedData);
+                succeeded &= SetKey(message, false);
+            }
+
+            foreach (var button in buttons)
+            {
+                succeeded &= SetMouseButton(
+                    button,
+                    false,
+                    null,
+                    null);
+            }
+
+            _pressedKeys.Clear();
+            _pressedMouseButtons.Clear();
+
+            if (keys.Length > 0 || buttons.Length > 0)
+            {
+                Console.WriteLine(
+                    $"[Input] Released {keys.Length} key(s) and " +
+                    $"{buttons.Length} mouse button(s).");
+            }
+
+            return succeeded;
+        }
+
+        private bool MoveMouse(float normalizedX, float normalizedY)
+        {
+            if (!float.IsFinite(normalizedX) ||
+                !float.IsFinite(normalizedY) ||
+                normalizedX is < 0 or > 1 ||
+                normalizedY is < 0 or > 1)
+            {
+                return false;
+            }
+
             var virtualLeft = GetSystemMetrics(SmXVirtualScreen);
             var virtualTop = GetSystemMetrics(SmYVirtualScreen);
             var virtualWidth = Math.Max(
-                1, GetSystemMetrics(SmCxVirtualScreen));
+                1,
+                GetSystemMetrics(SmCxVirtualScreen));
             var virtualHeight = Math.Max(
-                1, GetSystemMetrics(SmCyVirtualScreen));
+                1,
+                GetSystemMetrics(SmCyVirtualScreen));
             var pixelX = _screenLeft +
                 normalizedX * Math.Max(1, _screenWidth - 1);
             var pixelY = _screenTop +
                 normalizedY * Math.Max(1, _screenHeight - 1);
-            var absoluteX = (int)Math.Round(
-                (pixelX - virtualLeft) * 65535d /
-                Math.Max(1, virtualWidth - 1));
-            var absoluteY = (int)Math.Round(
-                (pixelY - virtualTop) * 65535d /
-                Math.Max(1, virtualHeight - 1));
+            var absoluteX = Math.Clamp(
+                (int)Math.Round(
+                    (pixelX - virtualLeft) * 65535d /
+                    Math.Max(1, virtualWidth - 1)),
+                0,
+                65535);
+            var absoluteY = Math.Clamp(
+                (int)Math.Round(
+                    (pixelY - virtualTop) * 65535d /
+                    Math.Max(1, virtualHeight - 1)),
+                0,
+                65535);
 
-            Send(
+            return Send(
                 new INPUT
                 {
                     type = InputMouse,
@@ -218,7 +255,8 @@ namespace Host
                         {
                             dx = absoluteX,
                             dy = absoluteY,
-                            dwFlags = MouseEventMove | MouseEventAbsolute |
+                            dwFlags = MouseEventMove |
+                                MouseEventAbsolute |
                                 MouseEventVirtualDesk,
                         },
                     },
@@ -226,26 +264,37 @@ namespace Host
                 "mouse move");
         }
 
-        private void SetMouseButton(
+        private bool SetMouseButton(
             byte button,
             bool isDown,
-            float? ratioX,
-            float? ratioY)
+            float? normalizedX,
+            float? normalizedY)
         {
-            if (ratioX.HasValue && ratioY.HasValue)
+            if (normalizedX.HasValue && normalizedY.HasValue &&
+                !MoveMouse(normalizedX.Value, normalizedY.Value))
             {
-                MoveMouse(ratioX.Value, ratioY.Value);
+                return false;
             }
 
-            var flags = button switch
+            var (flags, mouseData) = button switch
             {
-                ButtonLeft => isDown ? MouseEventLeftDown : MouseEventLeftUp,
-                ButtonRight => isDown ? MouseEventRightDown : MouseEventRightUp,
-                ButtonMiddle => isDown ? MouseEventMiddleDown : MouseEventMiddleUp,
-                _ => 0u,
+                HostInputProtocol.LeftButton =>
+                    (isDown ? MouseEventLeftDown : MouseEventLeftUp, 0u),
+                HostInputProtocol.RightButton =>
+                    (isDown ? MouseEventRightDown : MouseEventRightUp, 0u),
+                HostInputProtocol.MiddleButton =>
+                    (isDown ? MouseEventMiddleDown : MouseEventMiddleUp, 0u),
+                HostInputProtocol.XButton1 =>
+                    (isDown ? MouseEventXDown : MouseEventXUp, XButton1Data),
+                HostInputProtocol.XButton2 =>
+                    (isDown ? MouseEventXDown : MouseEventXUp, XButton2Data),
+                _ => (0u, 0u),
             };
 
-            if (flags == 0) return;
+            if (flags == 0)
+            {
+                return false;
+            }
 
             if (!Send(
                     new INPUT
@@ -253,12 +302,17 @@ namespace Host
                         type = InputMouse,
                         u = new InputUnion
                         {
-                            mi = new MOUSEINPUT { dwFlags = flags },
+                            mi = new MOUSEINPUT
+                            {
+                                mouseData = mouseData,
+                                dwFlags = flags,
+                            },
                         },
                     },
-                    $"mouse button {button} {(isDown ? "down" : "up")}"))
+                    $"mouse button {button} " +
+                    (isDown ? "down" : "up")))
             {
-                return;
+                return false;
             }
 
             if (isDown)
@@ -269,11 +323,13 @@ namespace Host
             {
                 _pressedMouseButtons.Remove(button);
             }
+
+            return true;
         }
 
-        private void MouseWheel(int delta)
+        private static bool MouseWheel(int delta, bool horizontal)
         {
-            Send(
+            return Send(
                 new INPUT
                 {
                     type = InputMouse,
@@ -282,34 +338,48 @@ namespace Host
                         mi = new MOUSEINPUT
                         {
                             mouseData = unchecked((uint)delta),
-                            dwFlags = MouseEventWheel,
+                            dwFlags = horizontal
+                                ? MouseEventHorizontalWheel
+                                : MouseEventWheel,
                         },
                     },
                 },
                 "mouse wheel");
         }
 
-        private void SetKey(ushort virtualKeyCode, bool isDown)
+        private bool SetKey(HostInputMessage message, bool isDown)
         {
+            var virtualKeyCode = message.VirtualKey;
             if (virtualKeyCode == VkHangul)
             {
-                if (isDown) ToggleImeMode();
-                return;
+                return !isDown || ToggleImeMode();
             }
 
             if (virtualKeyCode == VkHanja)
             {
-                if (PostHanjaKey(virtualKeyCode, isDown))
+                var posted = PostHanjaKey(virtualKeyCode, isDown);
+                if (posted)
                 {
-                    TrackKey(virtualKeyCode, isDown);
+                    TrackKey(message, isDown);
                 }
-
-                return;
+                return posted;
             }
 
-            var scanCode = (ushort)MapVirtualKey(
-                virtualKeyCode,
-                MapVkVirtualKeyToScanCode);
+            var scanCode = message.HasExtendedKeyData
+                ? message.ScanCode
+                : (ushort)MapVirtualKey(
+                    virtualKeyCode,
+                    MapVkVirtualKeyToScanCode);
+            var useScanCode = message.HasExtendedKeyData && scanCode != 0;
+            var flags = isDown ? 0u : KeyEventKeyUp;
+            if (useScanCode)
+            {
+                flags |= KeyEventScanCode;
+                if ((message.KeyFlags & LlkhfExtended) != 0)
+                {
+                    flags |= KeyEventExtendedKey;
+                }
+            }
 
             var succeeded = Send(
                 new INPUT
@@ -319,36 +389,46 @@ namespace Host
                     {
                         ki = new KEYBDINPUT
                         {
-                            wVk = virtualKeyCode,
+                            wVk = useScanCode ? (ushort)0 : virtualKeyCode,
                             wScan = scanCode,
-                            dwFlags = isDown ? 0u : KeyEventKeyUp,
+                            dwFlags = flags,
                         },
                     },
                 },
-                $"key 0x{virtualKeyCode:X2} {(isDown ? "down" : "up")}");
+                $"key 0x{virtualKeyCode:X2} " +
+                (isDown ? "down" : "up"));
 
             if (succeeded)
             {
-                TrackKey(virtualKeyCode, isDown);
+                TrackKey(message, isDown);
             }
+            return succeeded;
         }
 
-        private void TrackKey(ushort virtualKeyCode, bool isDown)
+        private void TrackKey(HostInputMessage message, bool isDown)
         {
             if (isDown)
             {
-                _pressedKeys.Add(virtualKeyCode);
+                _pressedKeys[message.VirtualKey] = new PressedKey(
+                    message.ScanCode,
+                    message.KeyFlags,
+                    message.HasExtendedKeyData);
             }
             else
             {
-                _pressedKeys.Remove(virtualKeyCode);
+                _pressedKeys.Remove(message.VirtualKey);
             }
         }
 
-        private static bool PostHanjaKey(ushort virtualKeyCode, bool isDown)
+        private static bool PostHanjaKey(
+            ushort virtualKeyCode,
+            bool isDown)
         {
             var window = GetForegroundWindow();
-            if (window == IntPtr.Zero) return false;
+            if (window == IntPtr.Zero)
+            {
+                return false;
+            }
 
             var scanCode = MapVirtualKey(
                 virtualKeyCode,
@@ -365,13 +445,19 @@ namespace Host
                 lParam);
         }
 
-        private static void ToggleImeMode()
+        private static bool ToggleImeMode()
         {
             var window = GetForegroundWindow();
-            if (window == IntPtr.Zero) return;
+            if (window == IntPtr.Zero)
+            {
+                return false;
+            }
 
             var imeWindow = ImmGetDefaultIMEWnd(window);
-            if (imeWindow == IntPtr.Zero) return;
+            if (imeWindow == IntPtr.Zero)
+            {
+                return false;
+            }
 
             var currentMode = SendMessage(
                 imeWindow,
@@ -380,14 +466,15 @@ namespace Host
                 IntPtr.Zero);
             var newMode = (uint)(int)currentMode ^ ImeModeNative;
 
-            SendMessage(
+            _ = SendMessage(
                 imeWindow,
                 WindowMessageImeControl,
                 (IntPtr)ImeSetConversionMode,
                 (IntPtr)newMode);
+            return true;
         }
 
-        private static void SendUnicodeCharacter(ushort character)
+        private static bool SendUnicodeCharacter(ushort character)
         {
             var inputs = new[]
             {
@@ -417,13 +504,14 @@ namespace Host
                 },
             };
 
-            SendInputs((uint)inputs.Length, inputs, "unicode character");
+            return SendInputs(
+                checked((uint)inputs.Length),
+                inputs,
+                "unicode character");
         }
 
-        private static bool Send(INPUT input, string operation)
-        {
-            return SendInputs(1, new[] { input }, operation);
-        }
+        private static bool Send(INPUT input, string operation) =>
+            SendInputs(1, [input], operation);
 
         private static bool SendInputs(
             uint count,
@@ -431,7 +519,10 @@ namespace Host
             string operation)
         {
             var sent = SendInput(count, inputs, Marshal.SizeOf<INPUT>());
-            if (sent == count) return true;
+            if (sent == count)
+            {
+                return true;
+            }
 
             var error = Marshal.GetLastWin32Error();
             Console.WriteLine(
@@ -440,10 +531,10 @@ namespace Host
             return false;
         }
 
-        private void ThrowIfDisposed()
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-        }
+        private readonly record struct PressedKey(
+            ushort ScanCode,
+            uint Flags,
+            bool HasExtendedData);
 
         private const uint InputMouse = 0;
         private const uint InputKeyboard = 1;
@@ -455,19 +546,24 @@ namespace Host
         private const uint MouseEventRightUp = 0x0010;
         private const uint MouseEventMiddleDown = 0x0020;
         private const uint MouseEventMiddleUp = 0x0040;
+        private const uint MouseEventXDown = 0x0080;
+        private const uint MouseEventXUp = 0x0100;
         private const uint MouseEventWheel = 0x0800;
-        private const uint MouseEventAbsolute = 0x8000;
+        private const uint MouseEventHorizontalWheel = 0x1000;
         private const uint MouseEventVirtualDesk = 0x4000;
+        private const uint MouseEventAbsolute = 0x8000;
+        private const uint XButton1Data = 1;
+        private const uint XButton2Data = 2;
+
+        private const uint KeyEventExtendedKey = 0x0001;
+        private const uint KeyEventKeyUp = 0x0002;
+        private const uint KeyEventUnicode = 0x0004;
+        private const uint KeyEventScanCode = 0x0008;
+
         private const int SmXVirtualScreen = 76;
         private const int SmYVirtualScreen = 77;
         private const int SmCxVirtualScreen = 78;
         private const int SmCyVirtualScreen = 79;
-        private const byte MsgReleaseAll = 0x13;
-
-
-        private const uint KeyEventKeyUp = 0x0002;
-        private const uint KeyEventUnicode = 0x0004;
-
         private const uint MapVkVirtualKeyToScanCode = 0;
         private const uint WindowMessageKeyDown = 0x0100;
         private const uint WindowMessageKeyUp = 0x0101;
