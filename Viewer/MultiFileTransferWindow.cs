@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -25,7 +26,7 @@ namespace Viewer
         private DataGrid _progressGrid;
         private Button _startBtn;
         private Button _stopBtn;
-        private TextBlock _statusText;
+        private CancellationTokenSource? _transferCancellation;
 
         public MultiFileTransferWindow(List<HostInfo> targets)
         {
@@ -124,9 +125,14 @@ namespace Viewer
             // === 3. 대상 폴더 ===
             var folderPanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             folderPanel.Children.Add(new TextBlock { Text = "💠 전송대상 폴더 : ", FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center });
-            _targetFolderCombo = new ComboBox { Width = 300, IsEditable = true, Margin = new Thickness(5,0,0,0) };
-            _targetFolderCombo.Items.Add("바탕화면");
-            _targetFolderCombo.Items.Add("내 문서");
+            _targetFolderCombo = new ComboBox
+            {
+                Width = 300,
+                IsEditable = false,
+                IsEnabled = false,
+                Margin = new Thickness(5,0,0,0),
+            };
+            _targetFolderCombo.Items.Add("바탕화면 (고정)");
             _targetFolderCombo.SelectedIndex = 0;
             folderPanel.Children.Add(_targetFolderCombo);
             
@@ -163,7 +169,7 @@ namespace Viewer
             _startBtn = new Button { Content = "전송시작", Width = 80, Margin = new Thickness(5), Background = new SolidColorBrush(Color.FromRgb(255, 215, 0)), Foreground = Brushes.Black, FontWeight = FontWeights.Bold, BorderThickness = new Thickness(0) };
             _startBtn.Click += OnStartTransfer;
             _stopBtn = new Button { Content = "전송중단", Width = 80, Margin = new Thickness(5), IsEnabled = false };
-            _stopBtn.Click += (s,e) => { /* Cancel Logic */ }; // TODO
+            _stopBtn.Click += (_, _) => _transferCancellation?.Cancel();
             var closeBtn = new Button { Content = "닫기", Width = 80, Margin = new Thickness(5) };
             closeBtn.Click += (s,e) => Close();
 
@@ -247,136 +253,216 @@ namespace Viewer
 
         private async void OnStartTransfer(object sender, RoutedEventArgs e)
         {
-            if (_selectedFiles.Count == 0 || _targetHosts.Count == 0) return;
+            if (_selectedFiles.Count == 0 || _targetHosts.Count == 0)
+            {
+                return;
+            }
 
+            _transferCancellation?.Dispose();
+            var cancellation = new CancellationTokenSource();
+            _transferCancellation = cancellation;
             _startBtn.IsEnabled = false;
             _stopBtn.IsEnabled = true;
 
-            // Tasks 초기화
             _transferTasks.Clear();
             foreach (var host in _targetHosts)
             {
                 foreach (var file in _selectedFiles)
                 {
-                    _transferTasks.Add(new FileTransferTask 
-                    { 
+                    _transferTasks.Add(new FileTransferTask
+                    {
                         HostId = host.Id,
                         HostName = host.Name,
                         FilePath = file,
                         FileName = Path.GetFileName(file),
-                        Status = "대기"
+                        Status = "대기",
                     });
                 }
             }
             _progressGrid.ItemsSource = _transferTasks;
-            _progressGrid.Items.Refresh(); // Force update
+            _progressGrid.Items.Refresh();
 
-            // 실행
-            // TODO: Parallel or Sequential? Image suggests concurrent.
-            // We need a helper to connect and send.
-            
-            var signaling = (Application.Current.MainWindow as MainWindow)?.Signaling;
-            if (signaling == null) return;
-
-            // Process per host to reuse connection? Or per file?
-            // Better to open connection to Host, send all files, close.
-            
-            var tasksByHost = _transferTasks.GroupBy(t => t.HostId);
-            
-            var processingTasks = new List<Task>();
-
-            foreach (var group in tasksByHost)
-            {
-                var hostId = group.Key;
-                var filesToSend = group.ToList();
-                
-                processingTasks.Add(Task.Run(async () => 
-                {
-                    await ProcessHostTransfer(hostId, filesToSend, signaling);
-                }));
-            }
-
-            await Task.WhenAll(processingTasks);
-            
-            _stopBtn.IsEnabled = false;
-            _startBtn.IsEnabled = true;
-            MessageBox.Show("전송이 완료되었습니다.");
-        }
-
-        private async Task ProcessHostTransfer(string hostId, List<FileTransferTask> tasks, SignalingClient signaling)
-        {
+            var signaling =
+                (Application.Current.MainWindow as MainWindow)?.Signaling;
             if (signaling == null)
             {
-                 foreach(var t in tasks) t.Status = "오류: Signaling 없음";
-                 return;
+                MessageBox.Show("시그널링 연결을 사용할 수 없습니다.");
+                _stopBtn.IsEnabled = false;
+                _startBtn.IsEnabled = true;
+                cancellation.Dispose();
+                _transferCancellation = null;
+                return;
             }
 
-            // [재사용 로직] 현재 연결된 Host인지 확인
-            var mw = Application.Current.Dispatcher.Invoke(() => Application.Current.MainWindow as MainWindow);
-            bool isConnectedHost = (mw?.ConnectedHostId == hostId && mw?.Receiver != null);
+            var processingTasks = _transferTasks
+                .GroupBy(task => task.HostId)
+                .Select(group => ProcessHostTransfer(
+                    group.Key,
+                    group.ToList(),
+                    signaling,
+                    cancellation.Token))
+                .ToArray();
+
+            try
+            {
+                await Task.WhenAll(processingTasks);
+                if (IsVisible)
+                {
+                    MessageBox.Show("전송이 완료되었습니다.");
+                }
+            }
+            catch (OperationCanceledException)
+                when (cancellation.IsCancellationRequested)
+            {
+                foreach (var task in _transferTasks.Where(
+                             task => task.Status != "완료"))
+                {
+                    task.Status = "취소됨";
+                }
+                if (IsVisible)
+                {
+                    MessageBox.Show("파일 전송을 취소했습니다.");
+                }
+            }
+            catch (Exception ex)
+            {
+                foreach (var task in _transferTasks.Where(
+                             task => task.Status is "대기" or "연결 중..."))
+                {
+                    task.Status = "실패";
+                }
+                Console.WriteLine(
+                    $"[MultiFile] Transfer batch failed: {ex.GetType().Name}");
+                if (IsVisible)
+                {
+                    MessageBox.Show(
+                        "일부 파일을 전송하지 못했습니다. " +
+                        "각 항목의 상태를 확인하세요.");
+                }
+            }
+            finally
+            {
+                if (ReferenceEquals(_transferCancellation, cancellation))
+                {
+                    _transferCancellation = null;
+                }
+                cancellation.Dispose();
+                _stopBtn.IsEnabled = false;
+                _startBtn.IsEnabled = true;
+            }
+        }
+
+        private async Task ProcessHostTransfer(
+            string hostId,
+            List<FileTransferTask> tasks,
+            SignalingClient signaling,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var mainWindow = Application.Current.MainWindow as MainWindow;
+            var isConnectedHost =
+                mainWindow?.ConnectedHostId == hostId &&
+                mainWindow.Receiver != null;
 
             if (isConnectedHost)
             {
-                var rx = mw!.Receiver!;
-                foreach (var t in tasks)
-                {
-                    t.Status = "전송 중 (기존 연결)...";
-                    Action<int> progressHandler = (p) => t.Progress = p;
-                    rx.OnFileProgress += progressHandler;
-                    
-                    try
-                    {
-                        await rx.SendFileAsync(t.FilePath);
-                        t.Status = "완료";
-                        t.Progress = 100;
-                    }
-                    catch (Exception ex)
-                    {
-                        t.Status = $"오류: {ex.Message}";
-                    }
-                    finally
-                    {
-                        rx.OnFileProgress -= progressHandler;
-                    }
-                }
-            }
-            else
-            {
-                using var client = new FileTransferClient(signaling, hostId);
-                
-                foreach(var t in tasks) t.Status = "연결 중...";
-                // Dispatcher.Invoke 호출 시 UI 업데이트 (필요시)
-                
-                bool connected = await client.ConnectAsync();
-                if (!connected)
-                {
-                    foreach(var t in tasks) t.Status = "연결 실패";
-                    return;
-                }
-
+                var receiver = mainWindow!.Receiver!;
                 foreach (var task in tasks)
                 {
-                    task.Status = "전송 중...";
-                    client.OnProgress = (pct) => 
-                    {
-                        task.Progress = pct;
-                    };
-
+                    cancellationToken.ThrowIfCancellationRequested();
+                    task.Status = "전송 중 (기존 연결)...";
+                    Action<int> progressHandler = progress =>
+                        task.Progress = progress;
+                    receiver.OnFileProgress += progressHandler;
                     try
                     {
-                        await client.SendFileAsync(task.FilePath);
+                        await receiver.SendFileAsync(
+                            task.FilePath,
+                            cancellationToken);
                         task.Status = "완료";
                         task.Progress = 100;
                     }
+                    catch (OperationCanceledException)
+                        when (cancellationToken.IsCancellationRequested)
+                    {
+                        task.Status = "취소됨";
+                        throw;
+                    }
                     catch (Exception ex)
                     {
-                        task.Status = "실패";
-                        Console.WriteLine($"[MultiFile] Error: {ex.Message}");
+                        task.Status = $"오류: {ex.Message}";
                     }
+                    finally
+                    {
+                        receiver.OnFileProgress -= progressHandler;
+                    }
+                }
+                return;
+            }
+
+            using var client = new FileTransferClient(signaling, hostId);
+            foreach (var task in tasks)
+            {
+                task.Status = "연결 중...";
+            }
+
+            bool connected;
+            try
+            {
+                connected = await client.ConnectAsync(cancellationToken);
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+                foreach (var task in tasks)
+                {
+                    task.Status = "취소됨";
+                }
+                throw;
+            }
+            if (!connected)
+            {
+                foreach (var task in tasks)
+                {
+                    task.Status = "연결 실패";
+                }
+                return;
+            }
+
+            foreach (var task in tasks)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                task.Status = "전송 중...";
+                client.OnProgress = progress => task.Progress = progress;
+                try
+                {
+                    await client.SendFileAsync(
+                        task.FilePath,
+                        cancellationToken);
+                    task.Status = "완료";
+                    task.Progress = 100;
+                }
+                catch (OperationCanceledException)
+                    when (cancellationToken.IsCancellationRequested)
+                {
+                    task.Status = "취소됨";
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    task.Status = $"실패: {ex.Message}";
+                    Console.WriteLine(
+                        $"[MultiFile] Error: {ex.GetType().Name}");
                 }
             }
         }
 
+        protected override void OnClosed(EventArgs e)
+        {
+            _transferCancellation?.Cancel();
+            base.OnClosed(e);
+        }
         // 데이터 모델
         public class FileTransferTask : System.ComponentModel.INotifyPropertyChanged
         {

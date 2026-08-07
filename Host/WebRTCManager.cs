@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,16 +9,20 @@ using SIPSorcery.Media;
 using System.Runtime.InteropServices;
 using Newtonsoft.Json.Linq;
 using NAudio.Wave;
+using Concentus;
 using Concentus.Structs;
 using Concentus.Enums;
+using Comote.Input;
 
 namespace Host
 {
     public class WebRTCManager : IDisposable
     {
+        private const string SoftwareVideoEncoderName = "h264_mf";
         private RTCPeerConnection? _peerConnection;
         private FFmpegVideoEncoder? _videoEncoder;
-        private OpusEncoder? _opusEncoder;
+        private string? _activeVideoEncoderName;
+        private IOpusEncoder? _opusEncoder;
         private WasapiLoopbackCapture? _audioCapture;
         private ScreenCapture _capture;
         private readonly IInputBackend _inputBackend;
@@ -31,15 +35,26 @@ namespace Host
                 RTCPeerConnectionState.connected or
                 RTCPeerConnectionState.disconnected;
         private string? _remoteSocketId;
+        private long _connectionGeneration;
         private uint _timestamp = 0;
         private int _frameCount = 0;
         private long _totalAudioFramesSent = 0;
         private RTCDataChannel? _viewerInputChannel;
         private RTCDataChannel? _viewerFileChannel;
+        private readonly object _sessionGate = new();
+        private readonly SemaphoreSlim _signalGate = new(1, 1);
+        private readonly Dictionary<
+            (string RemoteSocketId, long Generation),
+            List<RTCIceCandidateInit>> _pendingRemoteIce = [];
+        private RemoteControlSession? _controlSession;
+        private RemoteChannelServerState? _inputSecurity;
+        private RemoteChannelServerState? _fileSecurity;
+        private InboundFileTransferReceiver? _fileReceiver;
+        private bool _disposed;
 
         // 프로토콜 상수 (Stats/Ping/Pong/Clipboard/MonitorSwitch)
-        // 주의: 0x01~0x04=마우스, 0x10~0x12=키보드 (InputSimulator)
-        //       → 그 외 프로토콜은 0x05~0x06, 0x20 이상 사용 (충돌 방지)
+        // 주의: 0x01~0x05=마우스, 0x10~0x13=키보드/입력 해제
+        //       → 그 외 프로토콜은 0x06, 0x20 이상 사용 (충돌 방지)
         private const byte MSG_MONITOR_SWITCH  = 0x06;
         private const byte MSG_STATS           = 0x20;
         private const byte MSG_PING            = 0x21;
@@ -59,8 +74,6 @@ namespace Host
         private int _targetFps = EncoderConfig.DefaultFps;
         private string? _password;
         
-        // [Security] 세션 토큰 (연결 시 생성, 모든 제어 명령에 필수)
-        private string _sessionToken = "";
 
         // Encoder Configuration Class
         private static class EncoderConfig
@@ -79,14 +92,32 @@ namespace Host
         // 클립보드 공유 상태
         private string? _lastClipboardText;
         private System.Threading.Timer? _clipboardTimer;
+        private readonly ClipboardStaWorker _clipboardWorker;
+        private bool _clipboardSessionEnabled;
+        private long _clipboardConsentEpoch;
+        private int _activeClipboardLeases;
 
-        // 파일 수신 상태
-        private System.IO.MemoryStream? _fileReceiveStream;
-        private string? _fileReceiveName;
-        private uint _fileReceiveSize;
-        private string? _fileReceiveExpectedHash;
+        private const uint REMOTE_CAP_KEYBOARD = 1u << 0;
+        private const uint REMOTE_CAP_ABSOLUTE_MOUSE = 1u << 1;
+        private const uint REMOTE_CAP_VERTICAL_WHEEL = 1u << 2;
+        private const uint REMOTE_CAP_HORIZONTAL_WHEEL = 1u << 3;
+        private const uint REMOTE_CAP_FIVE_MOUSE_BUTTONS = 1u << 4;
+        private const uint REMOTE_CAP_RELEASE_ALL = 1u << 5;
+        private const uint REMOTE_CAP_CLIPBOARD = 1u << 6;
+        private const uint REMOTE_CAP_FILE_TRANSFER = 1u << 7;
+        private const uint REMOTE_CAP_SCAN_CODE_KEYS = 1u << 8;
+        private const uint REMOTE_CAPABILITIES =
+            REMOTE_CAP_KEYBOARD |
+            REMOTE_CAP_ABSOLUTE_MOUSE |
+            REMOTE_CAP_VERTICAL_WHEEL |
+            REMOTE_CAP_HORIZONTAL_WHEEL |
+            REMOTE_CAP_FIVE_MOUSE_BUTTONS |
+            REMOTE_CAP_RELEASE_ALL |
+            REMOTE_CAP_CLIPBOARD |
+            REMOTE_CAP_FILE_TRANSFER |
+            REMOTE_CAP_SCAN_CODE_KEYS;
 
-        public event Action<string, object>? OnSignalReady;
+        public event Func<string, object, Task>? OnSignalReady;
 
         public InputBackendStatus InputBackendStatus =>
             _inputBackend.GetStatus();
@@ -99,30 +130,46 @@ namespace Host
             _capture = capture;
             _inputBackend = inputBackend ??
                 new SendInputBackend(capture.Width, capture.Height);
-            if (_inputBackend is SendInputBackend sendInput)
-                sendInput.UpdateScreenBounds(
-                    capture.Left, capture.Top,
-                    capture.Width, capture.Height);
+            _inputBackend.UpdateScreenBounds(
+                capture.Left,
+                capture.Top,
+                capture.Width,
+                capture.Height);
             _password = password;
             _currentAdapterIndex = capture.AdapterIndex;
             _currentOutputIndex = capture.OutputIndex;
+            _clipboardWorker = new ClipboardStaWorker();
         }
 
-        private void EnsureInitialized(string remoteSocketId)
+        private void EnsureInitialized(string remoteSocketId, long generation)
         {
-            // 이전 연결이 남아있으면 정리 후 재생성 (Viewer 재연결 지원)
-            if (_peerConnection != null)
+            ClosePeerConnectionForReplacement();
+            lock (_sessionGate)
             {
-                Console.WriteLine("[WebRTC] Cleaning up previous connection for reconnect...");
-                _inputBackend.ReleaseAllInputs();
-                _isStreaming = false;
-                _peerConnection.close();
-                _peerConnection.Dispose();
-                _peerConnection = null;
-                _videoEncoder = null;
-            }
-
-            _remoteSocketId = remoteSocketId;
+                _remoteSocketId = remoteSocketId;
+                _connectionGeneration = generation;
+            var inputMode = _inputBackend.Mode == InputBackendMode.VirtualHid
+                ? RemoteInputMode.VirtualHid
+                : RemoteInputMode.SendInput;
+            _controlSession = new RemoteControlSession();
+            _inputSecurity = new RemoteChannelServerState(
+                _controlSession,
+                RemoteChannelKind.Input,
+                inputMode,
+                REMOTE_CAPABILITIES);
+            _fileSecurity = new RemoteChannelServerState(
+                _controlSession,
+                RemoteChannelKind.File,
+                inputMode,
+                REMOTE_CAPABILITIES);
+            _fileReceiver = new InboundFileTransferReceiver(
+                Path.Combine(
+                    Environment.GetFolderPath(
+                        Environment.SpecialFolder.LocalApplicationData),
+                    "Comote",
+                    "IncomingTemp"),
+                Environment.GetFolderPath(
+                    Environment.SpecialFolder.DesktopDirectory));
 
             var config = new RTCConfiguration
             {
@@ -132,224 +179,402 @@ namespace Host
                 }
             };
 
-            _peerConnection = new RTCPeerConnection(config);
-            _videoEncoder = new FFmpegVideoEncoder();
-            
+                _peerConnection = new RTCPeerConnection(config);
+            }
             // 오디오 트랙 설정 (Opus 48kHz)
             var audioFormat = new AudioFormat(111, "opus", 48000);
             var audioTrack = new MediaStreamTrack(audioFormat, MediaStreamStatusEnum.SendOnly);
             _peerConnection.addTrack(audioTrack);
 
             // 최적의 비디오 인코더 선택 (GPU 가속 우선)
-            // 최적의 비디오 인코더 선택 (HEVC > H264 > Software)
+            // Select an H.264 encoder, preferring available hardware.
             var (codecId, encoderName, encoderOpts) = SelectBestVideoEncoder();
             Console.WriteLine($"[Video] Selected Encoder: {encoderName} (CodecID: {codecId})");
 
-            try 
+            try
             {
-                _videoEncoder.SetCodec(codecId, encoderName, encoderOpts);
-                _videoEncoder.InitialiseEncoder(codecId, _capture.Width, _capture.Height, 20);
-                
-                // 비트레이트 설정 (H.265/AV1은 압축 효율이 좋으므로 H.264와 동일 비트레이트에서도 화질 우수)
-                _videoEncoder.SetBitrate(6_000_000, null, null, null);
+                _videoEncoder = CreateInitializedVideoEncoder(
+                    codecId,
+                    encoderName,
+                    encoderOpts,
+                    _capture.Width,
+                    _capture.Height,
+                    20,
+                    6_000_000);
+                _activeVideoEncoderName = encoderName;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Video] Failed to init {encoderName}: {ex.Message}. Falling back to libx264.");
-                var fallbackOpts = new System.Collections.Generic.Dictionary<string, string> { 
-                    { "preset", "ultrafast" }, 
-                    { "tune", "zerolatency" },
-                    { "crf", "18" }
-                };
-                _videoEncoder.SetCodec(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, "libx264", fallbackOpts);
-                _videoEncoder.InitialiseEncoder(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, _capture.Width, _capture.Height, 20);
+                if (string.Equals(
+                        encoderName,
+                        SoftwareVideoEncoderName,
+                        StringComparison.Ordinal))
+                {
+                    _videoEncoder?.Dispose();
+                    _videoEncoder = null;
+                    throw new InvalidOperationException(
+                        "The Media Foundation H.264 encoder could not be initialized.",
+                        ex);
+                }
+
+                Console.WriteLine(
+                    $"[Video] Failed to init {encoderName}: {ex.Message}. " +
+                    $"Falling back to {SoftwareVideoEncoderName}.");
+                try
+                {
+                    _videoEncoder = CreateInitializedVideoEncoder(
+                        FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264,
+                        SoftwareVideoEncoderName,
+                        CreateMediaFoundationFallbackOptions(),
+                        _capture.Width,
+                        _capture.Height,
+                        20,
+                        6_000_000);
+                    _activeVideoEncoderName =
+                        SoftwareVideoEncoderName;
+                }
+                catch (Exception fallbackEx)
+                {
+                    _videoEncoder?.Dispose();
+                    _videoEncoder = null;
+                    throw new InvalidOperationException(
+                        "The Media Foundation H.264 fallback encoder could not be initialized.",
+                        fallbackEx);
+                }
             }
 
-            // SDP에 전송 코덱 명시 (SIPSorcery의 VideoFormat은 H264, VP8, VP9 만 기본 지원하므로 커스텀 페이로드 필요할 수 있음)
-            // 현재 SIPSorceryMedia.FFmpeg 구현상 VideoCodecsEnum으로 변환하는 과정이 있어 H264 외 사용이 까다로움.
-            // 일단 AV_CODEC_ID_HEVC로 인코딩하더라도 트랙 포맷은 H264라고 속이거나(위험), Custom VideoFormat을 써야 함.
-            // 여기서는 일단 H264 기본 호환성을 유지하되, 인코더만 교체 시도. (하지만 SDP 협상 없이는 Viewer가 디코딩 불가)
-            
-            // FIXME: Viewer가 HEVC/AV1을 받을 준비가 되어 있어야 함. 
-            // VP8/VP9 대신 HEVC(H.265) 페이로드 타입(97~127 동적 할당)을 명시해야 함.
-            // 하지만 WebRTC 표준에서 H.265 지원은 브라우저마다 다르며 SIPSorcery도 표준 Enum을 씀.
-            
-            // 임시: H.264 트랙만 추가 (실제 스트림이 HEVC면 디코더 에러 날 수 있음. 이 부분은 Viewer 수정과 맞물려야 함)
-            var videoFormat = new VideoFormat(VideoCodecsEnum.H264, 96, 90000, null);
-            if (codecId == FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_HEVC)
-            {
-                // Dynamic Payload Type for H.265
-                videoFormat = new VideoFormat(VideoCodecsEnum.H265, 100, 90000, null); 
-            }
-             // else if (codecId == FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_AV1)
-            // {
-            //     videoFormat = new VideoFormat(VideoCodecsEnum.AV1, 101, 90000, null);
-            // }
-
-            var videoTrack = new MediaStreamTrack(videoFormat, MediaStreamStatusEnum.SendOnly);
+            // Signalling and packetisation are intentionally H.264-only.
+            var videoFormat = new VideoFormat(
+                VideoCodecsEnum.H264,
+                96,
+                90000,
+                null);
+            var videoTrack = new MediaStreamTrack(
+                videoFormat,
+                MediaStreamStatusEnum.SendOnly);
             _peerConnection.addTrack(videoTrack);
 
-            _peerConnection.onicecandidate += (candidate) =>
+            var connection = _peerConnection;
+            connection.onicecandidate += candidate =>
             {
-                if (candidate != null && _remoteSocketId != null)
+                if (candidate == null)
                 {
-                    // [Security] 토큰 생성 (연결 수립 시점)
-                    if (string.IsNullOrEmpty(_sessionToken)) 
+                    return;
+                }
+
+                string? remoteSocketId;
+                long generation;
+                lock (_sessionGate)
+                {
+                    if (!ReferenceEquals(_peerConnection, connection))
                     {
-                        _sessionToken = Guid.NewGuid().ToString("N");
-                        Console.WriteLine($"[Security] Session Token Generated: {_sessionToken}");
+                        return;
                     }
 
-                    OnSignalReady?.Invoke(_remoteSocketId, new { 
-                        ice = new { 
-                            candidate = candidate.candidate, 
-                            sdpMid = candidate.sdpMid, 
-                            sdpMLineIndex = candidate.sdpMLineIndex 
-                        },
-                        // ICE 후보 교환 시 토큰 전달 (Viewer가 알 수 있도록)
-                        token = _sessionToken 
-                    });
+                    remoteSocketId = _remoteSocketId;
+                    generation = _connectionGeneration;
                 }
-            };
+                if (remoteSocketId == null || generation <= 0)
+                {
+                    return;
+                }
 
-            _peerConnection.onconnectionstatechange += (state) =>
+                QueueSignalReady(remoteSocketId, new
+                {
+                    ice = new
+                    {
+                        candidate = candidate.candidate,
+                        sdpMid = candidate.sdpMid,
+                        sdpMLineIndex = candidate.sdpMLineIndex
+                    },
+                    connectionGeneration = generation
+                });
+            };
+            connection.onconnectionstatechange += (state) =>
             {
+                if (!ReferenceEquals(_peerConnection, connection))
+                {
+                    return;
+                }
+
                 Console.WriteLine($"[WebRTC] Connection state: {state}");
                 if (state == RTCPeerConnectionState.connected && !_isStreaming)
                 {
                     _isStreaming = true;
                     _ = Task.Run(SendVideoLoop);
-                    StartClipboardMonitoring();
                     StartAudioCapture();
+                    return;
                 }
-                else if (state == RTCPeerConnectionState.failed ||
-                         state == RTCPeerConnectionState.closed)
+
+                if (state is RTCPeerConnectionState.disconnected or
+                             RTCPeerConnectionState.failed or
+                             RTCPeerConnectionState.closed)
                 {
-                    _inputBackend.ReleaseAllInputs();
-                    // failed/closed는 복구 불가 → 즉시 정리
-                    _isStreaming = false;
-                    StopAudioCapture();
-                    _peerConnection?.close();
-                }
-                else if (state == RTCPeerConnectionState.disconnected)
-                {
-                    // disconnected는 일시적 상태 (ICE 재연결 가능)
-                    // 파일 전송 등 진행 중인 작업이 있을 수 있으므로
-                    // 5초 대기 후에도 복구 안 되면 정리
-                    Console.WriteLine("[WebRTC] Disconnected (waiting 5s for recovery...)");
-                    _ = Task.Run(async () =>
+                    // Input authority is revoked immediately. A recovered ICE
+                    // transport must negotiate a fresh application session.
+                    if (!FailControlSession(
+                            connection,
+                            "peer connection became terminal"))
                     {
-                        await Task.Delay(5000);
-                        if (_peerConnection?.connectionState == RTCPeerConnectionState.disconnected)
-                        {
-                            Console.WriteLine("[WebRTC] Not recovered, closing connection");
-                            _inputBackend.ReleaseAllInputs();
-                            _isStreaming = false;
-                            StopAudioCapture();
-                            _peerConnection?.close();
-                        }
-                    });
+                        return;
+                    }
+                    _isStreaming = false;
+                    StopClipboardMonitoring();
+                    StopAudioCapture();
+                    if (state != RTCPeerConnectionState.closed)
+                    {
+                        connection.close();
+                    }
                 }
             };
 
-            // DataChannel 수신 (Viewer에서 생성)
-            _peerConnection.ondatachannel += (channel) =>
+            connection.ondatachannel += (channel) =>
             {
-                Console.WriteLine($"[WebRTC] DataChannel received: {channel.label}");
+                if (!ReferenceEquals(_peerConnection, connection))
+                {
+                    channel.close();
+                    return;
+                }
+
                 if (channel.label == "input")
                 {
-                    _viewerInputChannel = channel;
-                    channel.onmessage += (dc, protocol, data) => HandleInputMessage(dc, data);
-                    channel.onclose += () =>
+                    RemoteChannelServerState? security;
+                    lock (_sessionGate)
                     {
-                        _inputBackend.ReleaseAllInputs();
-                        _viewerInputChannel = null;
-                    };
-                    Console.WriteLine("[WebRTC] Input DataChannel ready");
-                }
-                else if (channel.label == "file")
-                {
-                    _viewerFileChannel = channel;
-                    channel.onmessage += (dc, protocol, data) => HandleFileMessage(dc, data);
-                    Console.WriteLine("[WebRTC] File DataChannel ready");
-                }
-            };
+                        if (!ReferenceEquals(_peerConnection, connection) ||
+                            _viewerInputChannel != null ||
+                            _inputSecurity == null)
+                        {
+                            channel.close();
+                            return;
+                        }
 
+                        _viewerInputChannel = channel;
+                        security = _inputSecurity;
+                    }
+
+                    channel.onmessage += (_, _, data) =>
+                        HandleSecuredInputMessage(
+                            connection,
+                            channel,
+                            security,
+                            data);
+                    channel.onclose += () =>
+                        HandleInputChannelClosed(connection, channel);
+                    Console.WriteLine("[WebRTC] Input channel awaiting authentication");
+                    return;
+                }
+
+                if (channel.label == "file")
+                {
+                    RemoteChannelServerState? security;
+                    lock (_sessionGate)
+                    {
+                        if (!ReferenceEquals(_peerConnection, connection) ||
+                            _viewerFileChannel != null ||
+                            _fileSecurity == null)
+                        {
+                            channel.close();
+                            return;
+                        }
+
+                        _viewerFileChannel = channel;
+                        security = _fileSecurity;
+                    }
+
+                    channel.onmessage += (_, _, data) =>
+                        HandleSecuredFileMessage(
+                            connection,
+                            channel,
+                            security,
+                            data);
+                    channel.onclose += () =>
+                        HandleFileChannelClosed(connection, channel);
+                    Console.WriteLine("[WebRTC] File channel awaiting authentication");
+                    return;
+                }
+
+                Console.WriteLine("[WebRTC] Rejected unknown DataChannel label");
+                channel.close();
+            };
             Console.WriteLine($"[WebRTC] PeerConnection initialized for {remoteSocketId}");
         }
 
 
 
-        private void HandleInputMessage(RTCDataChannel dc, byte[] data)
+        private void HandleSecuredInputMessage(
+            RTCPeerConnection connection,
+            RTCDataChannel channel,
+            RemoteChannelServerState security,
+            byte[] data)
         {
-            if (data == null || data.Length < 1) return;
+            if (!IsCurrentInputChannel(connection, channel, security))
+            {
+                return;
+            }
+            if (data == null || data.Length == 0)
+            {
+                FailControlSession(connection, "stale or empty input message");
+                return;
+            }
 
-            // [Security] 세션 토큰 검증 로직 추가 필요
-            // 현재 구조상 Input 채널 메시지는 [Type][Data...] 형태이므로, 
-            // 토큰을 매번 보내면 오버헤드가 큼. 
-            // 하지만 보안이 중요하므로 중요 명령(파일전송, 클립보드)에는 토큰 검증 권장.
-            // 여기서는 일단 구조만 잡아두고 Pass (Viewer 수정 범위가 너무 큼)
-            // TODO: Viewer에서 DataChannel 오픈 후 첫 메시지로 토큰 인증하도록 프로토콜 개선 필요
+            var result = security.ProcessClientMessage(
+                data,
+                out var response,
+                out var payload);
+            switch (result)
+            {
+                case RemoteServerReceiveResult.Authenticated:
+                    if (!TrySendRaw(channel, response))
+                    {
+                        FailControlSession(connection, "input authentication response failed");
+                    }
+                    else
+                    {
+                        Console.WriteLine("[Control] Input channel authenticated");
+                    }
+                    return;
+
+                case RemoteServerReceiveResult.Rejected:
+                    _ = TrySendRaw(channel, response);
+                    FailControlSession(connection, "input authentication rejected");
+                    return;
+
+                case RemoteServerReceiveResult.ProtocolViolation:
+                    FailControlSession(connection, "input sequence or envelope violation");
+                    return;
+
+                case RemoteServerReceiveResult.Payload:
+                    bool accepted;
+                    lock (_sessionGate)
+                    {
+                        if (!ReferenceEquals(_peerConnection, connection) ||
+                            !ReferenceEquals(_viewerInputChannel, channel) ||
+                            !ReferenceEquals(_inputSecurity, security))
+                        {
+                            return;
+                        }
+
+                        accepted = HandleInputPayload(
+                            channel,
+                            security,
+                            payload);
+                    }
+                    if (!accepted)
+                    {
+                        FailControlSession(connection, "invalid input payload");
+                    }
+                    return;
+            }
+        }
+
+        private bool HandleInputPayload(
+            RTCDataChannel channel,
+            RemoteChannelServerState security,
+            ReadOnlySpan<byte> data)
+        {
+            if (data.Length < 1)
+            {
+                return false;
+            }
 
             switch (data[0])
             {
                 case MSG_STATS:
-                    if (data.Length >= 3)
+                    if (data.Length != 3)
                     {
-                        _viewerFps = BitConverter.ToUInt16(data, 1);
-                        Console.WriteLine($"[WebRTC] Viewer FPS: {_viewerFps}");
+                        return false;
                     }
-                    break;
-                case 0x07: // MSG_SETTINGS_UPDATE
-                    if (data.Length >= 3)
+                    _viewerFps = BitConverter.ToUInt16(data.Slice(1, 2));
+                    return _viewerFps <= 240;
+
+                case 0x07: // settings update
+                    if (data.Length != 3 ||
+                        data[1] is < 1 or > 120 ||
+                        data[2] > 3)
                     {
-                        UpdateEncoderSettings(data[1], data[2]);
+                        return false;
                     }
-                    break;
+                    UpdateEncoderSettings(data[1], data[2]);
+                    return true;
+
                 case MSG_PING:
-                    if (dc.readyState == RTCDataChannelState.open)
-                    {
-                        dc.send(new byte[] { MSG_PONG });
-                    }
-                    break;
+                    return data.Length == 1 &&
+                        TrySendSecured(
+                            channel,
+                            security,
+                            [MSG_PONG]);
+
                 case MSG_PONG:
-                    break;
+                    return data.Length == 1;
+
                 case MSG_MONITOR_SWITCH:
-                    if (data.Length >= 3)
+                    if (data.Length == 1)
                     {
-                        int ai = data[1];
-                        int oi = data[2];
-                        SwitchMonitor(ai, oi);
-                    }
-                    else
-                    {
-                        // 인계값이 없으면 다음 모니터로 자동 순환
                         CycleMonitor();
+                        return true;
                     }
-                    break;
-                case MSG_CLIPBOARD:
-                    if (data.Length > 1)
+                    if (data.Length == 3)
                     {
-                        string text = Encoding.UTF8.GetString(data, 1, data.Length - 1);
-                        _lastClipboardText = text;
-                        SetClipboardOnSta(text);
-                        Console.WriteLine($"[Clipboard] Set from Viewer ({text.Length} chars)");
+                        SwitchMonitor(data[1], data[2]);
+                        return true;
                     }
-                    break;
-                // [하위 호환성] 구버전 Viewer가 Input 채널로 파일을 보내는 경우 처리
-                case 0x30: // MSG_FILE_START
-                case 0x31: // MSG_FILE_CHUNK
-                case 0x32: // MSG_FILE_END
-                    HandleFileMessage(dc, data);
-                    break;
+                    return false;
+
+                case RemoteClipboardConsentProtocol.MessageType:
+                    if (!RemoteClipboardConsentProtocol.TryParse(
+                            data,
+                            out var clipboardEnabled))
+                    {
+                        return false;
+                    }
+                    return ApplyClipboardConsent(
+                        channel,
+                        security,
+                        clipboardEnabled);
+                case MSG_CLIPBOARD:
+                    if (!TryGetClipboardConsentEpoch(
+                            channel,
+                            security,
+                            out var clipboardEpoch) ||
+                        data.Length is < 2 or > 1 + 32 * 1024)
+                    {
+                        return false;
+                    }
+                    try
+                    {
+                        var text = new UTF8Encoding(
+                            encoderShouldEmitUTF8Identifier: false,
+                            throwOnInvalidBytes: true).GetString(data.Slice(1));
+                        SetClipboardOnSta(
+                            text,
+                            channel,
+                            security,
+                            clipboardEpoch);
+                        return true;
+                    }
+                    catch (DecoderFallbackException)
+                    {
+                        return false;
+                    }
+
                 default:
-                    _inputBackend.ProcessMessage(data);
-                    if (dc.readyState == RTCDataChannelState.open)
-                        dc.send(new byte[] { MSG_INPUT_ACK, data[0] });
-                    break;
+                    var dispatch = _inputBackend.ProcessMessage(data);
+                    if (!dispatch.IsAccepted)
+                    {
+                        Console.WriteLine(
+                            $"[Input] Rejected message: {dispatch.Code}");
+                        return dispatch.Code is
+                            InputDispatchCode.Unsupported or
+                            InputDispatchCode.BackendRejected;
+                    }
+
+                    return TrySendSecured(
+                        channel,
+                        security,
+                        [MSG_INPUT_ACK, data[0]]);
             }
         }
-
         private void UpdateEncoderSettings(int fps, int qualityLevel)
         {
             try
@@ -370,7 +595,10 @@ namespace Host
                 Console.WriteLine($"[WebRTC] Updating Encoder Settings -> FPS: {fps}, Bitrate: {targetBitrate / 1_000_000.0:F1}Mbps");
                 
                 // 비트레이트 적용
-                _videoEncoder.SetBitrate(targetBitrate, null, null, null); 
+                var encoder = _videoEncoder ??
+                    throw new InvalidOperationException(
+                        "The video encoder is unavailable.");
+                encoder.SetBitrate(targetBitrate, null, null, null);
                 
                 // FPS 적용 (ChangeFps 메서드가 인코더 래퍼에 있다고 가정하거나, 캡처 루프 딜레이 조절 필요)
                 // 만약 ChangeFps가 없다면 InitialiseEncoder 재호출은 너무 무거움.
@@ -385,157 +613,320 @@ namespace Host
 
         }
 
-        private void HandleFileMessage(RTCDataChannel dc, byte[] data)
+        private void HandleSecuredFileMessage(
+            RTCPeerConnection connection,
+            RTCDataChannel channel,
+            RemoteChannelServerState security,
+            byte[] data)
         {
-            try
+            if (!IsCurrentFileChannel(connection, channel, security))
             {
-                if (data == null || data.Length < 1) return;
-
-                if (data[0] == MSG_FILE_START && data.Length >= 5)
-                {
-                    _fileReceiveSize = BitConverter.ToUInt32(data, 1);
-                    
-                    // Old header: [Type:1][Size:4][Name...] (Length: 5 + NameLen)
-                    // New header: [Type:1][Size:4][Name...][Hash:32] (Length: 5 + NameLen + 32)
-                    
-                    int nameLen = data.Length - 5;
-                    _fileReceiveExpectedHash = null;
-
-                    // 해시가 포함되어 있는지 확인 (파일 이름 길이를 적절히 추정하거나, 프로토콜 버전을 두면 좋음)
-                    // 여기서는 단순히 길이가 충분히 길면 맨 뒤 32바이트를 해시로 간주 (Viewer 수정 사항 반영)
-                    // Viewer는 Name + Hash 순으로 보냄
-                    if (data.Length > 5 + 32) 
-                    {
-                        nameLen = data.Length - 5 - 32;
-                        byte[] hashBytes = new byte[32];
-                        Array.Copy(data, 5 + nameLen, hashBytes, 0, 32);
-                        _fileReceiveExpectedHash = BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
-                        Console.WriteLine($"[FileTransfer] Expected Hash: {_fileReceiveExpectedHash}");
-                    }
-
-                    _fileReceiveName = Encoding.UTF8.GetString(data, 5, nameLen);
-                    _fileReceiveStream = new System.IO.MemoryStream();
-                    Console.WriteLine($"[FileTransfer] Start Receiving: {_fileReceiveName} ({_fileReceiveSize} bytes)");
-                }
-                else if (data[0] == MSG_FILE_CHUNK && _fileReceiveStream != null)
-                {
-                    _fileReceiveStream.Write(data, 1, data.Length - 1);
-                    // 진행 상황 로그 (너무 자주는 말고)
-                    if (_fileReceiveStream.Length % (1024 * 1024) < 16000) // 약 1MB 마다
-                    {
-                         Console.WriteLine($"[FileTransfer] Received {_fileReceiveStream.Length} / {_fileReceiveSize}");
-                    }
-                }
-                else if (data[0] == MSG_FILE_END && _fileReceiveStream != null)
-                {
-                    Console.WriteLine($"[FileTransfer] File End Received. Processing save...");
-                    SaveReceivedFile(dc);
-                }
+                return;
             }
-            catch (Exception ex)
+            if (data == null || data.Length == 0)
             {
-                Console.WriteLine($"[FileTransfer] CRITICAL ERROR: {ex}");
+                FailControlSession(connection, "stale or empty file message");
+                return;
             }
-        }
 
-        private void SaveReceivedFile(RTCDataChannel dc)
-        {
-            try
+            var receiveResult = security.ProcessClientMessage(
+                data,
+                out var response,
+                out var payload);
+            switch (receiveResult)
             {
-                string rawFileName = _fileReceiveName ?? "received_file";
-                string safeFileName = System.IO.Path.GetFileName(rawFileName);
-                
-                // 유효하지 않은 문자 제거
-                foreach (char c in System.IO.Path.GetInvalidFileNameChars())
-                {
-                    safeFileName = safeFileName.Replace(c, '_');
-                }
-
-                string desktopPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-                // string downloadFolder = System.IO.Path.Combine(desktopPath, "Comote_Downloads");
-                
-                // if (!System.IO.Directory.Exists(downloadFolder))
-                // {
-                //     System.IO.Directory.CreateDirectory(downloadFolder);
-                //     Console.WriteLine($"[FileTransfer] Created directory: {downloadFolder}");
-                // }
-
-                // 바탕화면에 직접 저장
-                string savePath = System.IO.Path.Combine(desktopPath, safeFileName);
-                
-                // 중복 처리
-                if (System.IO.File.Exists(savePath))
-                {
-                    string nameOnly = System.IO.Path.GetFileNameWithoutExtension(safeFileName);
-                    string extension = System.IO.Path.GetExtension(safeFileName);
-                    int count = 1;
-                    while (System.IO.File.Exists(savePath))
+                case RemoteServerReceiveResult.Authenticated:
+                    if (!TrySendRaw(channel, response))
                     {
-                        savePath = System.IO.Path.Combine(desktopPath, $"{nameOnly} ({count++}){extension}");
-                    }
-                }
-
-                // 해시 검증
-                bool hashMismatch = false;
-                if (!string.IsNullOrEmpty(_fileReceiveExpectedHash))
-                {
-                    using (var sha256 = System.Security.Cryptography.SHA256.Create())
-                    {
-                        var writtenData = _fileReceiveStream.ToArray(); // Already in memory
-                        var computedBytes = sha256.ComputeHash(writtenData);
-                        string computedHash = BitConverter.ToString(computedBytes).Replace("-", "").ToLower();
-
-                        if (!computedHash.Equals(_fileReceiveExpectedHash, StringComparison.OrdinalIgnoreCase))
-                        {
-                            Console.WriteLine($"[FileTransfer] Hash Mismatch! Expected: {_fileReceiveExpectedHash}, Actual: {computedHash}");
-                            hashMismatch = true;
-                        }
-                        else
-                        {
-                            Console.WriteLine($"[FileTransfer] Hash Verified: {computedHash}");
-                        }
-                    }
-                }
-
-                if (hashMismatch)
-                {
-                     // 실패 시 저장된 파일 삭제? 정책 결정 필요. 일단 삭제하지 않고 실패 응답만 보냄.
-                     Console.WriteLine($"[FileTransfer] Integrity check failed. Saving anyway but reporting failure.");
-                }
-
-                Console.WriteLine($"[FileTransfer] Writing to {savePath}...");
-                System.IO.File.WriteAllBytes(savePath, _fileReceiveStream.ToArray());
-                Console.WriteLine($"[FileTransfer] Success: Saved to {savePath} ({_fileReceiveStream.Length} bytes)");
-
-                _fileReceiveStream.Dispose();
-                _fileReceiveStream = null;
-                _fileReceiveName = null;
-                _fileReceiveExpectedHash = null;
-
-                if (dc.readyState == RTCDataChannelState.open)
-                {
-                    if (hashMismatch)
-                    {
-                        dc.send(new byte[] { MSG_FILE_HASH_MISMATCH });
-                        Console.WriteLine("[FileTransfer] HASH MISMATCH sent");
+                        FailControlSession(connection, "file authentication response failed");
                     }
                     else
                     {
-                        dc.send(new byte[] { MSG_FILE_ACK });
-                        Console.WriteLine("[FileTransfer] ACK sent");
+                        Console.WriteLine("[Control] File channel authenticated");
                     }
-                }
-                else
-                {
-                    Console.WriteLine($"[FileTransfer] Cannot send ACK, state: {dc.readyState}");
-                }
+                    return;
+
+                case RemoteServerReceiveResult.Rejected:
+                    _ = TrySendRaw(channel, response);
+                    FailControlSession(connection, "file authentication rejected");
+                    return;
+
+                case RemoteServerReceiveResult.ProtocolViolation:
+                    FailControlSession(connection, "file sequence or envelope violation");
+                    return;
+
+                case RemoteServerReceiveResult.Payload:
+                    InboundFileTransferReceiver receiver;
+                    lock (_sessionGate)
+                    {
+                        if (!ReferenceEquals(_peerConnection, connection) ||
+                            !ReferenceEquals(_viewerFileChannel, channel) ||
+                            !ReferenceEquals(_fileSecurity, security) ||
+                            _fileReceiver == null)
+                        {
+                            return;
+                        }
+
+                        receiver = _fileReceiver;
+                    }
+
+                    InboundFileTransferResult result;
+                    try
+                    {
+                        result = receiver.Process(payload);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        return;
+                    }
+
+                    if (!IsCurrentFileChannel(connection, channel, security))
+                    {
+                        return;
+                    }
+                    switch (result.Status)
+                    {
+                        case InboundFileTransferStatus.Continue:
+                            return;
+                        case InboundFileTransferStatus.Completed:
+                            Console.WriteLine("[FileTransfer] File verified and saved");
+                            if (!TrySendSecured(
+                                    channel,
+                                    security,
+                                    RemoteFileTransferProtocol.CreateAcknowledged(
+                                        result.TransferId)))
+                            {
+                                FailControlSession(connection, "file acknowledgement failed");
+                            }
+                            return;
+                        case InboundFileTransferStatus.HashMismatch:
+                            Console.WriteLine("[FileTransfer] File hash mismatch");
+                            if (!TrySendSecured(
+                                    channel,
+                                    security,
+                                    RemoteFileTransferProtocol.CreateHashMismatch(
+                                        result.TransferId)))
+                            {
+                                FailControlSession(connection, "file rejection response failed");
+                            }
+                            return;
+                        case InboundFileTransferStatus.ProtocolViolation:
+                            Console.WriteLine("[FileTransfer] Protocol violation");
+                            FailControlSession(connection, "invalid file payload");
+                            return;
+                    }
+                    return;
             }
-            catch (Exception ex)
+        }
+        private bool IsCurrentInputChannel(
+            RTCPeerConnection connection,
+            RTCDataChannel channel,
+            RemoteChannelServerState security)
+        {
+            lock (_sessionGate)
             {
-                Console.WriteLine($"[FileTransfer] Save failed: {ex.Message}");
+                return ReferenceEquals(_peerConnection, connection) &&
+                    ReferenceEquals(_viewerInputChannel, channel) &&
+                    ReferenceEquals(_inputSecurity, security);
             }
         }
 
+        private bool IsCurrentFileChannel(
+            RTCPeerConnection connection,
+            RTCDataChannel channel,
+            RemoteChannelServerState security)
+        {
+            lock (_sessionGate)
+            {
+                return ReferenceEquals(_peerConnection, connection) &&
+                    ReferenceEquals(_viewerFileChannel, channel) &&
+                    ReferenceEquals(_fileSecurity, security);
+            }
+        }
+
+        private static bool TrySendRaw(
+            RTCDataChannel channel,
+            byte[] message)
+        {
+            if (message.Length == 0 ||
+                channel.readyState != RTCDataChannelState.open)
+            {
+                return false;
+            }
+
+            try
+            {
+                channel.send(message);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TrySendSecured(
+            RTCDataChannel channel,
+            RemoteChannelServerState security,
+            ReadOnlySpan<byte> payload)
+        {
+            try
+            {
+                lock (security)
+                {
+                    return TrySendRaw(
+                        channel,
+                        security.WrapPayload(payload));
+                }
+            }
+            catch (Exception ex) when (
+                ex is InvalidOperationException or
+                      ArgumentOutOfRangeException or
+                      OverflowException or
+                      ObjectDisposedException)
+            {
+                return false;
+            }
+        }
+
+        private void HandleInputChannelClosed(
+            RTCPeerConnection connection,
+            RTCDataChannel channel)
+        {
+            lock (_sessionGate)
+            {
+                if (!ReferenceEquals(_peerConnection, connection) ||
+                    !ReferenceEquals(_viewerInputChannel, channel))
+                {
+                    return;
+                }
+            }
+
+            FailControlSession(connection, "input channel closed");
+        }
+
+        private void HandleFileChannelClosed(
+            RTCPeerConnection connection,
+            RTCDataChannel channel)
+        {
+            RemoteChannelServerState? security;
+            InboundFileTransferReceiver? receiver;
+            lock (_sessionGate)
+            {
+                if (!ReferenceEquals(_peerConnection, connection) ||
+                    !ReferenceEquals(_viewerFileChannel, channel))
+                {
+                    return;
+                }
+
+                _viewerFileChannel = null;
+                security = _fileSecurity;
+                receiver = _fileReceiver;
+                _fileSecurity = null;
+                _fileReceiver = null;
+            }
+
+            security?.Dispose();
+            receiver?.Dispose();
+        }
+
+        private bool FailControlSession(
+            RTCPeerConnection connection,
+            string reason)
+        {
+            lock (_sessionGate)
+            {
+                if (!ReferenceEquals(_peerConnection, connection))
+                {
+                    return false;
+                }
+
+                _inputBackend.ReleaseAllInputs();
+            }
+
+            if (!RevokeControlSession(
+                    closeChannels: true,
+                    expectedConnection: connection))
+            {
+                return false;
+            }
+
+            Console.WriteLine($"[Control] Session revoked: {reason}");
+            return true;
+        }
+
+        private bool RevokeControlSession(
+            bool closeChannels,
+            RTCPeerConnection? expectedConnection = null)
+        {
+            RTCDataChannel? inputChannel;
+            RTCDataChannel? fileChannel;
+            RemoteControlSession? session;
+            RemoteChannelServerState? inputSecurity;
+            RemoteChannelServerState? fileSecurity;
+            InboundFileTransferReceiver? fileReceiver;
+            lock (_sessionGate)
+            {
+                if (expectedConnection != null &&
+                    !ReferenceEquals(_peerConnection, expectedConnection))
+                {
+                    return false;
+                }
+
+                inputChannel = _viewerInputChannel;
+                fileChannel = _viewerFileChannel;
+                session = _controlSession;
+                inputSecurity = _inputSecurity;
+                fileSecurity = _fileSecurity;
+                fileReceiver = _fileReceiver;
+                _viewerInputChannel = null;
+                _viewerFileChannel = null;
+                _inputSecurity = null;
+                _fileSecurity = null;
+                _controlSession = null;
+                _fileReceiver = null;
+                _clipboardSessionEnabled = false;
+                unchecked { _clipboardConsentEpoch++; }
+                _lastClipboardText = null;
+            }
+
+            StopClipboardMonitoring();
+            inputSecurity?.Dispose();
+            fileSecurity?.Dispose();
+            fileReceiver?.Dispose();
+            session?.Dispose();
+            if (closeChannels)
+            {
+                try { inputChannel?.close(); } catch { }
+                try { fileChannel?.close(); } catch { }
+            }
+
+            return true;
+        }
+
+        private void ClosePeerConnectionForReplacement()
+        {
+            _inputBackend.ReleaseAllInputs();
+            _isStreaming = false;
+            StopClipboardMonitoring();
+            StopAudioCapture();
+            RevokeControlSession(closeChannels: true);
+
+            RTCPeerConnection? connection;
+            lock (_sessionGate)
+            {
+                connection = _peerConnection;
+                _peerConnection = null;
+                _remoteSocketId = null;
+                _connectionGeneration = 0;
+            }
+            try { connection?.close(); } catch { }
+            connection?.Dispose();
+
+            _videoEncoder?.Dispose();
+            _videoEncoder = null;
+            _activeVideoEncoderName = null;
+        }
         private void CycleMonitor()
         {
             var monitors = ScreenCapture.GetMonitors();
@@ -564,12 +955,11 @@ namespace Host
                     _capture = newCapture;
                     _currentAdapterIndex = adapterIndex;
                     _currentOutputIndex = outputIndex;
-                    if (_inputBackend is SendInputBackend sendInput)
-                        sendInput.UpdateScreenBounds(
-                            _capture.Left, _capture.Top,
-                            _capture.Width, _capture.Height);
-                    else
-                        _inputBackend.UpdateScreenSize(_capture.Width, _capture.Height);
+                    _inputBackend.UpdateScreenBounds(
+                        _capture.Left,
+                        _capture.Top,
+                        _capture.Width,
+                        _capture.Height);
                 }
 
                 // 기존 캡처 리소스 해제
@@ -588,9 +978,8 @@ namespace Host
 
         private unsafe (FFmpeg.AutoGen.AVCodecID, string, System.Collections.Generic.Dictionary<string, string>) SelectBestVideoEncoder()
         {
-            // 우선순위: AV1 (최고 효율) > HEVC (고효율) > H264 (호환성)
-            // 하드웨어: NVENC > QSV > AMF
-            
+            // H.264-only hardware preference: NVENC > QSV > AMF.
+
             var commonOpts = new System.Collections.Generic.Dictionary<string, string>
             {
                 { "preset", "llhq" }, // Low Latency High Quality
@@ -613,13 +1002,65 @@ namespace Host
             // 3. AMD AMF
             if (IsEncoderAvailable("h264_amf")) return (FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, "h264_amf", new System.Collections.Generic.Dictionary<string, string> { { "usage", "lowlatency" } });
 
-            // 4. Software Fallback
-            return (FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, "libx264", new System.Collections.Generic.Dictionary<string, string> {
-                { "preset", "ultrafast" },
-                { "tune", "zerolatency" },
-                { "crf", "18" },
-                { "rc-lookahead", "0" }
-            });
+            // 4. Windows Media Foundation software fallback.
+            if (IsEncoderAvailable(SoftwareVideoEncoderName))
+            {
+                return (
+                    FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264,
+                    SoftwareVideoEncoderName,
+                    CreateMediaFoundationFallbackOptions());
+            }
+
+            throw new InvalidOperationException(
+                "No supported H.264 encoder is available.");
+        }
+
+        private static System.Collections.Generic.Dictionary<string, string>
+            CreateMediaFoundationFallbackOptions()
+        {
+            return new System.Collections.Generic.Dictionary<string, string>
+            {
+                { "rate_control", "cbr" },
+                { "scenario", "display_remoting" },
+                { "hw_encoding", "0" }
+            };
+        }
+
+        private static FFmpegVideoEncoder CreateInitializedVideoEncoder(
+            FFmpeg.AutoGen.AVCodecID codecId,
+            string encoderName,
+            System.Collections.Generic.Dictionary<string, string>
+                encoderOptions,
+            int width,
+            int height,
+            int fps,
+            long bitrate)
+        {
+            var encoder = new FFmpegVideoEncoder(
+                new System.Collections.Generic.Dictionary<string, string>(
+                    encoderOptions,
+                    StringComparer.Ordinal));
+            try
+            {
+                if (!encoder.SetCodec(codecId, encoderName))
+                {
+                    throw new InvalidOperationException(
+                        $"FFmpeg encoder '{encoderName}' is unavailable.");
+                }
+
+                encoder.SetBitrate(bitrate, null, null, null);
+                encoder.InitialiseEncoder(
+                    codecId,
+                    width,
+                    height,
+                    fps);
+                return encoder;
+            }
+            catch
+            {
+                encoder.Dispose();
+                throw;
+            }
         }
 
         private unsafe bool IsEncoderAvailable(string encoderName)
@@ -646,7 +1087,11 @@ namespace Host
                 Console.WriteLine($"[Audio] Capture Format: {waveFormat.SampleRate}Hz, {waveFormat.BitsPerSample}bit, {waveFormat.Channels}ch, Encoding={waveFormat.Encoding}");
 
                 // Concentus Opus 인코더 초기화 (캡처 포맷에 맞춤)
-                _opusEncoder = new OpusEncoder(waveFormat.SampleRate, waveFormat.Channels, OpusApplication.OPUS_APPLICATION_AUDIO);
+                _opusEncoder = OpusCodecFactory.CreateEncoder(
+                    waveFormat.SampleRate,
+                    waveFormat.Channels,
+                    OpusApplication.OPUS_APPLICATION_AUDIO,
+                    null);
                 _opusEncoder.Bitrate = 128000; // 128kbps 고품질
                 Console.WriteLine($"[Audio] Opus encoder initialized: {waveFormat.SampleRate}Hz, {waveFormat.Channels}ch, 128kbps");
 
@@ -697,7 +1142,11 @@ namespace Host
                             _audioAccumulator.RemoveRange(0, samplesPer20ms);
 
                             // Concentus로 Opus 인코딩
-                            int encodedLen = _opusEncoder!.Encode(frame, 0, frameSizePerChannel, opusOutput, 0, opusOutput.Length);
+                            int encodedLen = _opusEncoder!.Encode(
+                                frame.AsSpan(),
+                                frameSizePerChannel,
+                                opusOutput.AsSpan(),
+                                opusOutput.Length);
                             if (encodedLen > 0)
                             {
                                 var encoded = new byte[encodedLen];
@@ -795,28 +1244,57 @@ namespace Host
                                 Console.WriteLine($"[WebRTC] Encoding/Sending Error ({encodeFailCount}/3): {ex.Message}");
                             }
 
-                            // 3회 연속 실패 → 소프트웨어 인코더(libx264)로 자동 전환
+                            // 3회 연속 실패 시 Media Foundation H.264로 자동 전환
                             if (encodeFailCount == 3)
                             {
-                                Console.WriteLine("[Video] GPU encoder failed 3 times. Switching to libx264 (software)...");
+                                if (string.Equals(
+                                        _activeVideoEncoderName,
+                                        SoftwareVideoEncoderName,
+                                        StringComparison.Ordinal))
+                                {
+                                    Console.WriteLine(
+                                        "[Video] Media Foundation H.264 encoding " +
+                                        "failed repeatedly; no further fallback is available.");
+                                    _isStreaming = false;
+                                    break;
+                                }
+
+                                Console.WriteLine(
+                                    $"[Video] GPU encoder failed 3 times. " +
+                                    $"Switching to {SoftwareVideoEncoderName} (software)...");
+                                FFmpegVideoEncoder? replacementEncoder = null;
                                 try
                                 {
-                                    _videoEncoder = new FFmpegVideoEncoder();
-                                    var fallbackOpts = new System.Collections.Generic.Dictionary<string, string>
-                                    {
-                                        { "preset", "ultrafast" },
-                                        { "tune", "zerolatency" },
-                                        { "rc-lookahead", "0" },
-                                        { "bf", "0" }
-                                    };
-                                    _videoEncoder.SetCodec(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, "libx264", fallbackOpts);
-                                    _videoEncoder.InitialiseEncoder(FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264, _capture.Width, _capture.Height, 20);
-                                    Console.WriteLine("[Video] Successfully switched to libx264!");
+                                    replacementEncoder =
+                                        CreateInitializedVideoEncoder(
+                                            FFmpeg.AutoGen.AVCodecID.AV_CODEC_ID_H264,
+                                            SoftwareVideoEncoderName,
+                                            CreateMediaFoundationFallbackOptions(),
+                                            _capture.Width,
+                                            _capture.Height,
+                                            20,
+                                            6_000_000);
+
+                                    var previousEncoder = _videoEncoder;
+                                    _videoEncoder = replacementEncoder;
+                                    replacementEncoder = null;
+                                    _activeVideoEncoderName =
+                                        SoftwareVideoEncoderName;
+                                    previousEncoder?.Dispose();
+                                    Console.WriteLine(
+                                        $"[Video] Successfully switched to " +
+                                        $"{SoftwareVideoEncoderName}.");
                                     encodeFailCount = 0;
                                 }
                                 catch (Exception fallbackEx)
                                 {
-                                    Console.WriteLine($"[Video] Fallback to libx264 also failed: {fallbackEx.Message}");
+                                    replacementEncoder?.Dispose();
+                                    Console.WriteLine(
+                                        $"[Video] Fallback to " +
+                                        $"{SoftwareVideoEncoderName} failed: " +
+                                        fallbackEx.Message);
+                                    _isStreaming = false;
+                                    break;
                                 }
                             }
                         }
@@ -849,150 +1327,750 @@ namespace Host
 
         public async Task HandleSignalAsync(string from, object signal)
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(from);
+            ArgumentNullException.ThrowIfNull(signal);
+            if (from.Length > 512)
+            {
+                return;
+            }
+
+            await _signalGate.WaitAsync().ConfigureAwait(false);
+            bool createdConnection = false;
             try
             {
-                var jobj = JObject.FromObject(signal);
-                if (jobj.ContainsKey("sdp"))
+                ObjectDisposedException.ThrowIf(_disposed, this);
+                var root = signal as JObject ?? JObject.FromObject(signal);
+                int signalKindCount =
+                    (root.ContainsKey("sdp") ? 1 : 0) +
+                    (root.ContainsKey("ice") ? 1 : 0);
+                if (signalKindCount != 1)
                 {
-                    var type = (RTCSdpType)Enum.Parse(typeof(RTCSdpType), jobj["sdp"]!["type"]!.ToString());
-
-                    // offer 수신 시에만 PeerConnection 재초기화 (재연결 지원)
-                    if (type == RTCSdpType.offer)
-                    {
-                        // 비밀번호 검증
-                        if (_password != null)
-                        {
-                            string? receivedPwd = jobj["password"]?.ToString();
-                            if (receivedPwd != _password)
-                            {
-                                Console.WriteLine($"[WebRTC] Password rejected from {from}");
-                                OnSignalReady?.Invoke(from, new { rejected = true, reason = "invalid_password" });
-                                return;
-                            }
-                            Console.WriteLine($"[WebRTC] Password accepted from {from}");
-                        }
-
-                        EnsureInitialized(from);
-                    }
-
-                    var sdpStr = jobj["sdp"]!["sdp"]!.ToString();
-                    var result = _peerConnection!.setRemoteDescription(new RTCSessionDescriptionInit
-                    {
-                        type = type,
-                        sdp = sdpStr
-                    });
-
-                    if (result != SetDescriptionResultEnum.OK)
-                    {
-                        Console.WriteLine($"[WebRTC] Failed to set remote description: {result}");
-                        return;
-                    }
-
-                    Console.WriteLine($"[WebRTC] Remote description set ({type})");
-
-                    if (type == RTCSdpType.offer)
-                    {
-                        var answer = _peerConnection.createAnswer();
-                        await _peerConnection.setLocalDescription(answer);
-                        OnSignalReady?.Invoke(from, new { 
-                            sdp = new { 
-                                sdp = answer.sdp, 
-                                type = answer.type.ToString().ToLower() 
-                            } 
-                        });
-                        Console.WriteLine("[WebRTC] Answer sent");
-                    }
+                    Console.WriteLine(
+                        "[WebRTC] Ignored signal without exactly one body");
+                    return;
                 }
-                else if (jobj.ContainsKey("ice"))
+
+                if (root["sdp"] is JObject sdp)
                 {
-                    // ICE candidate는 기존 연결에 추가만 (연결 재초기화 안 함)
-                    if (_peerConnection == null)
+                    long generation =
+                        root["connectionGeneration"]?.Type ==
+                            JTokenType.Integer
+                            ? root.Value<long>("connectionGeneration")
+                            : 0;
+                    if (generation <= 0)
                     {
-                        Console.WriteLine("[WebRTC] ICE candidate received but no PeerConnection, ignoring.");
+                        Console.WriteLine(
+                            "[WebRTC] Ignored offer without a valid generation");
                         return;
                     }
 
-                    var candidate = jobj["ice"]!["candidate"]!.ToString();
-                    var sdpMid = jobj["ice"]!["sdpMid"]?.ToString();
-                    var sdpMLineIndex = (ushort)(jobj["ice"]!["sdpMLineIndex"] ?? 0);
-
-                    _peerConnection.addIceCandidate(new RTCIceCandidateInit
+                    if (sdp["type"]?.Type != JTokenType.String ||
+                        !string.Equals(
+                            sdp.Value<string>("type"),
+                            "offer",
+                            StringComparison.Ordinal))
                     {
-                        candidate = candidate,
-                        sdpMid = sdpMid,
-                        sdpMLineIndex = sdpMLineIndex
+                        RejectSignal(
+                            from,
+                            "invalid_sdp_type",
+                            generation);
+                        return;
+                    }
+
+                    var offerSdp =
+                        sdp["sdp"]?.Type == JTokenType.String
+                            ? sdp.Value<string>("sdp")
+                            : null;
+                    if (string.IsNullOrWhiteSpace(offerSdp) ||
+                        offerSdp.Length > 1024 * 1024)
+                    {
+                        RejectSignal(from, "invalid_offer", generation);
+                        return;
+                    }
+
+                    if (_peerConnection?.connectionState is
+                            RTCPeerConnectionState.connecting or
+                            RTCPeerConnectionState.connected or
+                            RTCPeerConnectionState.disconnected)
+                    {
+                        RejectSignal(from, "control_busy", generation);
+                        return;
+                    }
+
+                    string? suppliedPassword =
+                        root["password"]?.Type == JTokenType.String
+                            ? root.Value<string>("password")
+                            : null;
+                    if (_password != null &&
+                        (suppliedPassword == null ||
+                         suppliedPassword.Length > 1024 ||
+                         !FixedTimeEquals(
+                             _password,
+                             suppliedPassword)))
+                    {
+                        RejectSignal(
+                            from,
+                            "invalid_password",
+                            generation);
+                        return;
+                    }
+
+                    var backendStatus = _inputBackend.GetStatus();
+                    if (!backendStatus.IsAvailable)
+                    {
+                        RejectSignal(
+                            from,
+                            "input_backend_unavailable",
+                            generation);
+                        return;
+                    }
+
+                    createdConnection = true;
+                    EnsureInitialized(from, generation);
+                    var connection = _peerConnection ??
+                        throw new InvalidOperationException(
+                            "Peer connection initialization failed.");
+                    var descriptionResult = connection.setRemoteDescription(
+                        new RTCSessionDescriptionInit
+                        {
+                            type = RTCSdpType.offer,
+                            sdp = offerSdp,
+                        });
+                    if (descriptionResult != SetDescriptionResultEnum.OK)
+                    {
+                        ClosePeerConnectionForReplacement();
+                        createdConnection = false;
+                        RejectSignal(
+                            from,
+                            "invalid_remote_description",
+                            generation);
+                        return;
+                    }
+
+                    if (_pendingRemoteIce.Remove(
+                            (from, generation),
+                            out var pendingCandidates))
+                    {
+                        foreach (var pendingCandidate in pendingCandidates)
+                        {
+                            connection.addIceCandidate(pendingCandidate);
+                        }
+                    }
+                    _pendingRemoteIce.Clear();
+
+                    var answer = connection.createAnswer();
+                    await connection.setLocalDescription(answer)
+                        .ConfigureAwait(false);
+                    var session = _controlSession ??
+                        throw new InvalidOperationException(
+                            "Control session initialization failed.");
+                    QueueSignalReady(from, new
+                    {
+                        sdp = new
+                        {
+                            sdp = answer.sdp,
+                            type = "answer",
+                        },
+                        connectionGeneration = generation,
+                        control = new
+                        {
+                            version = RemoteControlProtocol.Version,
+                            token = session.ExportTokenBase64(),
+                        },
                     });
-                    Console.WriteLine($"[WebRTC] ICE candidate added");
+                    Console.WriteLine(
+                        "[WebRTC] Authenticated control offer accepted");
+                    return;
+                }
+
+                if (root["ice"] is JObject ice)
+                {
+                    long generation =
+                        root["connectionGeneration"]?.Type ==
+                            JTokenType.Integer
+                            ? root.Value<long>("connectionGeneration")
+                            : 0;
+                    var candidateText =
+                        ice["candidate"]?.Type == JTokenType.String
+                            ? ice.Value<string>("candidate")
+                            : null;
+                    var sdpMid =
+                        ice["sdpMid"]?.Type == JTokenType.String
+                            ? ice.Value<string>("sdpMid")
+                            : null;
+                    var lineIndex =
+                        ice["sdpMLineIndex"]?.Type == JTokenType.Integer
+                            ? ice.Value<int>("sdpMLineIndex")
+                            : -1;
+                    if (generation <= 0 ||
+                        string.IsNullOrWhiteSpace(candidateText) ||
+                        candidateText.Length > 8192 ||
+                        (sdpMid?.Length ?? 0) > 64 ||
+                        lineIndex is < 0 or > ushort.MaxValue)
+                    {
+                        Console.WriteLine(
+                            "[WebRTC] Rejected malformed ICE candidate");
+                        return;
+                    }
+
+                    var candidate = new RTCIceCandidateInit
+                    {
+                        candidate = candidateText,
+                        sdpMid = sdpMid,
+                        sdpMLineIndex = checked((ushort)lineIndex),
+                    };
+                    if (_peerConnection == null ||
+                        _peerConnection.connectionState is
+                            RTCPeerConnectionState.failed or
+                            RTCPeerConnectionState.closed)
+                    {
+                        QueuePendingRemoteIce(from, generation, candidate);
+                        return;
+                    }
+                    if (generation != _connectionGeneration ||
+                        !string.Equals(
+                            from,
+                            _remoteSocketId,
+                            StringComparison.Ordinal))
+                    {
+                        Console.WriteLine(
+                            "[WebRTC] Ignored stale ICE candidate");
+                        return;
+                    }
+
+                    _peerConnection.addIceCandidate(candidate);
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[WebRTC] Signal Handle Error: {ex.Message}");
+                Console.WriteLine(
+                    $"[WebRTC] Signal handling failed: {ex.GetType().Name}");
+                if (createdConnection)
+                {
+                    ClosePeerConnectionForReplacement();
+                }
+            }
+            finally
+            {
+                _signalGate.Release();
             }
         }
-        /// <summary>
-        /// STA 스레드에서 클립보드에 텍스트를 설정합니다.
-        /// (Host는 콘솔 앱이므로 Clipboard.SetText는 STA 필요)
-        /// </summary>
-        private void SetClipboardOnSta(string text)
+
+        private void QueuePendingRemoteIce(
+            string remoteSocketId,
+            long generation,
+            RTCIceCandidateInit candidate)
         {
-            var thread = new Thread(() =>
+            var key = (remoteSocketId, generation);
+            if (!_pendingRemoteIce.TryGetValue(key, out var candidates))
             {
-                try { System.Windows.Forms.Clipboard.SetText(text); }
-                catch (Exception ex) { Console.WriteLine($"[Clipboard] Set failed: {ex.Message}"); }
-            });
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
+                if (_pendingRemoteIce.Count >= 8)
+                {
+                    Console.WriteLine(
+                        "[WebRTC] Dropped early ICE candidate: queue is full");
+                    return;
+                }
+
+                candidates = [];
+                _pendingRemoteIce.Add(key, candidates);
+            }
+            if (candidates.Count >= 64)
+            {
+                Console.WriteLine(
+                    "[WebRTC] Dropped early ICE candidate: generation limit reached");
+                return;
+            }
+
+            candidates.Add(candidate);
+            Console.WriteLine("[WebRTC] Queued ICE candidate before offer");
         }
 
-        /// <summary>
-        /// STA 스레드에서 클립보드 텍스트를 읽어 변경됐으면 Viewer로 전송합니다.
-        /// </summary>
-        private void PollClipboard(object? _)
+        private void RejectSignal(
+            string remoteSocketId,
+            string reason,
+            long connectionGeneration)
         {
-            if (_viewerInputChannel == null || _viewerInputChannel.readyState != RTCDataChannelState.open)
+            QueueSignalReady(
+                remoteSocketId,
+                new
+                {
+                    rejected = true,
+                    reason,
+                    connectionGeneration,
+                });
+        }
+        private void QueueSignalReady(
+            string remoteSocketId,
+            object signal)
+        {
+            var handlers = OnSignalReady;
+            if (handlers == null)
+            {
                 return;
+            }
 
-            var thread = new Thread(() =>
+            foreach (Func<string, object, Task> handler in
+                     handlers.GetInvocationList())
+            {
+                _ = InvokeSignalHandlerAsync(
+                    handler,
+                    remoteSocketId,
+                    signal);
+            }
+        }
+
+        private static async Task InvokeSignalHandlerAsync(
+            Func<string, object, Task> handler,
+            string remoteSocketId,
+            object signal)
+        {
+            try
+            {
+                await handler(remoteSocketId, signal)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[WebRTC] Signal delivery failed: {ex.GetType().Name}");
+            }
+        }
+
+        private static bool FixedTimeEquals(
+            string expected,
+            string? actual)
+        {
+            if (actual == null)
+            {
+                return false;
+            }
+
+            var expectedBytes = Encoding.UTF8.GetBytes(expected);
+            var actualBytes = Encoding.UTF8.GetBytes(actual);
+            try
+            {
+                return expectedBytes.Length == actualBytes.Length &&
+                    System.Security.Cryptography.CryptographicOperations
+                        .FixedTimeEquals(expectedBytes, actualBytes);
+            }
+            finally
+            {
+                System.Security.Cryptography.CryptographicOperations
+                    .ZeroMemory(expectedBytes);
+                System.Security.Cryptography.CryptographicOperations
+                    .ZeroMemory(actualBytes);
+            }
+        }
+        private bool ApplyClipboardConsent(
+            RTCDataChannel channel,
+            RemoteChannelServerState security,
+            bool enabled)
+        {
+            bool acknowledgementSent;
+            ClipboardMonitoringTransition monitoringTransition;
+            lock (_sessionGate)
+            {
+                if (!ReferenceEquals(_viewerInputChannel, channel) ||
+                    !ReferenceEquals(_inputSecurity, security) ||
+                    !security.IsAuthenticated)
+                {
+                    return false;
+                }
+
+                _clipboardSessionEnabled = enabled;
+                unchecked { _clipboardConsentEpoch++; }
+                _lastClipboardText = null;
+
+                acknowledgementSent = TrySendSecured(
+                    channel,
+                    security,
+                    RemoteClipboardConsentProtocol.Create(enabled));
+                if (!acknowledgementSent)
+                {
+                    _clipboardSessionEnabled = false;
+                    unchecked { _clipboardConsentEpoch++; }
+                    _lastClipboardText = null;
+                }
+
+                monitoringTransition = new ClipboardMonitoringTransition(
+                    _clipboardConsentEpoch,
+                    _clipboardSessionEnabled);
+            }
+
+            ApplyClipboardMonitoringTransition(monitoringTransition);
+            if (!acknowledgementSent)
+            {
+                return false;
+            }
+
+            Console.WriteLine(
+                enabled
+                    ? "[Clipboard] Bidirectional session consent enabled."
+                    : "[Clipboard] Session consent revoked.");
+            return true;
+        }
+
+
+        private bool TryGetClipboardConsentEpoch(
+            RTCDataChannel channel,
+            RemoteChannelServerState security,
+            out long epoch)
+        {
+            lock (_sessionGate)
+            {
+                epoch = _clipboardConsentEpoch;
+                return _clipboardSessionEnabled &&
+                    ReferenceEquals(_viewerInputChannel, channel) &&
+                    ReferenceEquals(_inputSecurity, security) &&
+                    security.IsAuthenticated;
+            }
+        }
+
+        private bool IsClipboardSessionEnabled(
+            RTCDataChannel channel,
+            RemoteChannelServerState security,
+            long expectedEpoch)
+        {
+            lock (_sessionGate)
+            {
+                return _clipboardSessionEnabled &&
+                    _clipboardConsentEpoch == expectedEpoch &&
+                    ReferenceEquals(_viewerInputChannel, channel) &&
+                    ReferenceEquals(_inputSecurity, security) &&
+                    security.IsAuthenticated;
+            }
+        }
+
+        private bool IsClipboardSessionEnabled(
+            RTCPeerConnection connection,
+            RTCDataChannel channel,
+            RemoteChannelServerState security,
+            long expectedEpoch)
+        {
+            lock (_sessionGate)
+            {
+                return _clipboardSessionEnabled &&
+                    _clipboardConsentEpoch == expectedEpoch &&
+                    ReferenceEquals(_peerConnection, connection) &&
+                    ReferenceEquals(_viewerInputChannel, channel) &&
+                    ReferenceEquals(_inputSecurity, security) &&
+                    security.IsAuthenticated;
+            }
+        }
+        private bool TryAcquireClipboardLease(
+            RTCDataChannel channel,
+            RemoteChannelServerState security,
+            long expectedEpoch,
+            out ClipboardSessionLease? lease)
+        {
+            lock (_sessionGate)
+            {
+                if (_disposed ||
+                    !_clipboardSessionEnabled ||
+                    _clipboardConsentEpoch != expectedEpoch ||
+                    !ReferenceEquals(_viewerInputChannel, channel) ||
+                    !ReferenceEquals(_inputSecurity, security) ||
+                    !security.IsAuthenticated)
+                {
+                    lease = null;
+                    return false;
+                }
+
+                _activeClipboardLeases = checked(_activeClipboardLeases + 1);
+                lease = new ClipboardSessionLease(this, expectedEpoch);
+                return true;
+            }
+        }
+
+        private bool TryAcquireClipboardLease(
+            RTCPeerConnection connection,
+            RTCDataChannel channel,
+            RemoteChannelServerState security,
+            long expectedEpoch,
+            out ClipboardSessionLease? lease)
+        {
+            lock (_sessionGate)
+            {
+                if (_disposed ||
+                    !_clipboardSessionEnabled ||
+                    _clipboardConsentEpoch != expectedEpoch ||
+                    !ReferenceEquals(_peerConnection, connection) ||
+                    !ReferenceEquals(_viewerInputChannel, channel) ||
+                    !ReferenceEquals(_inputSecurity, security) ||
+                    !security.IsAuthenticated)
+                {
+                    lease = null;
+                    return false;
+                }
+
+                _activeClipboardLeases = checked(_activeClipboardLeases + 1);
+                lease = new ClipboardSessionLease(this, expectedEpoch);
+                return true;
+            }
+        }
+
+        private void ReleaseClipboardLease(long leaseEpoch)
+        {
+            lock (_sessionGate)
+            {
+                if (_activeClipboardLeases <= 0)
+                {
+                    throw new InvalidOperationException(
+                        "Clipboard session lease accounting underflowed.");
+                }
+
+                _activeClipboardLeases--;
+                _ = leaseEpoch;
+            }
+        }
+
+        private sealed class ClipboardSessionLease : IDisposable
+        {
+            private WebRTCManager? _owner;
+
+            public ClipboardSessionLease(WebRTCManager owner, long epoch)
+            {
+                _owner = owner;
+                Epoch = epoch;
+            }
+
+            public long Epoch { get; }
+
+            public void Dispose()
+            {
+                var owner = Interlocked.Exchange(ref _owner, null);
+                owner?.ReleaseClipboardLease(Epoch);
+            }
+        }
+
+        private void SetClipboardOnSta(
+            string text,
+            RTCDataChannel channel,
+            RemoteChannelServerState security,
+            long consentEpoch)
+        {
+            if (!_clipboardWorker.TryQueueClipboardSet(() =>
+                    ApplyClipboardOnStaWorker(
+                        text,
+                        channel,
+                        security,
+                        consentEpoch)))
+            {
+                Console.WriteLine("[Clipboard] STA worker is stopping.");
+            }
+        }
+
+        private void ApplyClipboardOnStaWorker(
+            string text,
+            RTCDataChannel channel,
+            RemoteChannelServerState security,
+            long consentEpoch)
+        {
+            if (!TryAcquireClipboardLease(
+                    channel,
+                    security,
+                    consentEpoch,
+                    out var lease) ||
+                lease == null)
+            {
+                return;
+            }
+
+            // A lease linearizes this already-accepted operation before a
+            // concurrent revoke without making the transport thread wait for
+            // a potentially slow OS clipboard call. Revocation immediately
+            // prevents every later lease acquisition.
+            using (lease)
             {
                 try
                 {
-                    if (!System.Windows.Forms.Clipboard.ContainsText()) return;
-                    string text = System.Windows.Forms.Clipboard.GetText();
-                    if (string.IsNullOrEmpty(text) || text == _lastClipboardText) return;
-
-                    _lastClipboardText = text;
-                    byte[] textBytes = Encoding.UTF8.GetBytes(text);
-                    byte[] msg = new byte[1 + textBytes.Length];
-                    msg[0] = MSG_CLIPBOARD;
-                    textBytes.CopyTo(msg, 1);
-                    _viewerInputChannel.send(msg);
-                    Console.WriteLine($"[Clipboard] Sent to Viewer ({text.Length} chars)");
+                    System.Windows.Forms.Clipboard.SetText(text);
+                    lock (_sessionGate)
+                    {
+                        if (IsClipboardSessionEnabled(
+                                channel,
+                                security,
+                                consentEpoch))
+                        {
+                            _lastClipboardText = text;
+                        }
+                    }
                 }
-                catch { /* 클립보드 액세스 실패 무시 */ }
-            });
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
+                catch (Exception ex)
+                {
+                    Console.WriteLine(
+                        $"[Clipboard] Set failed: {ex.GetType().Name}");
+                }
+            }
         }
 
         /// <summary>
-        /// 클립보드 모니터링 시작 (2초 간격 폴링)
+        /// Coalesces timer ticks onto the one background STA clipboard worker.
         /// </summary>
-        private void StartClipboardMonitoring()
+        private void PollClipboard(object? _)
+        {
+            _ = _clipboardWorker.TryQueuePoll(PollClipboardOnStaWorker);
+        }
+
+        private void PollClipboardOnStaWorker()
+        {
+            RTCDataChannel? channel;
+            RemoteChannelServerState? security;
+            RTCPeerConnection? connection;
+            long consentEpoch;
+            lock (_sessionGate)
+            {
+                channel = _viewerInputChannel;
+                security = _inputSecurity;
+                connection = _peerConnection;
+                consentEpoch = _clipboardConsentEpoch;
+                if (!_clipboardSessionEnabled)
+                {
+                    return;
+                }
+            }
+
+            if (connection == null ||
+                channel == null ||
+                security == null ||
+                !TryAcquireClipboardLease(
+                    connection,
+                    channel,
+                    security,
+                    consentEpoch,
+                    out var lease) ||
+                lease == null)
+            {
+                return;
+            }
+
+            using (lease)
+            {
+                try
+                {
+                    if (!System.Windows.Forms.Clipboard.ContainsText())
+                    {
+                        return;
+                    }
+
+                    var text = System.Windows.Forms.Clipboard.GetText();
+                    if (string.IsNullOrEmpty(text))
+                    {
+                        return;
+                    }
+
+                    var textBytes = Encoding.UTF8.GetBytes(text);
+                    if (textBytes.Length > 32 * 1024)
+                    {
+                        return;
+                    }
+
+                    var message = new byte[1 + textBytes.Length];
+                    message[0] = MSG_CLIPBOARD;
+                    textBytes.CopyTo(message, 1);
+                    lock (_sessionGate)
+                    {
+                        if (!IsClipboardSessionEnabled(
+                                connection,
+                                channel,
+                                security,
+                                consentEpoch) ||
+                            text == _lastClipboardText)
+                        {
+                            return;
+                        }
+
+                        if (TrySendSecured(channel, security, message))
+                        {
+                            _lastClipboardText = text;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Clipboard contention and disconnect races are non-fatal.
+                }
+            }
+        }
+
+        private void ApplyClipboardMonitoringTransition(
+            ClipboardMonitoringTransition transition)
+        {
+            lock (_sessionGate)
+            {
+                // Consent callbacks may complete out of order. Only the
+                // transition matching the current epoch may touch the timer.
+                if (!ClipboardMonitoringTransitionPolicy.IsCurrent(
+                        _clipboardConsentEpoch,
+                        _clipboardSessionEnabled,
+                        transition))
+                {
+                    return;
+                }
+
+                if (transition.Enabled)
+                {
+                    StartClipboardMonitoringLocked();
+                }
+                else
+                {
+                    StopClipboardMonitoringLocked();
+                }
+            }
+        }
+
+        private void StartClipboardMonitoringLocked()
         {
             _clipboardTimer?.Dispose();
-            _clipboardTimer = new System.Threading.Timer(PollClipboard, null, 2000, 2000);
+            _clipboardTimer = new System.Threading.Timer(
+                PollClipboard,
+                null,
+                2000,
+                2000);
             Console.WriteLine("[Clipboard] Monitoring started");
         }
 
+        private void StopClipboardMonitoring()
+        {
+            lock (_sessionGate)
+            {
+                StopClipboardMonitoringLocked();
+            }
+        }
+
+        private void StopClipboardMonitoringLocked()
+        {
+            _clipboardTimer?.Dispose();
+            _clipboardTimer = null;
+            _clipboardWorker.CancelPending();
+        }
         public void Dispose()
         {
-            _inputBackend.ReleaseAllInputs();
-            _isStreaming = false;
-            _clipboardTimer?.Dispose();
-            _videoEncoder?.Dispose();
-            _peerConnection?.Close("disposed");
-            _inputBackend.Dispose();
+            _signalGate.Wait();
+            try
+            {
+                if (_disposed)
+                {
+                    // A previous bounded worker join may have timed out.
+                    _clipboardWorker.Dispose();
+                    return;
+                }
+
+                _disposed = true;
+                try
+                {
+                    ClosePeerConnectionForReplacement();
+                    _inputBackend.Dispose();
+                }
+                finally
+                {
+                    _clipboardWorker.Dispose();
+                }
+            }
+            finally
+            {
+                _signalGate.Release();
+            }
         }
     }
 }

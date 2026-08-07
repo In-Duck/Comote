@@ -1,4 +1,4 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Media;
 
 namespace Viewer
@@ -25,7 +25,9 @@ namespace Viewer
                 {
                     if (_receiver != null)
                     {
-                        await _receiver.HandleSignalAsync(signal);
+                        await _receiver.HandleSignalAsync(
+                            "lan-host",
+                            signal);
                     }
                 };
                 _lanSignal.Disconnected += reason =>

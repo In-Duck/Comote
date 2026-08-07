@@ -1,6 +1,7 @@
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using Comote.Input;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -8,11 +9,13 @@ namespace Viewer
 {
     internal sealed class LanSignalClient : IDisposable
     {
-        private readonly SemaphoreSlim _writeLock = new(1, 1);
+        private const string SecureContext = "comote-direct-signal-v1";
+        private static readonly TimeSpan ConnectionTimeout =
+            TimeSpan.FromSeconds(15);
+
         private readonly CancellationTokenSource _lifetime = new();
         private TcpClient? _client;
-        private StreamReader? _reader;
-        private StreamWriter? _writer;
+        private SecurePskChannel? _channel;
 
         public event Func<object, Task>? SignalReceived;
         public event Action<string>? Disconnected;
@@ -20,114 +23,100 @@ namespace Viewer
         public async Task ConnectAsync(
             string host,
             int port,
-            string password,
+            string accessKey,
             CancellationToken cancellationToken = default)
         {
-            _client = new TcpClient { NoDelay = true };
-            await _client.ConnectAsync(host, port, cancellationToken);
-            var stream = _client.GetStream();
-            _reader = new StreamReader(
-                stream,
-                Encoding.UTF8,
-                false,
-                4096,
-                leaveOpen: true);
-            _writer = new StreamWriter(
-                stream,
-                new UTF8Encoding(false),
-                4096,
-                leaveOpen: true)
+            if (!ComoteAccessKey.TryParse(accessKey, out var key))
             {
-                AutoFlush = true,
-            };
+                throw new ArgumentException(
+                    "접속 키는 CMT1 형식의 256비트 키여야 합니다.",
+                    nameof(accessKey));
+            }
 
-            var challengeLine =
-                await _reader.ReadLineAsync(cancellationToken);
-            var challenge = JObject.Parse(
-                challengeLine ??
-                throw new IOException("LAN 인증 응답이 없습니다."));
-            if (challenge.Value<string>("type") != "challenge")
-                throw new IOException("LAN 인증 형식이 올바르지 않습니다.");
-
-            var nonce = Convert.FromBase64String(
-                challenge.Value<string>("nonce") ?? "");
-            var passwordBytes = Encoding.UTF8.GetBytes(password);
-            byte[] proof;
+            using var linked =
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken,
+                    _lifetime.Token);
             try
             {
-                using var hmac = new HMACSHA256(passwordBytes);
-                proof = hmac.ComputeHash(nonce);
+                linked.CancelAfter(ConnectionTimeout);
+                _client = new TcpClient { NoDelay = true };
+                await _client.ConnectAsync(host, port, linked.Token);
+                var channel =
+                    await SecurePskChannel.AuthenticateClientAsync(
+                        _client.GetStream(),
+                        key,
+                        SecureContext,
+                        linked.Token);
+                _channel = channel;
+                _ = ReadLoopAsync(channel, _lifetime.Token);
+            }
+            catch
+            {
+                _client?.Dispose();
+                _client = null;
+                throw;
             }
             finally
             {
-                CryptographicOperations.ZeroMemory(passwordBytes);
+                CryptographicOperations.ZeroMemory(key);
             }
-
-            await _writer.WriteLineAsync(
-                new JObject
-                {
-                    ["type"] = "auth",
-                    ["proof"] = Convert.ToBase64String(proof),
-                }.ToString(Formatting.None));
-            CryptographicOperations.ZeroMemory(proof);
-
-            var resultLine = await _reader.ReadLineAsync(cancellationToken);
-            var result = JObject.Parse(
-                resultLine ??
-                throw new IOException("LAN 인증 결과가 없습니다."));
-            if (result.Value<string>("type") != "auth_result" ||
-                result.Value<bool?>("ok") != true)
-            {
-                throw new UnauthorizedAccessException(
-                    "LAN 테스트 암호가 일치하지 않습니다.");
-            }
-
-            _ = ReadLoopAsync(_lifetime.Token);
         }
 
         public async Task SendSignalAsync(object signal)
         {
-            var writer = _writer ??
+            var channel = _channel ??
                 throw new InvalidOperationException(
-                    "LAN Host에 연결되지 않았습니다.");
-            var envelope = new JObject
-            {
-                ["type"] = "signal",
-                ["payload"] = JToken.FromObject(signal),
-            };
-
-            await _writeLock.WaitAsync();
+                    "Direct Host에 연결되지 않았습니다.");
+            var encoded = Encoding.UTF8.GetBytes(
+                new JObject
+                {
+                    ["type"] = "signal",
+                    ["payload"] = JToken.FromObject(signal),
+                }.ToString(Formatting.None));
             try
             {
-                await writer.WriteLineAsync(
-                    envelope.ToString(Formatting.None));
-                await writer.FlushAsync();
+                await channel.SendAsync(encoded);
             }
             finally
             {
-                _writeLock.Release();
+                CryptographicOperations.ZeroMemory(encoded);
             }
         }
 
-        private async Task ReadLoopAsync(CancellationToken cancellationToken)
+        private async Task ReadLoopAsync(
+            SecurePskChannel channel,
+            CancellationToken cancellationToken)
         {
             try
             {
                 while (!cancellationToken.IsCancellationRequested)
                 {
-                    var line = await _reader!.ReadLineAsync(cancellationToken);
-                    if (line == null) break;
-
-                    var message = JObject.Parse(line);
-                    if (message.Value<string>("type") != "signal") continue;
-                    var payload = message["payload"];
-                    if (payload != null && SignalReceived != null)
+                    var encoded =
+                        await channel.ReceiveAsync(cancellationToken);
+                    JObject message;
+                    try
                     {
-                        await SignalReceived(payload);
+                        message = StrictJsonObject.Parse(encoded);
+                    }
+                    finally
+                    {
+                        CryptographicOperations.ZeroMemory(encoded);
+                    }
+
+                    if (message["type"]?.Type != JTokenType.String ||
+                        message.Value<string>("type") != "signal" ||
+                        message.Properties().Count() != 2 ||
+                        message["payload"] is not JObject)
+                    {
+                        throw new IOException(
+                            "Direct signaling envelope is invalid.");
+                    }
+                    if (SignalReceived != null)
+                    {
+                        await SignalReceived(message["payload"]!);
                     }
                 }
-
-                Disconnected?.Invoke("Host가 연결을 종료했습니다.");
             }
             catch (OperationCanceledException)
                 when (cancellationToken.IsCancellationRequested)
@@ -137,15 +126,18 @@ namespace Viewer
             {
                 Disconnected?.Invoke(ex.Message);
             }
+            finally
+            {
+                _channel = null;
+                await channel.DisposeAsync();
+            }
         }
 
         public void Dispose()
         {
             _lifetime.Cancel();
-            _reader?.Dispose();
-            _writer?.Dispose();
             _client?.Dispose();
-            _writeLock.Dispose();
+            _client = null;
             _lifetime.Dispose();
         }
     }

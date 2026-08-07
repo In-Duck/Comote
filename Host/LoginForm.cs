@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Drawing;
 using System.Net.Http;
@@ -317,7 +317,6 @@ namespace Host
                 {
                     UserCredentialStore.Delete();
                     RefreshToken = "";
-                    ServiceCredentialStore.Delete();
                 }
 
                 DialogResult = DialogResult.OK;
@@ -382,3 +381,4 @@ namespace Host
         }
     }
 }
+

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -22,7 +22,6 @@ namespace Viewer
         // Settings Controls
         private ComboBox _frameRateCombo = null!;
         private ComboBox _qualityCombo = null!;
-        private CheckBox _clipboardCheck = null!;
         private CheckBox _alwaysOnTopCheck = null!;
         private CheckBox _rememberSizeCheck = null!;
         private ComboBox _wheelCombo = null!;
@@ -170,9 +169,6 @@ namespace Viewer
             qualRow.Children.Add(new TextBlock { Text = "※ 품질이 낮을수록 부드러운 제어 가능", FontSize = 10, Foreground = new SolidColorBrush(Color.FromRgb(200, 160, 60)), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) });
             contentStack.Children.Add(qualRow);
 
-            _clipboardCheck = CreateCheckBox("1:1 제어창 오픈시 Text 클립보드 자동 복사", _settings.AutoClipboard);
-            contentStack.Children.Add(_clipboardCheck);
-
             _alwaysOnTopCheck = CreateCheckBox("원격제어 창 최상단 유지", _settings.AlwaysOnTop);
             contentStack.Children.Add(_alwaysOnTopCheck);
 
@@ -222,11 +218,13 @@ namespace Viewer
             stack.Children.Add(CreateSectionHeader("Open Source Licenses"));
             
             var licenseText = 
-@"FFmpeg (LGPL v2.1+)
-This software uses code of FFmpeg licensed under the LGPLv2.1 and its source can be downloaded at ffmpeg.org.
+@"FFmpeg native libraries n8.1.2-32-gcfa62de001 (GNU LGPL v3)
+SIPSorceryMedia.FFmpeg 10.0.12 (LGPL-2.1-only)
+FFmpeg.AutoGen 8.1.0 (MIT License)
+Licenses, exact source revisions, hashes, and relinking instructions are included with Comote.
 
 NAudio (MIT License)
-SIPSorcery (BSD License)
+SIPSorcery core (BSD-3-Clause)
 Concentus (ISC License)
 Newtonsoft.Json (MIT License)";
 
@@ -250,7 +248,6 @@ Newtonsoft.Json (MIT License)";
         {
             if (_frameRateCombo != null) _settings.FrameRate = _frameRateCombo.SelectedItem?.ToString() ?? "상";
             if (_qualityCombo != null) _settings.Quality = _qualityCombo.SelectedItem?.ToString() ?? "상";
-            if (_clipboardCheck != null) _settings.AutoClipboard = _clipboardCheck.IsChecked == true;
             if (_alwaysOnTopCheck != null) _settings.AlwaysOnTop = _alwaysOnTopCheck.IsChecked == true;
             if (_rememberSizeCheck != null) _settings.RememberWindowSize = _rememberSizeCheck.IsChecked == true;
             if (_wheelCombo != null) _settings.WheelSensitivity = _wheelCombo.SelectedItem?.ToString() ?? "보통";

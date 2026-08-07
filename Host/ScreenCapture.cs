@@ -92,8 +92,17 @@ namespace Host
                 DXGI.CreateDXGIFactory1(out IDXGIFactory1? factory).CheckError();
                 factory!.EnumAdapters1((uint)_adapterIndex, out IDXGIAdapter1 adapter).CheckError();
                 
-                D3D11.D3D11CreateDevice(adapter, DriverType.Unknown, DeviceCreationFlags.BgraSupport, null, out _device).CheckError();
-                _context = _device.ImmediateContext;
+                D3D11.D3D11CreateDevice(
+                    adapter,
+                    DriverType.Unknown,
+                    DeviceCreationFlags.BgraSupport,
+                    null,
+                    out var device).CheckError();
+                _device = device ?? throw new InvalidOperationException(
+                    "D3D11 device creation returned no device.");
+                _context = _device.ImmediateContext ??
+                    throw new InvalidOperationException(
+                        "D3D11 device creation returned no immediate context.");
 
                 adapter.EnumOutputs((uint)_outputIndex, out IDXGIOutput output).CheckError();
                 using var output1 = output.QueryInterface<IDXGIOutput1>();

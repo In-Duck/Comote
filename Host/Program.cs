@@ -1,21 +1,15 @@
-﻿using System;
-using System.Diagnostics;
+using System;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using SIPSorceryMedia.FFmpeg;
 
 namespace Host
 {
     internal static partial class Program
     {
-        private const string ServiceName = "KymoteHost";
-
         [DllImport("kernel32.dll")]
         private static extern IntPtr GetStdHandle(int nStdHandle);
 
@@ -28,16 +22,11 @@ namespace Host
         [STAThread]
         private static async Task Main(string[] args)
         {
-            if (args.Length > 0 && args[0].Equals("--install", StringComparison.OrdinalIgnoreCase))
+            if (!Environment.UserInteractive)
             {
-                InstallService();
-                return;
-            }
-
-            if (args.Length > 0 && args[0].Equals("--uninstall", StringComparison.OrdinalIgnoreCase))
-            {
-                UninstallService();
-                return;
+                throw new InvalidOperationException(
+                    "Comote Client must run in an interactive user session. " +
+                    "Only Comote.InputBroker may run as a Windows service.");
             }
 
             var listenDirect = Array.Exists(
@@ -62,13 +51,8 @@ namespace Host
                 return;
             }
 
-            var forceNoGui = Array.Exists(
-                args,
-                argument => argument.Equals("--nogui", StringComparison.OrdinalIgnoreCase));
-            var isService = !Environment.UserInteractive || forceNoGui;
-
-            await AutoUpdater.CheckAndApplyUpdate(isService);
-            ConfigureConsole(isService);
+            await AutoUpdater.CheckAndApplyUpdate(false);
+            ConfigureConsole(false);
 
             var appSettings = AppSettings.Load();
             var configurationErrors = appSettings.GetConfigurationErrors();
@@ -77,48 +61,28 @@ namespace Host
                 Console.WriteLine(
                     "[Settings] Missing or invalid values: " +
                     string.Join(", ", configurationErrors));
-                if (!isService)
-                {
-                    MessageBox.Show(
-                        "서버 설정이 필요합니다.\n" +
-                        string.Join("\n", configurationErrors) +
-                        $"\n\n설정 파일: {AppSettings.SettingsFilePath}",
-                        "Comote Host 설정",
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning);
-                }
+                MessageBox.Show(
+                    "Comote Client 설정이 필요합니다.\n" +
+                    string.Join("\n", configurationErrors) +
+                    $"\n\n설정 파일: {AppSettings.SettingsFilePath}",
+                    "Comote Client 설정",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
                 return;
             }
 
-            var auth = isService
-                ? await AuthenticateServiceAsync(appSettings)
-                : AuthenticateInteractive(appSettings);
+            var auth = AuthenticateInteractive(appSettings);
             if (auth == null) return;
 
             var (accessToken, userId, userEmail) = auth.Value;
             Console.WriteLine($"[Auth] Authenticated: {userEmail}");
 
-            string hostName;
-            string? password;
-            int adapterIndex;
-            int outputIndex;
-
-            if (isService)
-            {
-                hostName = appSettings.DefaultHostName ?? Environment.MachineName;
-                password = appSettings.DefaultPassword;
-                adapterIndex = 0;
-                outputIndex = 0;
-            }
-            else
-            {
-                using var setupForm = new SetupForm();
-                if (setupForm.ShowDialog() != DialogResult.OK) return;
-                hostName = setupForm.HostName;
-                password = setupForm.Password;
-                adapterIndex = setupForm.SelectedAdapterIndex;
-                outputIndex = setupForm.SelectedOutputIndex;
-            }
+            using var setupForm = new SetupForm();
+            if (setupForm.ShowDialog() != DialogResult.OK) return;
+            var hostName = setupForm.HostName;
+            var password = setupForm.Password;
+            var adapterIndex = setupForm.SelectedAdapterIndex;
+            var outputIndex = setupForm.SelectedOutputIndex;
 
             Console.OutputEncoding = Encoding.UTF8;
             var ffmpegPath = FFmpegExtractor.ExtractFFmpeg();
@@ -140,7 +104,15 @@ namespace Host
                 appSettings.SupabaseUrl,
                 appSettings.SupabaseAnonKey,
                 userId);
-            var webRtc = new WebRTCManager(capture, password);
+            var webRtc = new WebRTCManager(
+                capture,
+                password,
+                InputBackendFactory.Create(
+                    args,
+                    capture.Left,
+                    capture.Top,
+                    capture.Width,
+                    capture.Height));
 
             signaling.OnSignalReceived +=
                 async (from, signal) => await webRtc.HandleSignalAsync(from, signal);
@@ -161,70 +133,10 @@ namespace Host
             using var loginForm = new LoginForm(settings);
             if (loginForm.ShowDialog() != DialogResult.OK) return null;
 
-            if (!string.IsNullOrWhiteSpace(loginForm.RefreshToken))
-            {
-                ServiceCredentialStore.Save(loginForm.RefreshToken);
-            }
-
             return (
                 loginForm.AccessToken,
                 loginForm.UserId,
                 loginForm.UserEmail);
-        }
-
-        private static async Task<(string AccessToken, string UserId, string UserEmail)?>
-            AuthenticateServiceAsync(AppSettings settings)
-        {
-            if (!ServiceCredentialStore.TryLoad(out var refreshToken))
-            {
-                Console.WriteLine(
-                    "[ServiceAuth] No device refresh token. " +
-                    "Run Host as administrator and sign in once.");
-                return null;
-            }
-
-            try
-            {
-                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-                var url =
-                    $"{settings.SupabaseUrl.TrimEnd('/')}/auth/v1/token?grant_type=refresh_token";
-                using var content = new StringContent(
-                    JsonConvert.SerializeObject(new { refresh_token = refreshToken }),
-                    Encoding.UTF8,
-                    "application/json");
-                client.DefaultRequestHeaders.Add("apikey", settings.SupabaseAnonKey);
-
-                using var response = await client.PostAsync(url, content);
-                var responseBody = await response.Content.ReadAsStringAsync();
-                if (!response.IsSuccessStatusCode)
-                {
-                    Console.WriteLine($"[ServiceAuth] Refresh failed: {response.StatusCode}");
-                    return null;
-                }
-
-                var json = JObject.Parse(responseBody);
-                var accessToken = json.Value<string>("access_token");
-                var nextRefreshToken = json.Value<string>("refresh_token");
-                var userId = json["user"]?.Value<string>("id");
-                var email = json["user"]?.Value<string>("email") ?? "service";
-
-                if (
-                    string.IsNullOrWhiteSpace(accessToken) ||
-                    string.IsNullOrWhiteSpace(userId))
-                {
-                    return null;
-                }
-
-                if (!string.IsNullOrWhiteSpace(nextRefreshToken))
-                    ServiceCredentialStore.Save(nextRefreshToken);
-
-                return (accessToken, userId, email);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[ServiceAuth] Refresh error: {ex.Message}");
-                return null;
-            }
         }
 
         private static string ResolveHostId(AppSettings settings)
@@ -239,22 +151,28 @@ namespace Host
 
         private static void ConfigureConsole(bool isService)
         {
-            if (!isService)
+            if (isService)
             {
-                try
-                {
-                    Console.Title = "Comote Host";
-                    Console.BackgroundColor = ConsoleColor.Black;
-                    Console.ForegroundColor = ConsoleColor.DarkYellow;
-                    Console.Clear();
-                    Console.WriteLine("==============================================");
-                    Console.WriteLine("          COMOTE HOST v1.3.0");
-                    Console.WriteLine("==============================================");
-                }
-                catch
-                {
-                    // A console is optional for GUI mode.
-                }
+                throw new InvalidOperationException(
+                    "Comote Client cannot run its capture or network stack as a service.");
+            }
+
+            try
+            {
+                Console.Title = "Comote Client";
+                Console.BackgroundColor = ConsoleColor.Black;
+                Console.ForegroundColor = ConsoleColor.DarkYellow;
+                Console.Clear();
+                Console.WriteLine("==============================================");
+                var version =
+                    typeof(Program).Assembly.GetName().Version?.ToString() ??
+                    "unknown";
+                Console.WriteLine($"          COMOTE CLIENT {version}");
+                Console.WriteLine("==============================================");
+            }
+            catch
+            {
+                // A console is optional for GUI mode.
             }
 
             var handle = GetStdHandle(-10);
@@ -262,39 +180,6 @@ namespace Host
             {
                 SetConsoleMode(handle, mode | 0x0040u | 0x0080u);
             }
-        }
-
-        private static void InstallService()
-        {
-            var executablePath =
-                Process.GetCurrentProcess().MainModule?.FileName ?? "";
-            if (string.IsNullOrWhiteSpace(executablePath)) return;
-
-            RunServiceControl(
-                $"create {ServiceName} binPath= \"\\\"{executablePath}\\\" --nogui\" " +
-                "start= auto DisplayName= \"Comote Host Service\"");
-            RunServiceControl(
-                $"description {ServiceName} \"Comote Remote Control Host Service\"");
-            RunServiceControl($"start {ServiceName}");
-        }
-
-        private static void UninstallService()
-        {
-            RunServiceControl($"stop {ServiceName}");
-            RunServiceControl($"delete {ServiceName}");
-        }
-
-        private static void RunServiceControl(string arguments)
-        {
-            using var process = Process.Start(
-                new ProcessStartInfo
-                {
-                    FileName = "sc.exe",
-                    Arguments = arguments,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                });
-            process?.WaitForExit();
         }
     }
 }

@@ -9,7 +9,6 @@ namespace Viewer
     {
         public string FrameRate { get; set; } = "상";
         public string Quality { get; set; } = "상";
-        public bool AutoClipboard { get; set; } = true;
         public bool AlwaysOnTop { get; set; }
         public bool RememberWindowSize { get; set; } = true;
         public string WheelSensitivity { get; set; } = "보통";
@@ -146,3 +145,4 @@ namespace Viewer
         }
     }
 }
+

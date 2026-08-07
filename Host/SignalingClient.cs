@@ -20,7 +20,7 @@ namespace Host
         // 소켓 고갈 방지를 위해 static HttpClient 사용 (앱 수명 동안 재사용)
         private static readonly HttpClient _httpClient = new HttpClient();
 
-        private Pusher _pusher;
+        private Pusher? _pusher;
         private string _appKey;
         private string _cluster;
         private string _hostId;
@@ -38,7 +38,7 @@ namespace Host
         private readonly CancellationTokenSource _lifetimeCts = new();
         private ScreenCapture? _capture;
 
-        public event Action<string, object> OnSignalReceived;
+        public event Func<string, object, Task>? OnSignalReceived;
 
         public SignalingClient(string appKey, string cluster, string webAuthUrl, string accessToken,
             string hostId, string? hostName = null, string? resolution = null,
@@ -69,7 +69,7 @@ namespace Host
             Console.WriteLine("[Signaling] Connecting to Pusher...");
 
             // Pusher 초기화 (Private 채널 전용, Presence 채널 미사용)
-            _pusher = new Pusher(_appKey, new PusherOptions
+            var pusher = new Pusher(_appKey, new PusherOptions
             {
                 Cluster = _cluster,
                 Encrypted = true,
@@ -78,32 +78,37 @@ namespace Host
                     AuthenticationHeader = new AuthenticationHeaderValue("Bearer", _accessToken)
                 }
             });
+            _pusher = pusher;
 
-            _pusher.Connected += (s) => {
+            pusher.Connected += (s) => {
                 Console.WriteLine("[Signaling] Pusher Connected (Private Channel Only)");
             };
-            _pusher.Error += (s, e) => {
+            pusher.Error += (s, e) => {
                 Console.WriteLine($"[Signaling] Pusher Connection Error: {e.Message}");
             };
-            _pusher.ConnectionStateChanged += (s, state) => {
+            pusher.ConnectionStateChanged += (s, state) => {
                 Console.WriteLine($"[Signaling] Connection State: {state}");
             };
 
-            await _pusher.ConnectAsync();
+            await pusher.ConnectAsync();
 
             // Private 채널만 구독 (시그널링 전용)
             Console.WriteLine($"[Signaling] Subscribing to private-control-{_hostId}...");
-            var privateChannel = await _pusher.SubscribeAsync($"private-control-{_hostId}");
+            var privateChannel = await pusher.SubscribeAsync($"private-control-{_hostId}");
             privateChannel.Bind("pusher:subscription_succeeded", (PusherEvent eventData) => {
                 Console.WriteLine($"[Signaling] Subscribed to private-control-{_hostId} successfully");
             });
             privateChannel.Bind("signal", (PusherEvent eventData) =>
             {
                 try {
-                    var data = JsonConvert.DeserializeObject<dynamic>(eventData.Data);
-                    string from = data.from;
-                    object signal = data.signal;
-                    OnSignalReceived?.Invoke(from, signal);
+                    var data = Newtonsoft.Json.Linq.JObject.Parse(eventData.Data);
+                    var from = data.Value<string>("from");
+                    var signal = data["signal"];
+                    if (string.IsNullOrWhiteSpace(from) || signal == null)
+                    {
+                        throw new JsonException("Signal sender or payload is missing.");
+                    }
+                    QueueSignalReceived(from, signal.DeepClone());
                 } catch(Exception ex) { Console.WriteLine("[Signaling] Signal parse error: " + ex.Message); }
             });
 
@@ -113,6 +118,37 @@ namespace Host
                 // 최초 즉시 실행 + 이후 30초 간격
                 _ = RunHeartbeatLoopAsync(_lifetimeCts.Token);
                 Console.WriteLine("[Signaling] Supabase heartbeat started (30s interval)");
+            }
+        }
+
+        private void QueueSignalReceived(string from, object signal)
+        {
+            var handlers = OnSignalReceived;
+            if (handlers == null)
+            {
+                return;
+            }
+
+            foreach (Func<string, object, Task> handler in
+                     handlers.GetInvocationList())
+            {
+                _ = InvokeSignalHandlerAsync(handler, from, signal);
+            }
+        }
+
+        private static async Task InvokeSignalHandlerAsync(
+            Func<string, object, Task> handler,
+            string from,
+            object signal)
+        {
+            try
+            {
+                await handler(from, signal).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[Signaling] Signal handler failed: {ex.GetType().Name}");
             }
         }
 

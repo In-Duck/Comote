@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using Comote.Input;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -9,15 +10,23 @@ namespace Host
 {
     internal sealed class LanSignalServer : IDisposable
     {
-        private readonly TcpListener _listener;
-        private readonly byte[] _passwordBytes;
-        private readonly SemaphoreSlim _writeLock = new(1, 1);
-        private StreamWriter? _writer;
+        private const string SecureContext = "comote-direct-signal-v1";
+        private static readonly TimeSpan AuthenticationTimeout =
+            TimeSpan.FromSeconds(15);
 
-        public LanSignalServer(int port, string password)
+        private readonly TcpListener _listener;
+        private readonly byte[] _accessKey;
+        private SecurePskChannel? _channel;
+
+        public LanSignalServer(int port, string accessKey)
         {
             _listener = new TcpListener(IPAddress.Any, port);
-            _passwordBytes = Encoding.UTF8.GetBytes(password);
+            if (!ComoteAccessKey.TryParse(accessKey, out _accessKey))
+            {
+                throw new ArgumentException(
+                    "Direct connection access key must be a CMT1 256-bit key.",
+                    nameof(accessKey));
+            }
         }
 
         public async Task RunAsync(
@@ -26,8 +35,8 @@ namespace Host
         {
             _listener.Start();
             Console.WriteLine(
-                $"[LAN] Listening on TCP {_listener.LocalEndpoint}. " +
-                "Media and input use encrypted WebRTC after signaling.");
+                $"[Direct] Listening on TCP {_listener.LocalEndpoint}. " +
+                "Signaling is mutually authenticated and encrypted.");
 
             while (!cancellationToken.IsCancellationRequested)
             {
@@ -35,7 +44,8 @@ namespace Host
                     await _listener.AcceptTcpClientAsync(cancellationToken);
                 client.NoDelay = true;
                 Console.WriteLine(
-                    $"[LAN] Manager connected: {client.Client.RemoteEndPoint}");
+                    $"[Direct] Manager connected: " +
+                    $"{client.Client.RemoteEndPoint}");
 
                 try
                 {
@@ -51,37 +61,26 @@ namespace Host
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[LAN] Connection ended: {ex.Message}");
+                    Console.WriteLine(
+                        $"[Direct] Connection ended: {ex.Message}");
                 }
                 finally
                 {
-                    _writer = null;
+                    _channel = null;
                 }
             }
         }
 
         public async Task SendSignalAsync(object signal)
         {
-            var writer = _writer;
-            if (writer == null) return;
+            var channel = _channel;
+            if (channel == null) return;
 
-            var envelope = new JObject
+            await SendAsync(channel, new JObject
             {
                 ["type"] = "signal",
                 ["payload"] = JToken.FromObject(signal),
-            };
-
-            await _writeLock.WaitAsync();
-            try
-            {
-                await writer.WriteLineAsync(
-                    envelope.ToString(Formatting.None));
-                await writer.FlushAsync();
-            }
-            finally
-            {
-                _writeLock.Release();
-            }
+            });
         }
 
         private async Task ServeClientAsync(
@@ -89,92 +88,75 @@ namespace Host
             Func<object, Task> onSignal,
             CancellationToken cancellationToken)
         {
-            await using var stream = client.GetStream();
-            using var reader = new StreamReader(
-                stream,
-                Encoding.UTF8,
-                false,
-                4096,
-                leaveOpen: true);
-            await using var writer = new StreamWriter(
-                stream,
-                new UTF8Encoding(false),
-                4096,
-                leaveOpen: true)
-            {
-                AutoFlush = true,
-            };
-
-            var nonce = RandomNumberGenerator.GetBytes(32);
-            await writer.WriteLineAsync(
-                new JObject
-                {
-                    ["type"] = "challenge",
-                    ["nonce"] = Convert.ToBase64String(nonce),
-                }.ToString(Formatting.None));
-
-            var authLine = await reader.ReadLineAsync(cancellationToken);
-            var authenticated = VerifyProof(authLine, nonce);
-            await writer.WriteLineAsync(
-                new JObject
-                {
-                    ["type"] = "auth_result",
-                    ["ok"] = authenticated,
-                }.ToString(Formatting.None));
-
-            if (!authenticated)
-            {
-                Console.WriteLine("[LAN] Authentication rejected.");
-                return;
-            }
-
-            Console.WriteLine("[LAN] Manager authenticated.");
-            _writer = writer;
+            var stream = client.GetStream();
+            using var authenticationTimeout =
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken);
+            authenticationTimeout.CancelAfter(AuthenticationTimeout);
+            await using var channel =
+                await SecurePskChannel.AuthenticateServerAsync(
+                    stream,
+                    _accessKey,
+                    SecureContext,
+                    authenticationTimeout.Token);
+            _channel = channel;
+            Console.WriteLine(
+                "[Direct] Manager mutually authenticated.");
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                var line = await reader.ReadLineAsync(cancellationToken);
-                if (line == null) break;
-
-                var message = JObject.Parse(line);
-                if (message.Value<string>("type") != "signal") continue;
-                var payload = message["payload"];
-                if (payload != null)
+                var message =
+                    await ReceiveAsync(channel, cancellationToken);
+                if (message["type"]?.Type != JTokenType.String ||
+                    message.Value<string>("type") != "signal" ||
+                    message.Properties().Count() != 2 ||
+                    message["payload"] is not JObject)
                 {
-                    await onSignal(payload);
+                    throw new IOException(
+                        "Direct signaling envelope is invalid.");
                 }
+
+                await onSignal(message["payload"]!);
             }
         }
 
-        private bool VerifyProof(string? authLine, byte[] nonce)
+        private static async Task SendAsync(
+            SecurePskChannel channel,
+            JObject message,
+            CancellationToken cancellationToken = default)
         {
-            if (string.IsNullOrWhiteSpace(authLine)) return false;
-
+            var encoded = Encoding.UTF8.GetBytes(
+                message.ToString(Formatting.None));
             try
             {
-                var auth = JObject.Parse(authLine);
-                if (auth.Value<string>("type") != "auth") return false;
-
-                var supplied = Convert.FromBase64String(
-                    auth.Value<string>("proof") ?? "");
-                using var hmac = new HMACSHA256(_passwordBytes);
-                var expected = hmac.ComputeHash(nonce);
-                return CryptographicOperations.FixedTimeEquals(
-                    supplied,
-                    expected);
+                await channel.SendAsync(encoded, cancellationToken);
             }
-            catch
+            finally
             {
-                return false;
+                CryptographicOperations.ZeroMemory(encoded);
+            }
+        }
+
+        private static async Task<JObject> ReceiveAsync(
+            SecurePskChannel channel,
+            CancellationToken cancellationToken)
+        {
+            var encoded = await channel.ReceiveAsync(cancellationToken);
+            try
+            {
+                return StrictJsonObject.Parse(encoded);
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(encoded);
             }
         }
 
         public void Dispose()
         {
-            _writer = null;
+            _channel = null;
             _listener.Stop();
-            _writeLock.Dispose();
-            CryptographicOperations.ZeroMemory(_passwordBytes);
+            CryptographicOperations.ZeroMemory(_accessKey);
         }
     }
 }

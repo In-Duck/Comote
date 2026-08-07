@@ -1,7 +1,11 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <RuntimeFrameworkVersion>10.0.10</RuntimeFrameworkVersion>
+    <TargetLatestRuntimePatch>false</TargetLatestRuntimePatch>
+    <RollForward>Disable</RollForward>
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
     <StartupObject>Viewer.Program</StartupObject>
@@ -13,14 +17,20 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.10" />
     <PackageReference Include="Concentus" Version="2.2.2" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="PusherClient" Version="2.3.0-beta" />
-    <PackageReference Include="SIPSorcery" Version="10.0.3" />
-    <PackageReference Include="SIPSorceryMedia.FFmpeg" Version="8.0.12" />
+    <PackageReference Include="SIPSorcery" Version="10.0.12" />
+    <PackageReference Include="SIPSorceryMedia.FFmpeg" Version="10.0.12" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="Supabase" Version="1.1.1" />
     <PackageReference Include="Supabase.Postgrest" Version="4.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\InputCore\Comote.InputCore.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -29,13 +39,20 @@
 
   <!-- FFmpeg DLL을 EXE에 임베디드 (단일 파일 배포용) -->
   <ItemGroup>
-    <EmbeddedResource Include="..\ffmpeg\avcodec-61.dll" LogicalName="ffmpeg.avcodec-61.dll" />
-    <EmbeddedResource Include="..\ffmpeg\avdevice-61.dll" LogicalName="ffmpeg.avdevice-61.dll" />
-    <EmbeddedResource Include="..\ffmpeg\avfilter-10.dll" LogicalName="ffmpeg.avfilter-10.dll" />
-    <EmbeddedResource Include="..\ffmpeg\avformat-61.dll" LogicalName="ffmpeg.avformat-61.dll" />
-    <EmbeddedResource Include="..\ffmpeg\avutil-59.dll" LogicalName="ffmpeg.avutil-59.dll" />
-    <EmbeddedResource Include="..\ffmpeg\postproc-58.dll" LogicalName="ffmpeg.postproc-58.dll" />
-    <EmbeddedResource Include="..\ffmpeg\swresample-5.dll" LogicalName="ffmpeg.swresample-5.dll" />
-    <EmbeddedResource Include="..\ffmpeg\swscale-8.dll" LogicalName="ffmpeg.swscale-8.dll" />
+    <EmbeddedResource Include="..\ffmpeg\avcodec-62.dll" LogicalName="ffmpeg.avcodec-62.dll" />
+    <EmbeddedResource Include="..\ffmpeg\avdevice-62.dll" LogicalName="ffmpeg.avdevice-62.dll" />
+    <EmbeddedResource Include="..\ffmpeg\avfilter-11.dll" LogicalName="ffmpeg.avfilter-11.dll" />
+    <EmbeddedResource Include="..\ffmpeg\avformat-62.dll" LogicalName="ffmpeg.avformat-62.dll" />
+    <EmbeddedResource Include="..\ffmpeg\avutil-60.dll" LogicalName="ffmpeg.avutil-60.dll" />
+    <EmbeddedResource Include="..\ffmpeg\swresample-6.dll" LogicalName="ffmpeg.swresample-6.dll" />
+    <EmbeddedResource Include="..\ffmpeg\swscale-9.dll" LogicalName="ffmpeg.swscale-9.dll" />
   </ItemGroup>
-</Project>
+
+  <ItemGroup>
+    <Content Include="..\ffmpeg\LICENSE.LGPLv3.txt" Link="ThirdParty\FFmpeg\LICENSE.LGPLv3.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\ffmpeg\LICENSE.SIPSorceryMedia.FFmpeg.LGPL-2.1.txt" Link="ThirdParty\FFmpeg\LICENSE.SIPSorceryMedia.FFmpeg.LGPL-2.1.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\ffmpeg\LICENSE.FFmpeg.AutoGen.MIT.txt" Link="ThirdParty\FFmpeg\LICENSE.FFmpeg.AutoGen.MIT.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\ffmpeg\NOTICE.md" Link="ThirdParty\FFmpeg\NOTICE.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\ffmpeg\SOURCE_OFFER.md" Link="ThirdParty\FFmpeg\SOURCE_OFFER.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\ffmpeg\manifest.json" Link="ThirdParty\FFmpeg\manifest.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup></Project>

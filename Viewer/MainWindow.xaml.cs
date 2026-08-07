@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -54,6 +54,8 @@ namespace Viewer
         private TextBlock _statusText = null!;
         private TextBlock _statsOverlay = null!;
         private TextBlock _fileProgressOverlay = null!;
+        private Button? _clipboardSessionButton;
+        private readonly ClipboardConsentProjection _clipboardConsentUi = new();
 
         // === 비밀번호 UI ===
         private StackPanel? _passwordPanel;
@@ -67,8 +69,7 @@ namespace Viewer
         private ResizeMode _prevResizeMode;
 
         // === Modifier 키 상태 ===
-        private bool _ctrlPressed = false;
-        private bool _shiftPressed = false;
+        private readonly ModifierKeyState _modifierKeys = new();
 
         // === 설정 ===
         private AppSettings _settings = null!;
@@ -79,7 +80,8 @@ namespace Viewer
         private const byte MSG_MOUSE_MOVE = 0x01;  // Host InputSimulator와 일치
         private const byte MSG_MOUSE_DOWN = 0x02;
         private const byte MSG_MOUSE_UP   = 0x03;
-        private const byte MSG_MOUSE_WHEEL= 0x04;
+        private const byte MSG_MOUSE_WHEEL = 0x04;
+        private const byte MSG_MOUSE_HWHEEL = 0x05;
 
         // === 인증 토큰 & 사용자 ID ===
         private string _accessToken;
@@ -179,7 +181,13 @@ namespace Viewer
                 ReleaseRemoteInputs();
                 UpdateInputCaptureState();
             };
-            Closed += (s, e) => _keyboardHook.Dispose();
+            Closed += (_, _) =>
+            {
+                ReleaseRemoteInputs();
+                DisposeReceiverSafely(_receiver);
+                _receiver = null;
+                _keyboardHook.Dispose();
+            };
         }
 
         // ==========================================================
@@ -571,6 +579,22 @@ namespace Viewer
             nextHostBtn.Click += (s, e) => NavigateHost(1);
             topBar.Children.Add(nextHostBtn);
 
+            var clipboardButton = new Button
+            {
+                Content = "클립보드: 꺼짐",
+                FontSize = 12,
+                Padding = new Thickness(10, 4, 10, 4),
+                Margin = new Thickness(0, 0, 8, 0),
+                Background = new SolidColorBrush(Color.FromArgb(180, 60, 60, 60)),
+                Foreground = new SolidColorBrush(Colors.White),
+                BorderThickness = new Thickness(0),
+                Cursor = Cursors.Hand,
+                Opacity = 0.9,
+                ToolTip = "현재 제어 세션에서만 양방향 텍스트 클립보드를 허용"
+            };
+            clipboardButton.Click += (_, _) => ToggleClipboardSessionConsent();
+            _clipboardSessionButton = clipboardButton;
+            topBar.Children.Add(clipboardButton);
             // 화면 전환 버튼
             var monitorBtn = new Button
             {
@@ -640,41 +664,64 @@ namespace Viewer
             };
             grid.Drop += async (s, e) =>
             {
-                if (_receiver == null || _connectedHostId == null) return;
+                var receiver = _receiver;
+                if (receiver == null || _connectedHostId == null) return;
                 if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
-                string[]? files = e.Data.GetData(DataFormats.FileDrop) as string[];
+                string[]? files =
+                    e.Data.GetData(DataFormats.FileDrop) as string[];
                 if (files == null || files.Length == 0) return;
 
                 foreach (var filePath in files)
                 {
                     if (!File.Exists(filePath)) continue;
                     string name = Path.GetFileName(filePath);
-                    _fileProgressOverlay.Text = $"📁 전송 중: {name} (0%)";
+                    _fileProgressOverlay.Text =
+                        $"Sending {name} (0%)";
                     _fileProgressOverlay.Visibility = Visibility.Visible;
 
-                    _receiver.OnFileProgress += (pct) =>
-                    {
-                        Dispatcher.BeginInvoke(() =>
-                            _fileProgressOverlay.Text = $"📁 전송 중: {name} ({pct}%)");
-                    };
-                    _receiver.OnFileComplete += (msg) =>
+                    Action<int> progressHandler = pct =>
                     {
                         Dispatcher.BeginInvoke(() =>
                         {
-                            _fileProgressOverlay.Text = $"✅ {name} {msg}";
-                            _ = Task.Run(async () =>
+                            if (ReferenceEquals(_receiver, receiver))
                             {
-                                await Task.Delay(3000);
-                                Dispatcher.BeginInvoke(() =>
-                                    _fileProgressOverlay.Visibility = Visibility.Collapsed);
-                            });
+                                _fileProgressOverlay.Text =
+                                    $"Sending {name} ({pct}%)";
+                            }
                         });
                     };
+                    receiver.OnFileProgress += progressHandler;
+                    try
+                    {
+                        await receiver.SendFileAsync(filePath);
+                        if (ReferenceEquals(_receiver, receiver))
+                        {
+                            _fileProgressOverlay.Text =
+                                $"Verified {name}";
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        if (ReferenceEquals(_receiver, receiver))
+                        {
+                            _fileProgressOverlay.Text =
+                                $"Failed to send {name}";
+                        }
+                        Console.WriteLine(
+                            $"[FileTransfer] Failed: {ex.GetType().Name}");
+                    }
+                    finally
+                    {
+                        receiver.OnFileProgress -= progressHandler;
+                    }
+                }
 
-                    await _receiver.SendFileAsync(filePath);
+                await Task.Delay(1500);
+                if (ReferenceEquals(_receiver, receiver))
+                {
+                    _fileProgressOverlay.Visibility = Visibility.Collapsed;
                 }
             };
-
             return grid;
         }
 
@@ -1080,8 +1127,14 @@ namespace Viewer
             // 리모트 뷰가 보이고 + 창이 활성화 상태 + 패스워드 패널이 안 보일 때만 캡처
             bool isPasswordInput = _passwordPanel != null && _passwordPanel.Visibility == Visibility.Visible;
             bool remoteWindowActive = _remoteWindow?.IsActive ?? IsActive;
-            bool shouldCapture = (_remoteGrid.Visibility == Visibility.Visible) && remoteWindowActive && !isPasswordInput;
+            bool shouldCapture =
+                _remoteGrid.Visibility == Visibility.Visible &&
+                remoteWindowActive &&
+                !isPasswordInput &&
+                _receiver?.InputChannelReady == true;
             _keyboardHook.IsCapturing = shouldCapture;
+            if (!shouldCapture)
+                _modifierKeys.Reset();
         }
 
         // ==========================================================
@@ -1175,6 +1228,7 @@ namespace Viewer
             _connectedHostId = null;
             _enteredPassword = null;
             _isReconnecting = false;
+            ResetClipboardSessionConsentUi();
             _statsDisplayTimer?.Dispose();
             _statsDisplayTimer = null;
 
@@ -1378,8 +1432,80 @@ namespace Viewer
             }
         }
 
+        private void ToggleClipboardSessionConsent()
+        {
+            var receiver = _receiver;
+            if (receiver == null || !receiver.InputChannelReady)
+            {
+                MessageBox.Show(
+                    "입력 채널 인증이 끝난 뒤 클립보드를 켤 수 있습니다.",
+                    "Comote 클립보드",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                return;
+            }
+
+            var enable = !_clipboardConsentUi.Requested;
+            if (!receiver.SetClipboardConsentForSession(enable))
+            {
+                ResetClipboardSessionConsentUi();
+                MessageBox.Show(
+                    "클립보드 동의 요청을 전송하지 못했습니다.",
+                    "Comote 클립보드",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
+
+            ApplyClipboardConsentSnapshot(receiver, receiver.ClipboardConsent);
+        }
+
+        private void ApplyClipboardConsentSnapshot(
+            VideoReceiver receiver,
+            ClipboardConsentSnapshot snapshot)
+        {
+            if (!ReferenceEquals(_receiver, receiver) ||
+                !_clipboardConsentUi.TryApply(snapshot))
+            {
+                return;
+            }
+
+            if (!snapshot.Enabled)
+            {
+                _lastSentClipboardText = null;
+            }
+            UpdateClipboardSessionButton();
+        }
+
+        private void ResetClipboardSessionConsentUi()
+        {
+            var receiver = _receiver;
+            _clipboardConsentUi.Reset(receiver?.ClipboardConsent);
+            _lastSentClipboardText = null;
+            UpdateClipboardSessionButton();
+        }
+
+        private void UpdateClipboardSessionButton()
+        {
+            if (_clipboardSessionButton == null)
+            {
+                return;
+            }
+
+            _clipboardSessionButton.Content =
+                _clipboardConsentUi.Enabled
+                    ? "클립보드: 켜짐"
+                    : _clipboardConsentUi.Requested
+                        ? "클립보드: 승인 대기"
+                        : "클립보드: 꺼짐";
+            _clipboardSessionButton.Background = new SolidColorBrush(
+                _clipboardConsentUi.Enabled
+                    ? Color.FromArgb(210, 22, 101, 52)
+                    : Color.FromArgb(180, 60, 60, 60));
+        }
         // 클립보드 감지 관련
         private const int WM_CLIPBOARDUPDATE = 0x031D;
+        private const int WM_MOUSEHWHEEL = 0x020E;
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool AddClipboardFormatListener(IntPtr hwnd);
         private IntPtr _windowHandle;
@@ -1398,24 +1524,39 @@ namespace Viewer
             {
                 OnClipboardUpdated();
             }
+            else if (msg == WM_MOUSEHWHEEL &&
+                     _receiver?.InputChannelReady == true &&
+                     _remoteGrid.Visibility == Visibility.Visible)
+            {
+                int raw = unchecked((int)wParam.ToInt64());
+                int delta = unchecked((short)((raw >> 16) & 0xFFFF));
+                delta = (int)(delta * _settings.GetWheelMultiplier());
+                var data = new byte[5];
+                data[0] = MSG_MOUSE_HWHEEL;
+                BitConverter.GetBytes(delta).CopyTo(data, 1);
+                _receiver.SendInput(data);
+                handled = true;
+            }
             return IntPtr.Zero;
         }
 
         private string? _lastSentClipboardText = null;
         private void OnClipboardUpdated()
         {
-            if (_receiver == null || !_settings.AutoClipboard) return;
+            var receiver = _receiver;
+            if (receiver?.ClipboardSessionEnabled != true) return;
 
             try
             {
                 if (Clipboard.ContainsText())
                 {
                     string text = Clipboard.GetText();
-                    // 무한 루프 방지 (내가 방금 받은 텍스트라면 무시)
-                    if (text != _lastSentClipboardText)
+                    // A failed/revoked send must remain eligible for the next
+                    // clipboard notification or consent re-synchronization.
+                    if (text != _lastSentClipboardText &&
+                        receiver.SendClipboard(text))
                     {
                         _lastSentClipboardText = text;
-                        _receiver.SendClipboard(text);
                         Console.WriteLine($"[Clipboard] Auto-Sent to Host ({text.Length} chars)");
                     }
                 }
@@ -1439,46 +1580,42 @@ namespace Viewer
         // ==========================================================
         // 키보드 훅 이벤트
         // ==========================================================
-        private void OnKeyHookEvent(ushort vk, bool isDown)
+        private void OnKeyHookEvent(KeyboardHookEvent keyEvent)
         {
-            // Modifier 키 상태 추적 (로컬 단축키 판단용, Host로도 전달)
-            if (vk == 0xA2 || vk == 0xA3) _ctrlPressed = isDown;
-            if (vk == 0xA0 || vk == 0xA1) _shiftPressed = isDown;
+            ushort vk = keyEvent.VirtualKey;
+            bool isDown = keyEvent.IsDown;
+
+            // 좌/우 modifier를 독립 추적한다. 한쪽 키를 놓아도 반대쪽 상태는 유지된다.
+            _modifierKeys.Update(vk, isDown);
 
             if (_receiver == null || _connectedHostId == null) return;
 
             // Ctrl+Shift+F: 풀스크린 토글
-            if (vk == 0x46 && isDown && _ctrlPressed && _shiftPressed)
+            if (vk == 0x46 && isDown &&
+                _modifierKeys.Control && _modifierKeys.Shift)
             {
+                ReleaseRemoteInputs();
                 Dispatcher.Invoke(ToggleFullscreen);
                 return;
             }
 
             // Ctrl+Shift+Q: 로비로 복귀 (연결 종료)
-            if (vk == 0x51 && isDown && _ctrlPressed && _shiftPressed)
+            if (vk == 0x51 && isDown &&
+                _modifierKeys.Control && _modifierKeys.Shift)
             {
+                ReleaseRemoteInputs();
                 Dispatcher.Invoke(DisconnectAndReturnToLobby);
                 return;
             }
 
-            // ESC: 키 전달 (기존 로비 복귀 로직 삭제됨)
-
-            // Ctrl+C: 키 전달 (클립보드 동기화는 자동 감지 로직에서 처리)
-            if (vk == 0x43 && isDown && _ctrlPressed && !_shiftPressed)
-            {
-                var keyData = new byte[3];
-                keyData[0] = MSG_KEY_DOWN;
-                BitConverter.GetBytes(vk).CopyTo(keyData, 1);
-                _receiver?.SendInput(keyData);
-                return;
-            }
-
-            var data = new byte[3];
+            // v2 key packet: type, virtual key, scan code, hook flags.
+            var data = new byte[9];
             data[0] = isDown ? MSG_KEY_DOWN : MSG_KEY_UP;
             BitConverter.GetBytes(vk).CopyTo(data, 1);
-            _receiver?.SendInput(data);
+            BitConverter.GetBytes(keyEvent.ScanCode).CopyTo(data, 3);
+            BitConverter.GetBytes(keyEvent.Flags).CopyTo(data, 5);
+            _receiver.SendInput(data);
         }
-
         // ==========================================================
         // 비밀번호 관련
         // ==========================================================
@@ -1498,7 +1635,9 @@ namespace Viewer
                 _passwordStatus!.Visibility = Visibility.Collapsed;
             }
 
-            if (_keyboardHook != null) _keyboardHook.IsCapturing = false;
+            _modifierKeys.Reset();
+            if (_keyboardHook != null)
+                _keyboardHook.IsCapturing = false;
         }
 
         private async void ConnectWithPassword()
@@ -1669,10 +1808,19 @@ namespace Viewer
                 // Signal Received (WebRTC)
                 _signaling.OnSignalReceived += async (from, signal) =>
                 {
-                    Console.WriteLine($"[Signaling] Signal from {from}: {signal}");
-                    if (_receiver != null)
+                    Console.WriteLine($"[Signaling] Signal received from {from}.");
+                    if (_receiver != null &&
+                        string.Equals(
+                            from,
+                            _connectedHostId,
+                            StringComparison.Ordinal))
                     {
                         await _receiver.HandleSignalAsync(from, signal);
+                    }
+                    else
+                    {
+                        Console.WriteLine(
+                            "[Signaling] Ignored signal from a non-selected Host.");
                     }
                 };
 
@@ -1706,8 +1854,9 @@ namespace Viewer
         // ==========================================================
         private void InitializeReceiver(string hostId)
         {
-            var receiver = new VideoReceiver();
+            var receiver = new VideoReceiver(hostId);
             _receiver = receiver;
+            ResetClipboardSessionConsentUi();
 
             // 시그널 전송
             receiver.OnSignalReady += async (signal) =>
@@ -1732,6 +1881,27 @@ namespace Viewer
             };
 
             // 비디오 프레임 수신
+            receiver.OnInputAuthorizationChanged += authorized =>
+            {
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (!ReferenceEquals(_receiver, receiver))
+                    {
+                        return;
+                    }
+
+                    UpdateInputCaptureState();
+                    if (!authorized)
+                    {
+                        ResetClipboardSessionConsentUi();
+                    }
+                });
+            };
+            receiver.OnClipboardConsentChanged += snapshot =>
+            {
+                _ = Dispatcher.BeginInvoke(() =>
+                    ApplyClipboardConsentSnapshot(receiver, snapshot));
+            };
             receiver.OnFrameReady += () =>
             {
                 Dispatcher.Invoke(() =>
@@ -1750,7 +1920,8 @@ namespace Viewer
             receiver.OnConnectionStateChanged += (state) =>
             {
                 if (state == RTCPeerConnectionState.failed ||
-                    state == RTCPeerConnectionState.disconnected)
+                    state == RTCPeerConnectionState.disconnected ||
+                    state == RTCPeerConnectionState.closed)
                 {
                     if (ReferenceEquals(_receiver, receiver))
                         _ = ReconnectAsync(receiver, hostId);
@@ -1760,19 +1931,55 @@ namespace Viewer
             // 비밀번호 거절
             receiver.OnRejected += (reason) =>
             {
+                if (!ReferenceEquals(_receiver, receiver) ||
+                    !string.Equals(
+                        _connectedHostId,
+                        hostId,
+                        StringComparison.Ordinal))
+                {
+                    return;
+                }
+
                 Dispatcher.Invoke(() =>
                 {
+                    if (!ReferenceEquals(_receiver, receiver))
+                        return;
                     ShowPasswordPanel("비밀번호가 틀립니다. 다시 입력해 주세요.");
                 });
             };
 
             // 클립보드 수신
-            receiver.OnClipboardReceived += (text) =>
+            receiver.OnClipboardReceived += (text, consentEpoch) =>
             {
-                Dispatcher.Invoke(() =>
+                if (!ReferenceEquals(_receiver, receiver) ||
+                    !receiver.IsClipboardConsentEpochActive(consentEpoch) ||
+                    !string.Equals(
+                        _connectedHostId,
+                        hostId,
+                        StringComparison.Ordinal))
                 {
-                    try { Clipboard.SetText(text); }
-                    catch { }
+                    return;
+                }
+
+                _ = Dispatcher.BeginInvoke(() =>
+                {
+                    try
+                    {
+                        _ = receiver.TryApplyClipboardWithConsentLease(
+                            consentEpoch,
+                            () =>
+                                ReferenceEquals(_receiver, receiver) &&
+                                string.Equals(
+                                    _connectedHostId,
+                                    hostId,
+                                    StringComparison.Ordinal),
+                            () => Clipboard.SetText(text));
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine(
+                            $"[Clipboard] Apply failed: {ex.GetType().Name}");
+                    }
                 });
             };
 
